@@ -76,8 +76,7 @@ class HuaweiHyperMetro(object):
                          {'metro_id': hypermetro['ID'],
                           'remote_lun_id': remote_lun_id})
 
-                return {'hypermetro_id': hypermetro['ID'],
-                        'remote_lun_id': remote_lun_id}
+                return hypermetro['ID']
             except exception.VolumeBackendAPIException as err:
                 self.rmt_client.delete_lun(remote_lun_id)
                 msg = _('Create hypermetro error. %s.') % err
@@ -85,22 +84,20 @@ class HuaweiHyperMetro(object):
         except exception.VolumeBackendAPIException:
             raise
 
-    def delete_hypermetro(self, volume, metadata=None):
+    def delete_hypermetro(self, volume):
         """Delete hypermetro."""
-        if not metadata:
-            metadata = huawei_utils.get_lun_metadata(volume)
+        lun_name = huawei_utils.encode_name(volume.id)
+        hypermetro = self.client.get_hypermetro_by_lun_name(lun_name)
+        if not hypermetro:
+            return
 
-        metro_id = metadata.get('hypermetro_id')
-        remote_lun_id = metadata.get('remote_lun_id')
+        metro_id = hypermetro['ID']
+        remote_lun_id = hypermetro['REMOTEOBJID']
 
-        # Delete hypermetro.
-        if metro_id and self.client.get_hypermetro_by_id(metro_id):
-            self.check_metro_need_to_stop(metro_id)
-            self.client.delete_hypermetro(metro_id)
-
-        # Delete remote lun.
-        if remote_lun_id and self.rmt_client.check_lun_exist(remote_lun_id):
-            self.rmt_client.delete_lun(remote_lun_id)
+        # Delete hypermetro and remote lun.
+        self.check_metro_need_to_stop(metro_id, hypermetro)
+        self.client.delete_hypermetro(metro_id)
+        self.rmt_client.delete_lun(remote_lun_id)
 
     @utils.synchronized('huawei_create_hypermetro_pair', external=True)
     def _create_hypermetro_pair(self, domain_id, lun_id, remote_lun_id,
@@ -112,7 +109,7 @@ class HuaweiHyperMetro(object):
                      "LOCALOBJID": lun_id,
                      "RECONVERYPOLICY": '1',
                      "REMOTEOBJID": remote_lun_id,
-                     "SPEED": '4'}
+                     "SPEED": self.configuration.hyper_sync_speed}
         if is_sync:
             hcp_param.update({"ISFIRSTSYNC": True})
 
@@ -160,7 +157,8 @@ class HuaweiHyperMetro(object):
                 raise exception.VolumeBackendAPIException(data=msg)
 
         for wwn in wwns:
-            self.rmt_client.ensure_fc_initiator_added(wwn, host_id)
+            self.rmt_client.ensure_fc_initiator_added(wwn, host_id,
+                                                      connector['host'])
 
         (tgt_port_wwns, init_targ_map) = (
             self.rmt_client.get_init_targ_map(wwns))
@@ -255,22 +253,27 @@ class HuaweiHyperMetro(object):
         LOG.info(_LI("Delete Consistency Group: %(group)s."),
                  {'group': group['id']})
         metrogroup_id = self.check_consistencygroup_need_to_stop(group)
-        if metrogroup_id:
-            # Remove pair from metrogroup.
-            for volume in volumes:
-                metadata = huawei_utils.get_lun_metadata(volume)
-                metro_id = metadata.get('hypermetro_id')
-                if metro_id and self.client.get_hypermetro_by_id(metro_id):
-                    if self._check_metro_in_cg(metro_id, metrogroup_id):
-                        self.client.remove_metro_from_metrogroup(metrogroup_id,
-                                                                 metro_id)
-                else:
-                    err = (_("Hypermetro pair %(id)s doesn't exist on array.")
-                           % {'id': metro_id})
-                    LOG.warning(err)
+        if not metrogroup_id:
+            return
 
-            # Delete metrogroup.
-            self.client.delete_metrogroup(metrogroup_id)
+        # Remove pair from metrogroup.
+        for volume in volumes:
+            metadata = huawei_utils.get_lun_metadata(volume)
+            if not metadata.get('hypermetro'):
+                continue
+
+            lun_name = huawei_utils.encode_name(volume.id)
+            hypermetro = self.client.get_hypermetro_by_lun_name(lun_name)
+            if not hypermetro:
+                continue
+
+            metro_id = hypermetro['ID']
+            if self._check_metro_in_cg(metro_id, metrogroup_id):
+                self.client.remove_metro_from_metrogroup(metrogroup_id,
+                                                         metro_id)
+
+        # Delete metrogroup.
+        self.client.delete_metrogroup(metrogroup_id)
 
     def _ensure_hypermetro_added_to_cg(self, metro_id, metrogroup_id):
         def _check_added():
@@ -293,53 +296,60 @@ class HuaweiHyperMetro(object):
         LOG.info(_LI("Update Consistency Group: %(group)s. "
                      "This adds or removes volumes from a CG."),
                  {'group': group['id']})
-        model_update = {}
-        model_update['status'] = group['status']
+
         metrogroup_id = self.check_consistencygroup_need_to_stop(group)
-        if metrogroup_id:
-            # Deal with add volumes to CG
-            for volume in add_volumes:
-                metadata = huawei_utils.get_lun_metadata(volume)
-                metro_id = metadata.get('hypermetro_id')
-                if metro_id and self.client.get_hypermetro_by_id(metro_id):
-                    if not self._check_metro_in_cg(metro_id, metrogroup_id):
-                        self.check_metro_need_to_stop(metro_id)
-                        self.client.add_metro_to_metrogroup(metrogroup_id,
-                                                            metro_id)
-                        self._ensure_hypermetro_added_to_cg(
-                            metro_id, metrogroup_id)
-                else:
-                    err_msg = _("Hypermetro pair doesn't exist on array.")
-                    LOG.error(err_msg)
-                    raise exception.VolumeBackendAPIException(data=err_msg)
-
-            # Deal with remove volumes from CG
-            for volume in remove_volumes:
-                metadata = huawei_utils.get_lun_metadata(volume)
-                metro_id = metadata.get('hypermetro_id')
-                if metro_id and self.client.get_hypermetro_by_id(metro_id):
-                    if self._check_metro_in_cg(metro_id, metrogroup_id):
-                        self.check_metro_need_to_stop(metro_id)
-                        self.client.remove_metro_from_metrogroup(metrogroup_id,
-                                                                 metro_id)
-                        self._ensure_hypermetro_removed_from_cg(
-                            metro_id, metrogroup_id)
-                        self.client.sync_hypermetro(metro_id)
-                else:
-                    err_msg = _("Hypermetro pair doesn't exist on array.")
-                    LOG.error(err_msg)
-                    raise exception.VolumeBackendAPIException(data=err_msg)
-
-            new_group_info = self.client.get_metrogroup_by_id(metrogroup_id)
-            is_empty = new_group_info["ISEMPTY"]
-            if is_empty == 'false':
-                self.client.sync_metrogroup(metrogroup_id)
-
-        # if CG not exist on array
-        else:
+        if not metrogroup_id:
             msg = _("The CG does not exist on array.")
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
+
+        # Deal with add volumes to CG
+        for volume in add_volumes:
+            metadata = huawei_utils.get_lun_metadata(volume)
+            if not metadata.get('hypermetro'):
+                err_msg = _("Volume %s is not in hypermetro pair.") % volume.id
+                LOG.error(err_msg)
+                raise exception.VolumeBackendAPIException(data=err_msg)
+
+            lun_name = huawei_utils.encode_name(volume.id)
+            hypermetro = self.client.get_hypermetro_by_lun_name(lun_name)
+            if not hypermetro:
+                err_msg = _("Volume %s is not in hypermetro pair.") % volume.id
+                LOG.error(err_msg)
+                raise exception.VolumeBackendAPIException(data=err_msg)
+
+            metro_id = hypermetro['ID']
+            if not self._check_metro_in_cg(metro_id, metrogroup_id):
+                self.check_metro_need_to_stop(metro_id)
+                self.client.add_metro_to_metrogroup(metrogroup_id,
+                                                    metro_id)
+                self._ensure_hypermetro_added_to_cg(
+                    metro_id, metrogroup_id)
+
+        # Deal with remove volumes from CG
+        for volume in remove_volumes:
+            metadata = huawei_utils.get_lun_metadata(volume)
+            if not metadata.get('hypermetro'):
+                continue
+
+            lun_name = huawei_utils.encode_name(volume.id)
+            hypermetro = self.client.get_hypermetro_by_lun_name(lun_name)
+            if not hypermetro:
+                continue
+
+            metro_id = hypermetro['ID']
+            if self._check_metro_in_cg(metro_id, metrogroup_id):
+                self.check_metro_need_to_stop(metro_id)
+                self.client.remove_metro_from_metrogroup(metrogroup_id,
+                                                         metro_id)
+                self._ensure_hypermetro_removed_from_cg(
+                    metro_id, metrogroup_id)
+                self.client.sync_hypermetro(metro_id)
+
+        new_group_info = self.client.get_metrogroup_by_id(metrogroup_id)
+        is_empty = new_group_info["ISEMPTY"]
+        if is_empty == 'false':
+            self.client.sync_metrogroup(metrogroup_id)
 
     def add_hypermetro_to_consistencygroup(self, group, metro_id):
         metrogroup_id = self.check_consistencygroup_need_to_stop(group)
@@ -356,8 +366,10 @@ class HuaweiHyperMetro(object):
                             {'group': metrogroup_id,
                              'metro': metro_id})
 
-    def check_metro_need_to_stop(self, metro_id):
-        metro_info = self.client.get_hypermetro_by_id(metro_id)
+    def check_metro_need_to_stop(self, metro_id, metro_info=None):
+        if not metro_info:
+            metro_info = self.client.get_hypermetro_by_id(metro_id)
+
         if metro_info:
             metro_health_status = metro_info['HEALTHSTATUS']
             metro_running_status = metro_info['RUNNINGSTATUS']

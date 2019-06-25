@@ -42,7 +42,8 @@ class ReplicaCG(object):
         LOG.info(_LI("Create Consistency Group: %(group)s."),
                  {'group': group_id})
         group_name = huawei_utils.encode_name(group_id)
-        self.local_cgop.create(group_name, group_id, replica_model)
+        self.local_cgop.create(group_name, group_id, replica_model,
+                               self.conf.replica_sync_speed)
 
     def delete(self, group, volumes):
         group_id = group.get('id')
@@ -396,12 +397,13 @@ class PairOp(AbsReplicaOp):
 
 
 class CGOp(AbsReplicaOp):
-    def create(self, group_name, group_id, replica_model):
+    def create(self, group_name, group_id, replica_model,
+               speed=constants.REPLICA_SPEED):
         data = {'NAME': group_name,
                 'DESCRIPTION': group_id,
                 'RECOVERYPOLICY': '1',
                 'REPLICATIONMODEL': replica_model,
-                'SPEED': constants.REPLICA_SPEED}
+                'SPEED': speed}
 
         if replica_model == constants.REPLICA_ASYNC_MODEL:
             # Synchronize type values:
@@ -799,7 +801,9 @@ class ReplicaPairManager(object):
         try:
             pair_info = self.local_op.create(local_lun_id,
                                              rmt_lun_id, rmt_dev_id,
-                                             rmt_dev_name, replica_model)
+                                             rmt_dev_name,
+                                             replica_model,
+                                             self.conf.replica_sync_speed,)
             pair_id = pair_info['ID']
         except Exception as err:
             with excutils.save_and_reraise_exception():
@@ -902,14 +906,19 @@ class ReplicaPairManager(object):
         cgid_list = set()
         replicacg = ReplicaCG(self.local_client, self.rmt_client, self.conf)
         for v in volumes:
+            drv_data = get_replication_driver_data(v)
+            pair_id = drv_data.get('pair_id')
+            if not pair_id:
+                self._pre_fail_check(v, running_status_set)
+
+        for v in volumes:
             v_update = {}
             v_update['volume_id'] = v.id
             drv_data = get_replication_driver_data(v)
             pair_id = drv_data.get('pair_id')
             if not pair_id:
                 # Failback check running status only.
-                self._pre_fail_check(v, running_status_set)
-                LOG.warning(_LW("No pair id in volume %s."), v.id)
+                LOG.warning("No pair id in volume %s.", v.id)
                 v_update['updates'] = {'replication_status': 'error'}
                 volumes_update.append(v_update)
                 continue

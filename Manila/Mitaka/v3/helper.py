@@ -394,6 +394,23 @@ class RestHelper(object):
             raise exception.InvalidInput(reason=message)
         return root
 
+    def get_product(self):
+        root = self._read_xml()
+        text = root.findtext('Storage/Product')
+        if not text:
+            msg = _("NAS product is not configured.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        product = text.strip()
+        if product not in constants.VALID_PRODUCT:
+            msg = (_("Invalid NAS product '%(text)s', NAS product must be in "
+                     "%(valid)s.")
+                   % {'text': product, 'valid': constants.VALID_PRODUCT})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        setattr(self.configuration, 'nas_product', product)
+
     def _remove_access_from_share(self, access_id, share_proto):
         access_type = self._get_share_client_type(share_proto)
         url = "/" + access_type + "/" + access_id

@@ -102,9 +102,9 @@ class ReplicaPairManager(object):
                 constants.REPLICA_RUNNING_STATUS_TO_RECOVER)):
             return common_constants.REPLICA_STATE_OUT_OF_SYNC
 
-        if (pair_info['RUNNINGSTATUS'] in (
-                constants.REPLICA_RUNNING_STATUS_INTERRUPTED,
-                constants.REPLICA_RUNNING_STATUS_INVALID)):
+        if (pair_info['RUNNINGSTATUS']
+                in (constants.REPLICA_RUNNING_STATUS_INTERRUPTED,
+                    constants.REPLICA_RUNNING_STATUS_INVALID)):
             return common_constants.STATUS_ERROR
 
     def _check_replication_secondary_data_status(self, pair_info):

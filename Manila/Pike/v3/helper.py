@@ -238,7 +238,7 @@ class RestHelper(object):
             LOG.error('Bad response from change file: %s.' % err)
             raise
 
-    def create_share(self, share_name, fs_id, share_proto):
+    def create_share(self, share_name, fs_id, share_proto, vstore_id=None):
         """Create a share."""
         share_url_type = self._get_share_url_type(share_proto)
         share_path = self._get_share_path(share_name)
@@ -265,6 +265,8 @@ class RestHelper(object):
             raise exception.InvalidShare(
                 reason=(_('Invalid NAS protocol supplied: %s.')
                         % share_proto))
+        if vstore_id:
+            filepath["vstoreId"] = vstore_id
 
         url = "/" + share_url_type
         data = jsonutils.dumps(filepath)
@@ -277,19 +279,19 @@ class RestHelper(object):
 
         return result['data']['ID']
 
-    def _delete_share_by_id(self, share_id, share_url_type):
+    def _delete_share_by_id(self, share_id, share_url_type, vstore_id=None):
         """Delete share by share id."""
         url = "/" + share_url_type + "/" + share_id
-
-        result = self.call(url, None, "DELETE")
+        data = jsonutils.dumps({'vstoreId': vstore_id}) if vstore_id else None
+        result = self.call(url, data, "DELETE")
         self._assert_rest_result(result, 'Delete share error.')
 
-    def _delete_fs(self, fs_id):
+    def _delete_fs(self, params):
         """Delete file system."""
         # Get available file system
-        url = "/filesystem/" + fs_id
-
-        result = self.call(url, None, "DELETE")
+        url = "/filesystem"
+        data = jsonutils.dumps(params)
+        result = self.call(url, data, "DELETE")
         self._assert_rest_result(result, 'Delete file system error.')
 
     def _find_pool_info(self, pool_name, result):
@@ -306,8 +308,10 @@ class RestHelper(object):
                 poolinfo['TOTALCAPACITY'] = item['USERTOTALCAPACITY']
                 poolinfo['CONSUMEDCAPACITY'] = item['USERCONSUMEDCAPACITY']
                 poolinfo['TIER0CAPACITY'] = item['TIER0CAPACITY']
-                poolinfo['TIER1CAPACITY'] = item['TIER1CAPACITY']
-                poolinfo['TIER2CAPACITY'] = item['TIER2CAPACITY']
+                if 'TIER1CAPACITY' in item:
+                    poolinfo['TIER1CAPACITY'] = item['TIER1CAPACITY']
+                if 'TIER2CAPACITY' in item:
+                    poolinfo['TIER2CAPACITY'] = item['TIER2CAPACITY']
                 break
 
         return poolinfo
@@ -337,17 +341,41 @@ class RestHelper(object):
             raise exception.InvalidInput(reason=message)
         return root
 
-    def _remove_access_from_share(self, access_id, share_proto):
+    def get_product(self):
+        root = self._read_xml()
+        text = root.findtext('Storage/Product')
+        if not text:
+            msg = _("NAS product is not configured.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        product = text.strip()
+        if product not in constants.VALID_PRODUCT:
+            msg = (_("Invalid NAS product '%(text)s', NAS product must be in "
+                     "%(valid)s.")
+                   % {'text': product, 'valid': constants.VALID_PRODUCT})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        setattr(self.configuration, 'nas_product', product)
+
+    def _remove_access_from_share(self, access_id, share_proto,
+                                  vstore_id=None):
         access_type = self._get_share_client_type(share_proto)
         url = "/" + access_type + "/" + access_id
-        result = self.call(url, None, "DELETE")
+        params = {'vstoreId': vstore_id} if vstore_id else None
+        if params:
+            params = jsonutils.dumps(params)
+        result = self.call(url, params, "DELETE")
         self._assert_rest_result(result, 'delete access from share error!')
 
-    def _get_access_count(self, share_id, share_client_type):
+    def _get_access_count(self, share_id, share_client_type, vstore_id=None):
         url_subfix = ("/" + share_client_type + "/count?"
                       + "filter=PARENTID::" + share_id)
         url = url_subfix
-        result = self.call(url, None, "GET")
+        params = {'vstoreId': vstore_id} if vstore_id else None
+        if params:
+            params = jsonutils.dumps(params)
+        result = self.call(url, params, "GET")
 
         msg = "Get access count by share error!"
         self._assert_rest_result(result, msg)
@@ -355,7 +383,8 @@ class RestHelper(object):
 
         return int(result['data']['COUNT'])
 
-    def _get_all_access_from_share(self, share_id, share_proto):
+    def _get_all_access_from_share(self, share_id, share_proto,
+                                   vstore_id=None):
         """Return a list of all the access IDs of the share"""
         share_client_type = self._get_share_client_type(share_proto)
         count = self._get_access_count(share_id, share_client_type)
@@ -365,7 +394,8 @@ class RestHelper(object):
         while count > 0:
             access_range = self._get_access_from_share_range(share_id,
                                                              range_begin,
-                                                             share_client_type)
+                                                             share_client_type,
+                                                             vstore_id)
             for item in access_range:
                 access_ids.append(item['ID'])
             range_begin += 100
@@ -373,10 +403,11 @@ class RestHelper(object):
 
         return access_ids
 
-    def _get_access_from_share(self, share_id, access_to, share_proto):
+    def _get_access_from_share(self, share_id, access_to, share_proto,
+                               vstore_id=None):
         """Segments to find access for a period of 100."""
         share_client_type = self._get_share_client_type(share_proto)
-        count = self._get_access_count(share_id, share_client_type)
+        count = self._get_access_count(share_id, share_client_type, vstore_id)
 
         access_id = None
         range_begin = 0
@@ -385,7 +416,8 @@ class RestHelper(object):
                 break
             access_range = self._get_access_from_share_range(share_id,
                                                              range_begin,
-                                                             share_client_type)
+                                                             share_client_type,
+                                                             vstore_id)
             for item in access_range:
                 if item['NAME'] in (access_to, '@' + access_to):
                     access_id = item['ID']
@@ -397,19 +429,26 @@ class RestHelper(object):
 
     def _get_access_from_share_range(self, share_id,
                                      range_begin,
-                                     share_client_type):
+                                     share_client_type,
+                                     vstore_id=None):
         range_end = range_begin + 100
         url = ("/" + share_client_type + "?filter=PARENTID::"
                + share_id + "&range=[" + six.text_type(range_begin)
                + "-" + six.text_type(range_end) + "]")
-        result = self.call(url, None, "GET")
+        params = {'vstoreId': vstore_id} if vstore_id else None
+        if params:
+            params = jsonutils.dumps(params)
+        result = self.call(url, params, "GET")
         self._assert_rest_result(result, 'Get access id by share error!')
         return result.get('data', [])
 
-    def _get_level_by_access_id(self, access_id, share_proto):
+    def _get_level_by_access_id(self, access_id, share_proto, vstore_id=None):
         share_client_type = self._get_share_client_type(share_proto)
         url = "/" + share_client_type + "/" + access_id
-        result = self.call(url, None, "GET")
+        params = {'vstoreId': vstore_id} if vstore_id else None
+        if params:
+            params = jsonutils.dumps(params)
+        result = self.call(url, params, "GET")
         self._assert_rest_result(result, 'Get access information error!')
         access_info = result.get('data', [])
         access_level = access_info.get('ACCESSVAL')
@@ -418,18 +457,18 @@ class RestHelper(object):
         return access_level
 
     def _change_access_rest(self, access_id,
-                            share_proto, access_level):
+                            share_proto, access_level, vstore_id=None):
         """Change access level of the share."""
         if share_proto == 'NFS':
-            self._change_nfs_access_rest(access_id, access_level)
+            self._change_nfs_access_rest(access_id, access_level, vstore_id)
         elif share_proto == 'CIFS':
-            self._change_cifs_access_rest(access_id, access_level)
+            self._change_cifs_access_rest(access_id, access_level, vstore_id)
         else:
             raise exception.InvalidInput(
                 reason=(_('Invalid NAS protocol supplied: %s.')
                         % share_proto))
 
-    def _change_nfs_access_rest(self, access_id, access_level):
+    def _change_nfs_access_rest(self, access_id, access_level, vstore_id=None):
         url = "/NFS_SHARE_AUTH_CLIENT/" + access_id
         access = {
             "ACCESSVAL": access_level,
@@ -437,38 +476,44 @@ class RestHelper(object):
             "ALLSQUASH": "1",
             "ROOTSQUASH": "0",
         }
+        if vstore_id:
+            access.update({"vstoreId": vstore_id})
         data = jsonutils.dumps(access)
         result = self.call(url, data, "PUT")
 
         msg = 'Change access error.'
         self._assert_rest_result(result, msg)
 
-    def _change_cifs_access_rest(self, access_id, access_level):
+    def _change_cifs_access_rest(self, access_id, access_level,
+                                 vstore_id=None):
         url = "/CIFS_SHARE_AUTH_CLIENT/" + access_id
         access = {
             "PERMISSION": access_level,
         }
+        if vstore_id:
+            access.update({"vstoreId": vstore_id})
         data = jsonutils.dumps(access)
         result = self.call(url, data, "PUT")
 
         msg = 'Change access error.'
         self._assert_rest_result(result, msg)
 
-    def _allow_access_rest(self, share_id, access_to,
-                           share_proto, access_level, share_type_id):
+    def _allow_access_rest(self, share_id, access_to, share_proto,
+                           access_level, share_type_id, vstore_id=None):
         """Allow access to the share."""
         if share_proto == 'NFS':
             self._allow_nfs_access_rest(share_id, access_to, access_level,
-                                        share_type_id)
+                                        share_type_id, vstore_id)
         elif share_proto == 'CIFS':
-            self._allow_cifs_access_rest(share_id, access_to, access_level)
+            self._allow_cifs_access_rest(share_id, access_to,
+                                         access_level, vstore_id)
         else:
             raise exception.InvalidInput(
                 reason=(_('Invalid NAS protocol supplied: %s.')
                         % share_proto))
 
     def _allow_nfs_access_rest(self, share_id, access_to, access_level,
-                               share_type_id=None):
+                               share_type_id=None, vstore_id=None):
         url = "/NFS_SHARE_AUTH_CLIENT"
         access = {
             "TYPE": "16409",
@@ -492,13 +537,16 @@ class RestHelper(object):
                 if specs.get('secure'):
                     access['SECURE'] = specs['secure']
 
+        if vstore_id:
+            access.update({"vstoreId": vstore_id})
         data = jsonutils.dumps(access)
         result = self.call(url, data, "POST")
 
         msg = 'Allow access error.'
         self._assert_rest_result(result, msg)
 
-    def _allow_cifs_access_rest(self, share_id, access_to, access_level):
+    def _allow_cifs_access_rest(self, share_id, access_to, access_level,
+                                vstore=None):
         url = "/CIFS_SHARE_AUTH_CLIENT"
         domain_type = {
             'local': '2',
@@ -511,13 +559,15 @@ class RestHelper(object):
                           'access_level': access_level,
                           'id': share_id})
 
-        def send_rest(access_to, domain_type):
+        def send_rest(access_to, domain_type, vstore_id=None):
             access = {
                 "NAME": access_to,
                 "PARENTID": share_id,
                 "PERMISSION": access_level,
                 "DOMAINTYPE": domain_type,
             }
+            if vstore_id:
+                access.update({"vstoreId": vstore_id})
             data = jsonutils.dumps(access)
             result = self.call(url, data, "POST")
             error_code = result['error']['code']
@@ -530,25 +580,25 @@ class RestHelper(object):
         if '\\' not in access_to:
             # First, try to add user access.
             LOG.debug('Try to add user access. %s.', access_info)
-            if send_rest(access_to, domain_type['local']):
+            if send_rest(access_to, domain_type['local'], vstore):
                 return
             # Second, if add user access failed,
             # try to add group access.
             LOG.debug('Failed with add user access, '
                       'try to add group access. %s.', access_info)
             # Group name starts with @.
-            if send_rest('@' + access_to, domain_type['local']):
+            if send_rest('@' + access_to, domain_type['local'], vstore):
                 return
         else:
             LOG.debug('Try to add domain user access. %s.', access_info)
-            if send_rest(access_to, domain_type['ad']):
+            if send_rest(access_to, domain_type['ad'], vstore):
                 return
             # If add domain user access failed,
             # try to add domain group access.
             LOG.debug('Failed with add domain user access, '
                       'try to add domain group access. %s.', access_info)
             # Group name starts with @.
-            if send_rest('@' + access_to, domain_type['ad']):
+            if send_rest('@' + access_to, domain_type['ad'], vstore):
                 return
 
         raise exception.InvalidShare(reason=error_msg)
@@ -614,7 +664,7 @@ class RestHelper(object):
 
         return result['data']['ID']
 
-    def _get_share_by_name(self, share_name, share_url_type):
+    def _get_share_by_name(self, share_name, share_url_type, vstore_id=None):
         """Segments to find share for a period of 100."""
         count = self._get_share_count(share_url_type)
 
@@ -625,7 +675,8 @@ class RestHelper(object):
                 break
             share = self._get_share_by_name_range(share_name,
                                                   range_begin,
-                                                  share_url_type)
+                                                  share_url_type,
+                                                  vstore_id)
             range_begin += 100
             count -= 100
 
@@ -640,17 +691,18 @@ class RestHelper(object):
         return int(result['data']['COUNT'])
 
     def _get_share_by_name_range(self, share_name,
-                                 range_begin, share_url_type):
+                                 range_begin, share_url_type, vstore_id=None):
         """Get share by share name."""
         range_end = range_begin + 100
         url = ("/" + share_url_type + "?range=["
                + six.text_type(range_begin) + "-"
                + six.text_type(range_end) + "]")
-        result = self.call(url, None, "GET")
+        params = {'vstoreId': vstore_id} if vstore_id else None
+        if params:
+            params = jsonutils.dumps(params)
+        result = self.call(url, params, "GET")
         self._assert_rest_result(result, 'Get share by name error!')
-
         share_path = self._get_share_path(share_name)
-
         share = {}
         for item in result.get('data', []):
             if share_path == item['SHAREPATH']:
@@ -683,6 +735,15 @@ class RestHelper(object):
             if share_name == item['NAME']:
                 return item['ID']
 
+    def _get_fs_info_by_name(self, share_name):
+        name = share_name.replace('-', '_')
+        url = "/filesystem?filter=NAME::%s" % name
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, 'Get filesystem by name %s error.'
+                                 % name)
+        if 'data' in result and result['data']:
+            return result['data'][0]
+
     def _get_fs_info_by_id(self, fsid):
         url = "/filesystem/%s" % fsid
         result = self.call(url, None, "GET")
@@ -691,21 +752,14 @@ class RestHelper(object):
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        fs = {}
-        fs['ID'] = result['data']['ID']
-        fs['HEALTHSTATUS'] = result['data']['HEALTHSTATUS']
-        fs['RUNNINGSTATUS'] = result['data']['RUNNINGSTATUS']
-        fs['CAPACITY'] = result['data']['CAPACITY']
-        fs['MINSIZEFSCAPACITY'] = result['data']['MINSIZEFSCAPACITY']
-        fs['ALLOCTYPE'] = result['data']['ALLOCTYPE']
-        fs['POOLNAME'] = result['data']['PARENTNAME']
-        fs['COMPRESSION'] = result['data']['ENABLECOMPRESSION']
-        fs['DEDUP'] = result['data']['ENABLEDEDUP']
-        fs['SMARTPARTITIONID'] = result['data']['CACHEPARTITIONID']
-        fs['SMARTCACHEID'] = result['data']['SMARTCACHEPARTITIONID']
-        fs['REMOTEREPLICATIONIDS'] = result['data']['REMOTEREPLICATIONIDS']
-        fs['ISCLONEFS'] = result['data']['ISCLONEFS']
-        return fs
+        fs_result = result['data']
+        fs_result.update(
+            {"POOLNAME": fs_result.pop("PARENTNAME"),
+             "COMPRESSION": fs_result.pop("ENABLECOMPRESSION"),
+             "DEDUP": fs_result.pop("ENABLEDEDUP"),
+             "SMARTPARTITIONID": fs_result.pop("CACHEPARTITIONID"),
+             "SMARTCACHEID": fs_result.pop("SMARTCACHEPARTITIONID")})
+        return fs_result
 
     def _get_share_path(self, share_name):
         share_path = "/" + share_name.replace("-", "_") + "/"
@@ -1190,6 +1244,20 @@ class RestHelper(object):
 
         return all_logical_port
 
+    def get_logical_port_by_id(self, logical_port_id):
+        url = "/LIF/%s" % logical_port_id
+        result = self.call(url, None, 'GET')
+        self._assert_rest_result(result, _('Get logical port error.'))
+        return result.get('data', {})
+
+    def modify_logical_port(self, logical_port_id, vstore_id):
+        logical_port_info = self.get_logical_port_by_id(logical_port_id)
+        logical_port_info.update({'vstoreId': vstore_id,
+                                  'dnsZoneName': ""})
+        url = "/LIF/%s" % logical_port_id
+        result = self.call(url, jsonutils.dumps(logical_port_info), 'PUT')
+        self._assert_rest_result(result, _('Modify logical port error.'))
+
     def delete_logical_port(self, logical_port_id):
         url = "/LIF/" + logical_port_id
         result = self.call(url, None, 'DELETE')
@@ -1452,3 +1520,66 @@ class RestHelper(object):
 
         msg = _('Split clone fs %s error.') % fs_id
         self._assert_rest_result(result, msg)
+
+    def create_hypermetro_pair(self, params):
+        data = jsonutils.dumps(params)
+        result = self.call("/HyperMetroPair", data, "POST")
+        self._assert_rest_result(result, 'Create HyperMetro pair %s error.'
+                                 % params)
+        return result['data']
+
+    def get_hypermetro_pair_by_id(self, pair_id):
+        url = "/HyperMetroPair/%s" % pair_id
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, 'Get HyperMetro pair %s error.'
+                                 % pair_id)
+        return result['data']
+
+    def suspend_hypermetro_pair(self, pair_id):
+        params = {"ID": pair_id}
+        data = jsonutils.dumps(params)
+        url = "/HyperMetroPair/disable_hcpair"
+        result = self.call(url, data, "PUT")
+        self._assert_rest_result(result, 'Suspend HyperMetro pair %s error.'
+                                 % pair_id)
+
+    def sync_hypermetro_pair(self, pair_id):
+        params = {"ID": pair_id}
+        data = jsonutils.dumps(params)
+        result = self.call("/HyperMetroPair/synchronize_hcpair", data, "PUT")
+        self._assert_rest_result(result, 'Sync HyperMetro pair %s error.'
+                                 % pair_id)
+
+    def delete_hypermetro_pair(self, pair_id):
+        url = "/HyperMetroPair/%s" % pair_id
+        result = self.call(url, None, "DELETE")
+        if result['error']['code'] == constants.ERROR_HYPERMETRO_NOT_EXIST:
+            LOG.warning('Hypermetro pair %s to delete not exist.', pair_id)
+            return
+        self._assert_rest_result(result, 'Delete HyperMetro pair %s error.'
+                                 % pair_id)
+
+    def get_hypermetro_domain_id(self, domain_name):
+        result = self.call("/HyperMetroDomain?range=[0-100]", None, "GET")
+        self._assert_rest_result(result, "Get HyperMetro domains info error.")
+        for item in result.get("data", []):
+            if item.get("NAME") == domain_name:
+                return item.get("ID")
+
+    def get_hypermetro_vstore_id(self, domain_name, local_vstore_name,
+                                 remote_vstore_name):
+        result = self.call("/vstore_pair?range=[0-100]", None, "GET")
+        self._assert_rest_result(result, "Get Metro vStore pair id error.")
+        for item in result.get("data", []):
+            if item.get("DOMAINNAME") == domain_name and item.get(
+                    "LOCALVSTORENAME") == local_vstore_name and item.get(
+                    "REMOTEVSTORENAME") == remote_vstore_name:
+                return item.get("ID")
+        return None
+
+    def get_hypermetro_vstore_by_pair_id(self, vstore_pair_id):
+        url = "/vstore_pair/%s" % vstore_pair_id
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, "Get HyperMetro vStore pair info "
+                                         "by id error.")
+        return result["data"]

@@ -17,6 +17,7 @@
 from xml.etree import ElementTree as ET
 
 from oslo_config import cfg
+from oslo_config import types
 from oslo_log import log
 from oslo_utils import importutils
 
@@ -31,8 +32,17 @@ huawei_opts = [
                default='/etc/manila/manila_huawei_conf.xml',
                help='The configuration file for the Manila Huawei driver.'),
     cfg.BoolOpt('local_replication',
-               default=False,
-               help='The replication type of backend Huawei storage.'),
+                default=False,
+                help='The replication type of backend Huawei storage.'),
+    cfg.MultiOpt('metro_info',
+                 item_type=types.Dict(),
+                 secret=True,
+                 help='Multi opt of dictionaries to represent a hypermetro '
+                      'target device. This option may be specified multiple '
+                      'times in a single config section to specify multiple '
+                      'hypermetro target devices. Each entry takes the '
+                      'standard dict config form: hypermetro_device = '
+                      'key1:value1,key2:value2...'),
 ]
 
 CONF = cfg.CONF
@@ -100,9 +110,9 @@ class HuaweiNasDriver(driver.ShareDriver):
             msg = _('Product %(product)s is not supported. Product '
                     'must be set to one of %(valid)s.'
                     ) % {
-                      'product': product,
-                      'valid': list(constants.HUAWEI_UNIFIED_DRIVER_REGISTRY),
-                  }
+                'product': product,
+                'valid': list(constants.HUAWEI_UNIFIED_DRIVER_REGISTRY),
+            }
             raise exception.InvalidInput(reason=msg)
 
         return backend_driver

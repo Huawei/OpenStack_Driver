@@ -234,7 +234,8 @@ class SmartX(object):
                              'controllername:controllername in key.'))
             else:
                 controller_name = opts['controllername']
-                controller_id = self.client.get_controller_by_name(controller_name)
+                controller_id = self.client.get_controller_by_name(
+                    controller_name)
                 opts['controllerid'] = controller_id
         else:
             opts['controllerid'] = None

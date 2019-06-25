@@ -59,6 +59,7 @@ class V3StorageConnection(driver.HuaweiBase):
         else:
             raise exception.InvalidInput(_("Huawei configuration missing."))
         self.helper.login()
+        self.helper.get_product()
 
     def create_share(self, share, share_server=None):
         """Create a share."""
@@ -287,7 +288,6 @@ class V3StorageConnection(driver.HuaweiBase):
                     allocated_capacity_gb=capacity['CONSUMEDCAPACITY'],
                     qos=self._get_qos_capability(),
                     reserved_percentage=0,
-                    thin_provisioning=[True, False],
                     dedupe=[True, False],
                     compression=[True, False],
                     huawei_smartcache=[True, False],
@@ -295,6 +295,12 @@ class V3StorageConnection(driver.HuaweiBase):
                     huawei_smartpartition=[True, False],
                     huawei_share_privilege=[True, False],
                 )
+
+                if self.configuration.nas_product != "Dorado":
+                    pool['thin_provisioning'] = [True, False]
+                else:
+                    pool['thin_provisioning'] = True
+
                 stats_dict["pools"].append(pool)
 
         if not stats_dict["pools"]:
@@ -304,7 +310,8 @@ class V3StorageConnection(driver.HuaweiBase):
 
     def _get_qos_capability(self):
         version = self.helper.find_array_version()
-        if version.upper() >= constants.MIN_ARRAY_VERSION_FOR_QOS:
+        if (self.configuration.nas_product == "Dorado" or
+                version.upper() >= constants.MIN_ARRAY_VERSION_FOR_QOS):
             self.qos_support = True
         else:
             self.qos_support = False
@@ -607,7 +614,6 @@ class V3StorageConnection(driver.HuaweiBase):
             "PARENTID": poolinfo['ID'],
             "INITIALALLOCCAPACITY": units.Ki * 20,
             "PARENTTYPE": 216,
-            "SNAPSHOTRESERVEPER": 20,
             "INITIALDISTRIBUTEPOLICY": 0,
             "ISSHOWSNAPDIR": True,
             "RECYCLESWITCH": 0,
@@ -629,6 +635,27 @@ class V3StorageConnection(driver.HuaweiBase):
 
         if extra_specs['controllerid']:
             fileparam['OWNINGCONTROLLER'] = extra_specs['controllerid']
+
+        root = self.helper._read_xml()
+        snapshot_reserve = root.findtext('Filesystem/SnapshotReserve')
+        if snapshot_reserve:
+            try:
+                snapshot_reserve = int(snapshot_reserve.strip())
+            except Exception as err:
+                err_msg = _('Config snapshot reserve error. The reason is: '
+                            '%s') % err
+                LOG.error(err_msg)
+                raise exception.InvalidInput(reason=err_msg)
+
+            if 0 <= snapshot_reserve <= 50:
+                fileparam['SNAPSHOTRESERVEPER'] = snapshot_reserve
+            else:
+                err_msg = _("The snapshot reservation percentage can only be "
+                            "between 0 and 50%")
+                LOG.error(err_msg)
+                raise exception.InvalidInput(reason=err_msg)
+        else:
+            fileparam['SNAPSHOTRESERVEPER'] = 20
 
         return fileparam
 

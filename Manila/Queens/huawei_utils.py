@@ -18,6 +18,8 @@ import retrying
 
 from oslo_log import log
 
+from manila import exception
+from manila.i18n import _
 from manila.share.drivers.huawei import constants
 from manila.share import share_types
 
@@ -100,3 +102,29 @@ def get_logical_ips(helper):
         return []
 
     return [i.strip() for i in config.split(';') if i.strip()]
+
+
+def wait_fs_online(helper, fs_id, wait_interval, timeout):
+    def _wait_fs_online():
+        fs = helper._get_fs_info_by_id(fs_id)
+        return (fs['HEALTHSTATUS'] == constants.STATUS_FS_HEALTH and
+                fs['RUNNINGSTATUS'] == constants.STATUS_FS_RUNNING)
+
+    wait_for_condition(_wait_fs_online, wait_interval, timeout)
+
+
+def get_hypermetro_vstore_id(helper, domain_name, local_vstore, remote_vstore):
+    try:
+        vstore_pair_id = helper.get_hypermetro_vstore_id(
+            domain_name, local_vstore, remote_vstore)
+    except Exception as err:
+        msg = _("Failed to get vStore pair id, reason: %s") % err
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+    if vstore_pair_id is None:
+        msg = _("Failed to get vStore pair id, please check relation "
+                "among metro domain, local vStore name and remote "
+                "vStore name.")
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+    return vstore_pair_id

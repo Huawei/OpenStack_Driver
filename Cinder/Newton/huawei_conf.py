@@ -21,6 +21,7 @@ and set every property into Configuration object as an attribute.
 """
 
 import base64
+import re
 import six
 from xml.etree import ElementTree as ET
 
@@ -87,7 +88,9 @@ class HuaweiConf(object):
                           self._ssl_cert_path,
                           self._ssl_cert_verify,
                           self._lun_copy_speed,
-                          self._lun_copy_mode)
+                          self._lun_copy_mode,
+                          self._hyper_pair_sync_speed,
+                          self._replication_pair_sync_speed,)
 
         tree = ET.parse(self.conf.cinder_huawei_conf_file)
         xml_root = tree.getroot()
@@ -342,6 +345,7 @@ class HuaweiConf(object):
 
             iscsi_info.append(props)
 
+        self._check_hostname_regex_config(iscsi_info)
         setattr(self.conf, 'iscsi_info', iscsi_info)
 
     def _fc_info(self, xml_root):
@@ -358,7 +362,21 @@ class HuaweiConf(object):
 
             fc_info.append(props)
 
+        self._check_hostname_regex_config(fc_info)
         setattr(self.conf, 'fc_info', fc_info)
+
+    def _check_hostname_regex_config(self, info):
+        for ini in info:
+            if ini.get("HostName"):
+                try:
+                    if ini.get("HostName") == '*':
+                        continue
+                    re.compile(ini['HostName'])
+                except Exception as err:
+                    msg = _('Invalid initiator configuration. '
+                            'Reason: %s.') % err
+                    LOG.error(msg)
+                    raise exception.InvalidInput(msg)
 
     def _parse_rmt_iscsi_info(self, iscsi_info):
         if not (iscsi_info and iscsi_info.strip()):
@@ -402,6 +420,7 @@ class HuaweiConf(object):
             if key in info:
                 info[key] = info[key].replace('#', ';', 1)
 
+        self._check_hostname_regex_config(initiator_infos)
         return initiator_infos
 
     def get_hypermetro_devices(self):
@@ -501,3 +520,35 @@ class HuaweiConf(object):
                 raise exception.InvalidInput(reason=msg)
 
         setattr(self.conf, 'clone_mode', clone_mode)
+
+    def _hyper_pair_sync_speed(self, xml_root):
+        text = xml_root.findtext('LUN/HyperSyncSpeed')
+        if text and text.strip() not in constants.HYPER_SYNC_SPEED_TYPES:
+            msg = (_("Invalid HyperSyncSpeed '%(text)s', HyperSyncSpeed must "
+                     "be between %(low)s and %(high)s.")
+                   % {"text": text, "low": constants.HYPER_SYNC_SPEED_LOW,
+                      "high": constants.HYPER_SYNC_SPEED_HIGHEST})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if not text:
+            speed = constants.HYPER_SYNC_SPEED_MEDIUM
+        else:
+            speed = text.strip()
+        setattr(self.conf, 'hyper_sync_speed', int(speed))
+
+    def _replication_pair_sync_speed(self, xml_root):
+        text = xml_root.findtext('LUN/ReplicaSyncSpeed')
+        if text and text.strip() not in constants.HYPER_SYNC_SPEED_TYPES:
+            msg = (_("Invalid ReplicaSyncSpeed '%(text)s', ReplicaSyncSpeed "
+                     "must be between %(low)s and %(high)s.")
+                   % {"text": text, "low": constants.REPLICA_SYNC_SPEED_LOW,
+                      "high": constants.REPLICA_SYNC_SPEED_HIGHEST})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if not text:
+            speed = constants.REPLICA_SYNC_SPEED_MEDIUM
+        else:
+            speed = text.strip()
+        setattr(self.conf, 'replica_sync_speed', int(speed))

@@ -151,8 +151,7 @@ def get_lun_metadata(volume):
     return {'huawei_lun_id': six.text_type(info),
             'huawei_lun_wwn': admin_metadata.get('huawei_lun_wwn'),
             'huawei_sn': metadata.get('huawei_sn'),
-            'hypermetro_id': metadata.get('hypermetro_id'),
-            'remote_lun_id': metadata.get('remote_lun_id'),
+            'hypermetro': True if metadata.get('hypermetro_id') else False,
             }
 
 
@@ -173,12 +172,10 @@ def get_snapshot_metadata(snapshot):
 
 def get_volume_lun_id(client, volume):
     metadata = get_lun_metadata(volume)
-    lun_id = metadata.get('huawei_lun_id')
 
     # First try the new encoded way.
-    if not lun_id:
-        volume_name = encode_name(volume.id)
-        lun_id = client.get_lun_id_by_name(volume_name)
+    volume_name = encode_name(volume.id)
+    lun_id = client.get_lun_id_by_name(volume_name)
 
     # If new encoded way not found, try the old encoded way.
     if not lun_id:

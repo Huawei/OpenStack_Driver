@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import json
 import os
 import random
 import string
@@ -29,6 +30,7 @@ from oslo_utils import units
 import six
 
 from manila.common import constants as common_constants
+from manila import context as manila_context
 from manila.data import utils as data_utils
 from manila import exception
 from manila.i18n import _
@@ -37,6 +39,7 @@ from manila.share.drivers.huawei import base as driver
 from manila.share.drivers.huawei import constants
 from manila.share.drivers.huawei import huawei_utils
 from manila.share.drivers.huawei.v3 import helper
+from manila.share.drivers.huawei.v3 import hypermetro
 from manila.share.drivers.huawei.v3 import manager
 from manila.share.drivers.huawei.v3 import replication
 from manila.share.drivers.huawei.v3 import rpcapi as v3_rpcapi
@@ -58,11 +61,16 @@ class V3StorageConnection(driver.HuaweiBase):
         super(V3StorageConnection, self).__init__(configuration)
         self.helper = helper.RestHelper(self.configuration)
         self.replica_mgr = replication.ReplicaPairManager(self.helper)
+        self.metro_mgr = hypermetro.HyperPairManager(self.helper,
+                                                     self.configuration)
         self.rpc_client = v3_rpcapi.HuaweiV3API()
         self.private_storage = kwargs.get('private_storage')
         self.qos_support = False
         self.snapshot_support = False
         self.replication_support = False
+        self.metro_domain = None
+        self.remote_backend = None
+        self.vstore_pair_id = None
 
     def _setup_rpc_server(self, server_version, endpoints):
         host = "%s@%s" % (CONF.host, self.configuration.config_group)
@@ -74,8 +82,10 @@ class V3StorageConnection(driver.HuaweiBase):
     def connect(self):
         """Try to connect to V3 server."""
         self.helper.login()
+        self.helper.get_product()
         self.check_storage_pools()
-        rpc_manager = manager.HuaweiV3Manager(self, self.replica_mgr)
+        rpc_manager = manager.HuaweiV3Manager(self, self.replica_mgr,
+                                              self.metro_mgr)
         self._setup_rpc_server(rpc_manager.RPC_API_VERSION, [rpc_manager])
         self._setup_conf()
 
@@ -109,6 +119,14 @@ class V3StorageConnection(driver.HuaweiBase):
             self.replication_support = strutils.bool_from_string(
                 replication_support, strict=True)
 
+    def check_is_active_client(self):
+        vstore_pair_info = self.helper.get_hypermetro_vstore_by_pair_id(
+            self.vstore_pair_id)
+        active_flag = vstore_pair_info.get('ACTIVEORPASSIVE')
+        if active_flag == '0':
+            return True
+        return False
+
     def create_share(self, share, share_server=None):
         """Create a share."""
         pool_name = share_utils.extract_host(share['host'], level='pool')
@@ -127,25 +145,36 @@ class V3StorageConnection(driver.HuaweiBase):
         fs_id = fs_info['ID']
         share_name = share['name']
         share_proto = share['share_proto']
+        vstore_id = fs_info.get('vstoreId')
 
         try:
-            self.helper.create_share(share_name, fs_id, share_proto)
+            self.helper.create_share(share_name, fs_id, share_proto, vstore_id)
         except Exception as err:
-            if fs_id is not None:
-                qos_id = self.helper.get_qosid_by_fsid(fs_id)
-                if qos_id:
-                    self.remove_qos_fs(fs_id, qos_id)
-                self.helper._delete_fs(fs_id)
+            self._delete_filesystem(fs_id)
             raise exception.InvalidShare(
                 reason=(_('Failed to create share %(name)s. Reason: %(err)s.')
                         % {'name': share_name, 'err': err}))
 
         self.private_storage.update(share['id'], {'replica_pair_id': ''})
 
-        ips = self._get_share_ip(share_server)
-        locations = self._get_location_path(share_name, share_proto, ips)
+        ip = self._get_share_ip(share_server, vstore_id)
+        location = self._get_location_path(share_name, share_proto, ip)
 
-        return locations
+        return location
+
+    def _delete_filesystem(self, fs_id, context=None):
+        if fs_id is not None:
+            qos_id = self.helper.get_qosid_by_fsid(fs_id)
+            if qos_id:
+                self.remove_qos_fs(fs_id, qos_id)
+
+            fs_info = self.helper._get_fs_info_by_id(fs_id)
+            if json.loads(fs_info.get('HYPERMETROPAIRIDS')) and \
+                    self.metro_domain:
+                self._delete_metro_filesystem(fs_id, fs_info)
+                return
+            params = {"ID": fs_id}
+            self.helper._delete_fs(params)
 
     def _create_filesystem(self, share, **kwargs):
         fs_id = None
@@ -173,11 +202,7 @@ class V3StorageConnection(driver.HuaweiBase):
                             % {'health': fs['HEALTHSTATUS'],
                                'running': fs['RUNNINGSTATUS']}))
         except Exception as err:
-            if fs_id is not None:
-                qos_id = self.helper.get_qosid_by_fsid(fs_id)
-                if qos_id:
-                    self.remove_qos_fs(fs_id, qos_id)
-                self.helper._delete_fs(fs_id)
+            self._delete_filesystem(fs_id)
             message = (_('Failed to create share %(name)s. '
                          'Reason: %(err)s.')
                        % {'name': share['name'],
@@ -187,14 +212,39 @@ class V3StorageConnection(driver.HuaweiBase):
 
         return fs
 
-    def _get_share_ip(self, share_server):
+    def _get_share_ip(self, share_server, vstore_id=None):
         """"Get share logical ip."""
         if share_server:
+            if vstore_id:
+                self.helper.modify_logical_port(
+                    share_server['backend_details']['logical_port_id'],
+                    vstore_id)
             ips = [share_server['backend_details'].get('ip')]
         else:
-            ips = huawei_utils.get_logical_ips(self.helper)
+            if vstore_id:
+                ips = [self.metro_logic_ip]
+            else:
+                ips = huawei_utils.get_logical_ips(self.helper)
 
         return ips
+
+    def _update_filesystem(self, fs_info, size):
+        fs_id = fs_info.get('ID')
+        if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
+            metro_id = self._get_metro_id_from_fs_info(fs_info)
+            metro_info = self.helper.get_hypermetro_pair_by_id(metro_id)
+            remote_fs_id = self._get_remote_fs_id(fs_id, metro_info)
+            try:
+                context = manila_context.get_admin_context()
+                self.rpc_client.update_filesystem(context, self.remote_backend,
+                                                  remote_fs_id, size)
+            except Exception as err:
+                msg = (_("Failed to update remote filesystem %(fs_id)s. "
+                         "Reason: %(err)s")
+                       % {"fs_id": remote_fs_id, "err": err})
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        self.helper._change_share_size(fs_id, size)
 
     def extend_share(self, share, new_size, share_server):
         share_proto = share['share_proto']
@@ -202,9 +252,10 @@ class V3StorageConnection(driver.HuaweiBase):
 
         # The unit is in sectors.
         size = int(new_size) * units.Mi * 2
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
         share_url_type = self.helper._get_share_url_type(share_proto)
-
-        share = self.helper._get_share_by_name(share_name, share_url_type)
+        share = self.helper._get_share_by_name(
+            share_name, share_url_type, vstore_id)
         if not share:
             err_msg = (_("Can not get share ID by share %s.")
                        % share_name)
@@ -223,19 +274,18 @@ class V3StorageConnection(driver.HuaweiBase):
 
             LOG.error(err_msg)
             raise exception.InvalidInput(reason=err_msg)
-        self.helper._change_share_size(fsid, size)
+        self._update_filesystem(fs_info, size)
 
     def shrink_share(self, share, new_size, share_server):
         """Shrinks size of existing share."""
         share_proto = share['share_proto']
         share_name = share['name']
-
         # The unit is in sectors.
         size = int(new_size) * units.Mi * 2
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
         share_url_type = self.helper._get_share_url_type(share_proto)
-
-        share_info = self.helper._get_share_by_name(share_name,
-                                                    share_url_type)
+        share_info = self.helper._get_share_by_name(
+            share_name, share_url_type, vstore_id)
         if not share_info:
             err_msg = (_("Can not get share ID by share %s.")
                        % share_name)
@@ -260,7 +310,7 @@ class V3StorageConnection(driver.HuaweiBase):
             raise exception.ShareShrinkingPossibleDataLoss(
                 share_id=share['id'])
 
-        self.helper._change_share_size(fsid, size)
+        self._update_filesystem(fs_info, size)
 
     def check_fs_status(self, health_status, running_status):
         if (health_status == constants.STATUS_FS_HEALTH
@@ -284,10 +334,10 @@ class V3StorageConnection(driver.HuaweiBase):
         """Create a snapshot."""
         snap_name = snapshot['id']
         share_proto = snapshot['share']['share_proto']
-
+        vstore_id = self.get_vstore_id_by_fs_info(snapshot['share_name'])
         share_url_type = self.helper._get_share_url_type(share_proto)
         share = self.helper._get_share_by_name(snapshot['share_name'],
-                                               share_url_type)
+                                               share_url_type, vstore_id)
 
         if not share:
             err_msg = _('Can not create snapshot,'
@@ -349,7 +399,6 @@ class V3StorageConnection(driver.HuaweiBase):
                     allocated_capacity_gb=capacity['CONSUMEDCAPACITY'],
                     qos=[self._get_qos_capability(), False],
                     reserved_percentage=0,
-                    thin_provisioning=[True, False],
                     dedupe=[True, False],
                     compression=[True, False],
                     huawei_smartcache=[True, False],
@@ -361,6 +410,16 @@ class V3StorageConnection(driver.HuaweiBase):
 
                 if disk_type:
                     pool['huawei_disk_type'] = disk_type
+                
+                if self.configuration.nas_product != "Dorado":
+                    pool['thin_provisioning'] = [True, False]
+                else:
+                    pool['thin_provisioning'] = True
+
+                if self.metro_domain and self.check_is_active_client():
+                    pool['hypermetro'] = True
+                else:
+                    pool['hypermetro'] = False
 
                 stats_dict["pools"].append(pool)
 
@@ -371,24 +430,32 @@ class V3StorageConnection(driver.HuaweiBase):
 
     def _get_qos_capability(self):
         version = self.helper.find_array_version()
-        if version.upper() >= constants.MIN_ARRAY_VERSION_FOR_QOS:
+        if (self.configuration.nas_product == "Dorado" or
+                version.upper() >= constants.MIN_ARRAY_VERSION_FOR_QOS):
             self.qos_support = True
         else:
             self.qos_support = False
         return self.qos_support
 
-    def delete_share(self, share, share_server=None):
-        """Delete share."""
-        share_name = share['name']
-        share_url_type = self.helper._get_share_url_type(share['share_proto'])
-        share_info = self.helper._get_share_by_name(share_name, share_url_type)
+    def get_vstore_id_by_fs_info(self, share_name):
+        fs_info = self.helper._get_fs_info_by_name(share_name)
+        if not fs_info:
+            LOG.warning('FS %s to delete not exist.', share_name)
+            return
+        return fs_info.get('vstoreId')
+
+    def rpc_delete_share(self, context, share_name, share_proto):
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
+        share_url_type = self.helper._get_share_url_type(share_proto)
+        share_info = self.helper._get_share_by_name(
+            share_name, share_url_type, vstore_id)
 
         if not share_info:
             LOG.warning('The share was not found. Share name:%s',
                         share_name)
             fsid = self.helper.get_fsid_by_name(share_name)
             if fsid:
-                self.helper._delete_fs(fsid)
+                self._delete_filesystem(fsid)
                 return
             LOG.warning('The filesystem was not found.')
             return
@@ -397,22 +464,108 @@ class V3StorageConnection(driver.HuaweiBase):
         share_fs_id = share_info['FSID']
 
         if share_id:
-            self.helper._delete_share_by_id(share_id, share_url_type)
+            self.helper._delete_share_by_id(
+                share_id, share_url_type, vstore_id)
+        self._delete_filesystem(share_fs_id)
 
-        if share_fs_id:
-            if self.qos_support:
-                qos_id = self.helper.get_qosid_by_fsid(share_fs_id)
-                if qos_id:
-                    self.remove_qos_fs(share_fs_id, qos_id)
-            self.helper._delete_fs(share_fs_id)
-
+    def delete_share(self, share, share_server=None):
+        """Delete share."""
+        context = manila_context.get_admin_context()
+        share_name = share['name']
+        share_proto = share['share_proto']
+        fs_info = self.helper._get_fs_info_by_name(share_name)
+        if not fs_info:
+            LOG.warning("FS %s to delete not exist.", share_name)
+            return
+        if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
+            self.rpc_client.get_remote_fs_info(
+                context, share_name, self.remote_backend)
+            if self.check_is_active_client():
+                self.rpc_delete_share(context, share_name, share_proto)
+            else:
+                self.rpc_client.delete_share(
+                    context, share_name, share_proto, self.remote_backend)
+        else:
+            self.rpc_delete_share(context, share_name, share_proto)
         self.private_storage.delete(share['id'])
+
+    def _get_remote_fs_id(self, fs_id, metro_info):
+        if fs_id == metro_info['LOCALOBJID']:
+            remote_fs_id = metro_info['REMOTEOBJID']
+        elif fs_id == metro_info['REMOTEOBJID']:
+            remote_fs_id = metro_info['LOCALOBJID']
+        else:
+            msg = (_("Filesystem %s is not belong to a HyperMetro "
+                     "filesystem.") % fs_id)
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        return remote_fs_id
+
+    def _get_metro_id_from_fs_info(self, fs_info):
+        if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
+            metro_id = json.loads(fs_info.get('HYPERMETROPAIRIDS'))
+            if not metro_id:
+                msg = _("Filesystem is a HyperMetro, but failed to get the "
+                        "metro id")
+                LOG.error(msg)
+                raise exception.ShareResourceNotFound(reason=msg)
+            metro_id = metro_id[0]
+            return metro_id
+
+    def _delete_metro_filesystem(self, fs_id, fs_info):
+        metro_id = self._get_metro_id_from_fs_info(fs_info)
+        if not metro_id:
+            return
+        metro_info = self.helper.get_hypermetro_pair_by_id(metro_id)
+        remote_fs_id = self._get_remote_fs_id(fs_id, metro_info)
+
+        try:
+            self.metro_mgr.delete_metro_pair(metro_id=metro_id)
+        except Exception as err:
+            msg = (_("Failed to delete HyperMetro filesystem pair "
+                     "%(metro_id)s. Reason: %(err)s")
+                   % {"metro_id": metro_id, "err": err})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        vstore_info = self.helper.get_hypermetro_vstore_by_pair_id(
+            self.vstore_pair_id)
+        try:
+            context = manila_context.get_admin_context()
+            remote_vstore_id = vstore_info.get('REMOTEVSTOREID')
+            if remote_vstore_id:
+                params = {"ID": remote_fs_id, 'vstoreId': remote_vstore_id}
+            else:
+                params = {"ID": remote_fs_id}
+            LOG.info("Start to delete remote filesystem: %s" % remote_fs_id)
+            self.rpc_client.delete_remote_filesystem(
+                context, self.remote_backend, params)
+        except Exception as err:
+            msg = (_("Failed to delete remote filesystem %(fs_id)s. "
+                     "Reason: %(err)s") % {"fs_id": remote_fs_id, "err": err})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        try:
+            local_vstore_id = vstore_info.get('LOCALVSTOREID')
+            if local_vstore_id:
+                params = {"ID": fs_id, 'vstoreId': local_vstore_id}
+            else:
+                params = {"ID": fs_id}
+            LOG.info("Start to delete local filesystem: %s" % fs_id)
+            self.helper._delete_fs(params)
+        except Exception as err:
+            msg = (_("Failed to delete local filesystem %(fs_id)s. "
+                     "Reason: %(err)s") % {"fs_id": fs_id, "err": err})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
 
     def _create_from_snapshot_by_clone(self, share, parent_fs_id,
                                        parent_snap_id, share_server):
         fs_info = self._create_filesystem(
             share, parent_fs_id=parent_fs_id, parent_snap_id=parent_snap_id)
         fs_id = fs_info['ID']
+        vstore_id = fs_info.get('vstoreId')
 
         clone_size = int(fs_info['CAPACITY'])
         new_size = int(share['size']) * units.Mi * 2
@@ -444,7 +597,7 @@ class V3StorageConnection(driver.HuaweiBase):
             for i in accesses:
                 self.helper._remove_access_from_share(i, share_proto)
 
-        ips = self._get_share_ip(share_server)
+        ips = self._get_share_ip(share_server, vstore_id)
         locations = self._get_location_path(share_name, share_proto, ips)
 
         return locations
@@ -474,7 +627,7 @@ class V3StorageConnection(driver.HuaweiBase):
         }
 
         old_share_paths = self._get_location_path(old_share_name,
-                                                 old_share_proto)
+                                                  old_share_proto)
         old_share = {
             "share_proto": old_share_proto,
             "name": old_share_name,
@@ -515,7 +668,12 @@ class V3StorageConnection(driver.HuaweiBase):
             LOG.error(err_msg)
             raise exception.StorageResourceNotFound(
                 name=snapshot['share_name'])
-
+        fs_info = self.helper._get_fs_info_by_id(share_fs_id)
+        if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
+            msg = _("HyperMetro Pair Share does not support "
+                    "create from snapshot")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
         snapshot_id = self.helper._get_snapshot_id(share_fs_id, snapshot['id'])
         snapshot_info = self.helper._get_snapshot_by_id(snapshot_id)
         snapshot_flag = self.helper._check_snapshot_id_exist(snapshot_info)
@@ -641,7 +799,9 @@ class V3StorageConnection(driver.HuaweiBase):
         share_proto = share['share_proto']
         share_url_type = self.helper._get_share_url_type(share_proto)
         access_to = access['access_to']
-        share = self.helper._get_share_by_name(share_name, share_url_type)
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
+        share = self.helper._get_share_by_name(share_name, share_url_type,
+                                               vstore_id)
         access_id = self.helper._get_access_from_share(share['ID'], access_to,
                                                        share_proto)
         if access_id is None:
@@ -744,7 +904,8 @@ class V3StorageConnection(driver.HuaweiBase):
 
         pool_disk = []
         for i, x in enumerate(['ssd', 'sas', 'nl_sas']):
-            if pool_info['TIER%dCAPACITY' % i] != '0':
+            if ('TIER%dCAPACITY' % i in pool_info and
+                    pool_info['TIER%dCAPACITY' % i] != '0'):
                 pool_disk.append(x)
 
         if len(pool_disk) > 1:
@@ -758,7 +919,6 @@ class V3StorageConnection(driver.HuaweiBase):
         fileparam = {
             "NAME": name.replace("-", "_"),
             "ALLOCTYPE": extra_specs['LUNType'],
-            "SNAPSHOTRESERVEPER": 20,
             "ENABLEDEDUP": extra_specs['dedupe'],
             "ENABLECOMPRESSION": extra_specs['compression'],
         }
@@ -784,14 +944,35 @@ class V3StorageConnection(driver.HuaweiBase):
         if extra_specs['controllerid']:
             fileparam['OWNINGCONTROLLER'] = extra_specs['controllerid']
 
+        root = self.helper._read_xml()
+        snapshot_reserve = root.findtext('Filesystem/SnapshotReserve')
+        if snapshot_reserve:
+            try:
+                snapshot_reserve = int(snapshot_reserve.strip())
+            except Exception as err:
+                err_msg = _('Config snapshot reserve error. The reason is: '
+                            '%s') % err
+                LOG.error(err_msg)
+                raise exception.InvalidInput(reason=err_msg)
+
+            if 0 <= snapshot_reserve <= 50:
+                fileparam['SNAPSHOTRESERVEPER'] = snapshot_reserve
+            else:
+                err_msg = _("The snapshot reservation percentage can only be "
+                            "between 0 and 50%")
+                LOG.error(err_msg)
+                raise exception.InvalidInput(reason=err_msg)
+        else:
+            fileparam['SNAPSHOTRESERVEPER'] = 20
+
         return fileparam
 
-    def deny_access(self, share, access, share_server=None):
-        """Deny access to share."""
-        share_proto = share['share_proto']
-        share_name = share['name']
+    def rpc_deny_access(self, context, params):
+        share_proto = params['share_proto']
+        share_name = params['name']
+        access_type = params['access_type']
+        access_to = params['access_to']
         share_url_type = self.helper._get_share_url_type(share_proto)
-        access_type = access['access_type']
         if share_proto == 'NFS' and access_type not in ('ip', 'user'):
             LOG.warning('Only IP or USER access types are allowed for '
                         'NFS shares.')
@@ -801,35 +982,58 @@ class V3StorageConnection(driver.HuaweiBase):
                         ' CIFS shares.')
             return
 
-        access_to = access['access_to']
         # Huawei array uses * to represent IP addresses of all clients
         if (share_proto == 'NFS' and access_type == 'ip' and
                 access_to == '0.0.0.0/0'):
             access_to = '*'
-        share = self.helper._get_share_by_name(share_name, share_url_type)
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
+        share = self.helper._get_share_by_name(
+            share_name, share_url_type, vstore_id)
         if not share:
             LOG.warning('Can not get share %s.', share_name)
             return
 
-        access_id = self.helper._get_access_from_share(share['ID'], access_to,
-                                                       share_proto)
+        access_id = self.helper._get_access_from_share(
+            share['ID'], access_to, share_proto, vstore_id)
         if not access_id:
             LOG.warning('Can not get access id from share. '
                         'share_name: %s', share_name)
             return
 
-        self.helper._remove_access_from_share(access_id, share_proto)
+        self.helper._remove_access_from_share(
+            access_id, share_proto, vstore_id)
 
-    def allow_access(self, share, access, share_server=None):
+    def deny_access(self, share, access, share_server=None):
+        """Deny access to share."""
+        context = manila_context.get_admin_context()
+        params = {"name": share['name'],
+                  "share_proto": share['share_proto'],
+                  "access_to": access['access_to'],
+                  "access_type": access['access_type']}
+        fs_info = self.helper._get_fs_info_by_name(share['name'])
+        if not fs_info:
+            LOG.warning("FS %s is not exist.", share['name'])
+            return
+        if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
+            self.rpc_client.get_remote_fs_info(
+                context, share['name'], self.remote_backend)
+            if self.check_is_active_client():
+                self.rpc_deny_access(context, params)
+            else:
+                self.rpc_client.deny_access(context, params,
+                                            self.remote_backend)
+        else:
+            self.rpc_deny_access(context, params)
+
+    def rpc_allow_access(self, context, params):
         """Allow access to the share."""
-        share_type_id = share.get('share_type_id')
-        share_proto = share['share_proto']
-        share_name = share['name']
+        share_name = params['name']
+        share_proto = params['share_proto']
+        access_to = params['access_to']
+        access_type = params['access_type']
+        access_level = params['access_level']
+        share_type_id = params['share_type_id']
         share_url_type = self.helper._get_share_url_type(share_proto)
-        access_type = access['access_type']
-        access_level = access['access_level']
-        access_to = access['access_to']
-
         if access_level not in common_constants.ACCESS_LEVELS:
             raise exception.InvalidShareAccess(
                 reason=(_('Unsupported level of access was provided - %s') %
@@ -862,49 +1066,78 @@ class V3StorageConnection(driver.HuaweiBase):
                 message = _('Only USER access type is allowed'
                             ' for CIFS shares.')
                 raise exception.InvalidShareAccess(reason=message)
-
-        share_stor = self.helper._get_share_by_name(share_name,
-                                                    share_url_type)
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
+        share_stor = self.helper._get_share_by_name(
+            share_name, share_url_type, vstore_id)
         if not share_stor:
             err_msg = (_("Share %s does not exist on the backend.")
                        % share_name)
             LOG.error(err_msg)
-            raise exception.ShareResourceNotFound(share_id=share['id'])
+            raise exception.ShareResourceNotFound(share_id=share_stor['ID'])
 
         share_id = share_stor['ID']
 
         # Check if access already exists
         access_id = self.helper._get_access_from_share(share_id,
                                                        access_to,
-                                                       share_proto)
+                                                       share_proto, vstore_id)
         if access_id:
             # Check if the access level equal
-            level_exist = self.helper._get_level_by_access_id(access_id,
-                                                              share_proto)
+            level_exist = self.helper._get_level_by_access_id(
+                access_id, share_proto, vstore_id)
             if level_exist != access_level:
                 # Change the access level
-                self.helper._change_access_rest(access_id,
-                                                share_proto, access_level)
+                self.helper._change_access_rest(
+                    access_id, share_proto, access_level, vstore_id)
         else:
             # Add this access to share
             self.helper._allow_access_rest(
-                share_id, access_to, share_proto, access_level, share_type_id)
+                share_id, access_to, share_proto, access_level,
+                share_type_id, vstore_id)
+
+    def allow_access(self, share, access, share_server=None):
+        """Allow access to the share."""
+        context = manila_context.get_admin_context()
+        params = {"name": share['name'],
+                  "share_proto": share['share_proto'],
+                  "access_to": access['access_to'],
+                  "access_type": access['access_type'],
+                  "access_level": access['access_level'],
+                  "share_type_id": share.get("share_type_id")}
+        fs_info = self.helper._get_fs_info_by_name(share['name'])
+        if not fs_info:
+            msg = _("FS %s to allow access not exist.") % share['name']
+            LOG.error(msg)
+            raise exception.ShareBackendException(msg=msg)
+
+        if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
+            self.rpc_client.get_remote_fs_info(
+                context, share['name'], self.remote_backend)
+            if self.check_is_active_client():
+                self.rpc_allow_access(context, params)
+            else:
+                self.rpc_client.allow_access(context, params,
+                                             self.remote_backend)
+        else:
+            self.rpc_allow_access(context, params)
 
     def clear_access(self, share, share_server=None):
         """Remove all access rules of the share"""
         share_proto = share['share_proto']
         share_name = share['name']
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
         share_url_type = self.helper._get_share_url_type(share_proto)
-        share_stor = self.helper._get_share_by_name(share_name, share_url_type)
+        share_stor = self.helper._get_share_by_name(
+            share_name, share_url_type, vstore_id)
         if not share_stor:
             LOG.warning('Cannot get share %s.', share_name)
             return
         share_id = share_stor['ID']
-        all_accesses = self.helper._get_all_access_from_share(share_id,
-                                                              share_proto)
+        all_accesses = self.helper._get_all_access_from_share(
+            share_id, share_proto, vstore_id)
         for access_id in all_accesses:
-            self.helper._remove_access_from_share(access_id,
-                                                  share_proto)
+            self.helper._remove_access_from_share(
+                access_id, share_proto, vstore_id)
 
     def update_access(self, share, access_rules, add_rules,
                       delete_rules, share_server=None):
@@ -924,8 +1157,10 @@ class V3StorageConnection(driver.HuaweiBase):
         if pool_name:
             return pool_name
         share_name = share['name']
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
         share_url_type = self.helper._get_share_url_type(share['share_proto'])
-        share = self.helper._get_share_by_name(share_name, share_url_type)
+        share = self.helper._get_share_by_name(share_name, share_url_type,
+                                               vstore_id)
 
         pool_name = None
         if share:
@@ -945,6 +1180,15 @@ class V3StorageConnection(driver.HuaweiBase):
         smartx_opts, qos = smart.get_smartx_extra_specs_opts(opts)
 
         fileParam = self._init_filesys_para(share, smartx_opts, **kwargs)
+        remote_vstore_id = None
+        if opts.get('hypermetro'):
+            vstore_info = self.helper.get_hypermetro_vstore_by_pair_id(
+                self.vstore_pair_id)
+            local_vstore_id = vstore_info.get('LOCALVSTOREID')
+            remote_vstore_id = vstore_info.get('REMOTEVSTOREID')
+            if local_vstore_id and remote_vstore_id:
+                fileParam['vstoreId'] = local_vstore_id
+
         fsid = self.helper._create_filesystem(fileParam)
 
         try:
@@ -958,14 +1202,36 @@ class V3StorageConnection(driver.HuaweiBase):
             smartcache = smartx.SmartCache(self.helper)
             smartcache.add(opts, fsid)
         except Exception as err:
-            if fsid is not None:
-                qos_id = self.helper.get_qosid_by_fsid(fsid)
-                if qos_id:
-                    self.remove_qos_fs(fsid, qos_id)
-                self.helper._delete_fs(fsid)
+            self._delete_filesystem(fsid)
             message = (_('Failed to add smartx. Reason: %(err)s.')
                        % {'err': err})
             raise exception.InvalidShare(reason=message)
+
+        if opts.get('hypermetro'):
+            context = manila_context.get_admin_context()
+            try:
+                fileParam.update({'vstoreId': remote_vstore_id})
+                remote_fs_id = self.rpc_client.create_remote_filesystem(
+                    context, self.remote_backend, fileParam)
+            except Exception as err:
+                self._delete_filesystem(fsid)
+                LOG.exception('Failed to create remote filesystem.'
+                              ' reason: %s', err)
+                raise
+
+            try:
+                self.metro_mgr.create_metro_pair(
+                    self.metro_domain, fsid, remote_fs_id,
+                    self.vstore_pair_id)
+            except Exception as err:
+                self._delete_filesystem(fsid)
+                params = {"ID": remote_fs_id, 'vstoreId': remote_vstore_id}
+                self.rpc_client.delete_remote_filesystem(
+                    context, self.remote_backend, params)
+                LOG.exception('Failed to create HyperMetro filesystem pair'
+                              '%(fs_id)s. reason: %(err)s'
+                              % {"fs_id": fsid, "err": err})
+                raise
         return fsid
 
     def manage_existing(self, share, driver_options):
@@ -987,9 +1253,10 @@ class V3StorageConnection(driver.HuaweiBase):
                        % old_export_location)
             LOG.error(err_msg)
             raise exception.ManageInvalidShare(reason=err_msg)
-
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
         share_storage = self.helper._get_share_by_name(old_share_name,
-                                                       share_url_type)
+                                                       share_url_type,
+                                                       vstore_id)
         if not share_storage:
             err_msg = (_("Can not get share ID by share %s.")
                        % old_export_location)
@@ -1070,8 +1337,10 @@ class V3StorageConnection(driver.HuaweiBase):
 
         share_proto = snapshot['share']['share_proto']
         share_url_type = self.helper._get_share_url_type(share_proto)
+        vstore_id = self.get_vstore_id_by_fs_info(snapshot['share_name'])
         share_storage = self.helper._get_share_by_name(snapshot['share_name'],
-                                                       share_url_type)
+                                                       share_url_type,
+                                                       vstore_id)
         if not share_storage:
             err_msg = (_("Failed to import snapshot %(snapshot)s to Manila. "
                          "Snapshot source share %(share)s doesn't exist "
@@ -1297,8 +1566,10 @@ class V3StorageConnection(driver.HuaweiBase):
     def _get_share_proto(self, share_name):
         share_proto = None
         for proto in ('NFS', 'CIFS'):
+            vstore_id = self.get_vstore_id_by_fs_info(share_name)
             share_url_type = self.helper._get_share_url_type(proto)
-            share = self.helper._get_share_by_name(share_name, share_url_type)
+            share = self.helper._get_share_by_name(share_name,
+                                                   share_url_type, vstore_id)
             if share:
                 share_proto = proto
                 break
@@ -1371,6 +1642,45 @@ class V3StorageConnection(driver.HuaweiBase):
             LOG.error(err_msg)
             raise exception.BadConfigurationException(reason=err_msg)
 
+        self.get_metro_info()
+
+    def _get_metro_info(self):
+        metro_infos = self.configuration.safe_get('metro_info')
+        if not metro_infos:
+            return []
+        metro_configs = []
+        for metro_info in metro_infos:
+            metro_config = {}
+            metro_config['metro_domain'] = metro_info['metro_domain']
+            metro_config['local_vStore_name'] = metro_info['local_vStore_name']
+            metro_config['remote_vStore_name'] = \
+                metro_info['remote_vStore_name']
+            metro_config['remote_backend'] = metro_info['remote_backend']
+            metro_config['metro_logic_ip'] = metro_info['metro_logic_ip']
+            metro_configs.append(metro_config)
+
+        return metro_configs
+
+    def get_metro_info(self):
+        metro_infos = self._get_metro_info()
+        metro_info = metro_infos[0] if metro_infos else {}
+        if metro_info:
+            self.metro_domain = metro_info.get("metro_domain")
+            self.remote_backend = metro_info.get("remote_backend")
+            local_vstore_name = metro_info.get("local_vStore_name")
+            remote_vstore_name = metro_info.get("remote_vStore_name")
+            self.metro_logic_ip = metro_info.get('metro_logic_ip')
+
+            self.vstore_pair_id = huawei_utils.get_hypermetro_vstore_id(
+                self.helper, self.metro_domain, local_vstore_name,
+                remote_vstore_name)
+            # check_remote_metro_info
+            context = manila_context.get_admin_context()
+            self.rpc_client.check_remote_metro_info(
+                context, self.remote_backend, self.metro_domain,
+                local_vstore_name, remote_vstore_name,
+                self.vstore_pair_id)
+
     def setup_server(self, network_info, metadata=None):
         """Set up share server with given network parameters."""
         self._check_network_type_validate(network_info['network_type'])
@@ -1427,7 +1737,7 @@ class V3StorageConnection(driver.HuaweiBase):
         }
 
     def _check_network_type_validate(self, network_type):
-        if network_type not in ('flat', 'vlan', None):
+        if network_type not in ('flat', 'vlan', 'vxlan', None):
             err_msg = (_(
                 'Invalid network type. Network type must be flat or vlan.'))
             raise exception.NetworkBadConfigurationException(reason=err_msg)
@@ -1786,17 +2096,18 @@ class V3StorageConnection(driver.HuaweiBase):
         share_proto = share['share_proto']
         share_name = share['name']
         share_id = share['id']
+        vstore_id = self.get_vstore_id_by_fs_info(share_name)
         share_url_type = self.helper._get_share_url_type(share_proto)
 
-        share_storage = self.helper._get_share_by_name(share_name,
-                                                       share_url_type)
+        share_storage = self.helper._get_share_by_name(
+            share_name, share_url_type, vstore_id)
         if not share_storage:
             raise exception.ShareResourceNotFound(share_id=share_id)
 
         fs_id = share_storage['FSID']
         self.assert_filesystem(fs_id)
 
-        ips = self._get_share_ip(share_server)
+        ips = self._get_share_ip(share_server, vstore_id)
         locations = self._get_location_path(share_name, share_proto, ips)
         return locations
 

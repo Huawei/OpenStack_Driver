@@ -12,9 +12,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
 import json
-
 from oslo_log import log
 from oslo_utils import strutils
 
@@ -36,13 +34,13 @@ class ReplicaPairManager(object):
         local_share_name = local_share_info.get('name')
 
         try:
-            local_fs_id = self.helper.get_fsid_by_name(local_share_name)
-            if not local_fs_id:
+            local_fs_info = self.helper.get_fs_info_by_name(local_share_name)
+            if not local_fs_info:
                 msg = _("Local fs was not found by name %s.")
                 LOG.error(msg, local_share_name)
                 raise exception.ReplicationException(
                     reason=msg % local_share_name)
-
+            local_fs_id = local_fs_info['ID']
             pair_params = {
                 "LOCALRESID": local_fs_id,
                 "LOCALRESTYPE": constants.FILE_SYSTEM_TYPE,
@@ -64,7 +62,7 @@ class ReplicaPairManager(object):
             local_pair_id = pair_info['ID']
 
             if local_replication:
-                remote_fs = self.helper._get_fs_info_by_id(remote_fs_id)
+                remote_fs = self.helper.get_fs_info_by_id(remote_fs_id)
                 replication_ids = json.loads(remote_fs['REMOTEREPLICATIONIDS'])
                 # Here must have a replication id.
                 remote_pair_id = replication_ids[0]
@@ -85,8 +83,8 @@ class ReplicaPairManager(object):
             pair_info = self.helper.get_replication_pair_by_id(
                 replica_pair_id)
         except Exception:
-            LOG.exception('Failed to get replication pair info for '
-                          '%s.', replica_pair_id)
+            LOG.exception('Failed to get replication pair info for %s.',
+                          replica_pair_id)
             raise
 
         return pair_info
@@ -102,9 +100,9 @@ class ReplicaPairManager(object):
                 constants.REPLICA_RUNNING_STATUS_TO_RECOVER)):
             return common_constants.REPLICA_STATE_OUT_OF_SYNC
 
-        if (pair_info['RUNNINGSTATUS']
-                in (constants.REPLICA_RUNNING_STATUS_INTERRUPTED,
-                    constants.REPLICA_RUNNING_STATUS_INVALID)):
+        if (pair_info['RUNNINGSTATUS'] in (
+                constants.REPLICA_RUNNING_STATUS_INTERRUPTED,
+                constants.REPLICA_RUNNING_STATUS_INVALID)):
             return common_constants.STATUS_ERROR
 
     def _check_replication_secondary_data_status(self, pair_info):
@@ -130,8 +128,7 @@ class ReplicaPairManager(object):
             pair_info = self._get_replication_pair_info(replica_pair_id)
         except Exception:
             # if cannot communicate to backend, return error
-            LOG.error('Cannot get replica state, return %s',
-                      common_constants.STATUS_ERROR)
+            LOG.error('Cannot get replica state, return error.')
             return common_constants.STATUS_ERROR
 
         return self._check_replica_state(pair_info)
@@ -154,9 +151,8 @@ class ReplicaPairManager(object):
         health = self._check_replication_health(pair_info)
         if health is not None:
             if not _is_to_recover(pair_info):
-                LOG.warning("Cannot update the replication %s "
-                            "because it's not in normal status and "
-                            "not to recover.",
+                LOG.warning("Cannot update the replication %s because it's "
+                            "not in normal status and not to recover.",
                             replica_pair_id)
                 return
 
@@ -173,10 +169,10 @@ class ReplicaPairManager(object):
             try:
                 self.helper.switch_replication_pair(replica_pair_id)
             except Exception:
-                msg = ('Replication pair %s primary/secondary '
-                       'relationship is not right, try to switch over '
-                       'again but still failed.')
-                LOG.exception(msg, replica_pair_id)
+                LOG.exception(
+                    'Replication pair %s primary/secondary relationship is '
+                    'not right, try to switch over again but still failed.',
+                    replica_pair_id)
                 return
 
             # refresh the replication pair info
@@ -186,9 +182,9 @@ class ReplicaPairManager(object):
             try:
                 self.helper.set_pair_secondary_write_lock(replica_pair_id)
             except Exception:
-                msg = ('Replication pair %s secondary access is R/W, '
-                       'try to set write lock but still failed.')
-                LOG.exception(msg, replica_pair_id)
+                LOG.exception('Replication pair %s secondary access is R/W, '
+                              'try to set write lock but still failed.',
+                              replica_pair_id)
                 return
 
         if pair_info['RUNNINGSTATUS'] in (
@@ -208,10 +204,9 @@ class ReplicaPairManager(object):
         replica_state = self._check_replica_state(pair_info)
         if replica_state != common_constants.REPLICA_STATE_IN_SYNC:
             # replica is not in SYNC state, can't be promoted
-            msg = _('Data of replica %s is not synchronized, '
-                    'can not promote.')
-            raise exception.ReplicationException(
-                reason=msg % replica_pair_id)
+            msg = _('Data of replica %s is not sync, cannot promote.'
+                    ) % replica_pair_id
+            raise exception.ReplicationException(reason=msg)
 
         try:
             self.helper.split_replication_pair(replica_pair_id)
@@ -250,10 +245,8 @@ class ReplicaPairManager(object):
         except Exception:
             # Ignore this exception because replication pair may at some
             # abnormal status that supports deleting.
-            LOG.warning('Failed to split replication pair %s '
-                        'before deleting it. Ignore this exception, '
-                        'and try to delete anyway.',
-                        replica_pair_id)
+            LOG.warning('Failed to split replication pair %s before deletion, '
+                        'try to delete it anyway.', replica_pair_id)
 
         try:
             self.helper.delete_replication_pair(replica_pair_id)

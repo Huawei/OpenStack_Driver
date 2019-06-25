@@ -107,6 +107,13 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         except Exception:
             return False
 
+    def check_replica_func_support(self, obj_name):
+        try:
+            self.replica_client._get_object_count(obj_name)
+            return True
+        except Exception:
+            return False
+
     def get_local_and_remote_dev_conf(self):
         self.loc_dev_conf = self.huawei_conf.get_local_device()
 
@@ -368,8 +375,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         elif True not in self.support_func['compression']:
             params['ENABLECOMPRESSION'] = False
 
-        if (self.configuration.san_product == 'Dorado'
-                and opts['application_type']):
+        if opts.get('application_type'):
             workload_type_id = self.client.get_workload_type_id(
                 opts['application_type'])
             if workload_type_id:
@@ -379,6 +385,11 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                         "on the array" % opts['application_type'])
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
+        elif self.configuration.san_product == "Dorado":
+            array_info = self.client.get_array_info()
+            if (array_info.get("PRODUCTVERSION") >=
+                    constants.SUPPORT_WORKLOAD_TYPE_VERSION):
+                params['WORKLOADTYPEID'] = constants.DEFAULT_WORKLOAD_TYPE_ID
 
         LOG.info(_LI('volume: %(volume)s, lun params: %(params)s.'),
                  {'volume': volume.id, 'params': params})
@@ -441,7 +452,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         smartcache = smartx.SmartCache(self.client)
         smartcache.add(opts, lun_id)
 
-        metro_info = {}
+        metro_id = None
         if opts.get('hypermetro') == 'true':
             if "WORKLOADTYPEID" in lun_params:
                 workload_type_id = self.rmt_client.get_workload_type_id(
@@ -456,15 +467,14 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
             metro = hypermetro.HuaweiHyperMetro(
                 self.client, self.rmt_client, self.configuration)
-            metro_info = metro.create_hypermetro(lun_id, lun_params, is_sync)
+            metro_id = metro.create_hypermetro(lun_id, lun_params, is_sync)
 
             if volume.group_id:
                 try:
                     metro.add_hypermetro_to_consistencygroup(
-                        {'id': volume.group_id},
-                        metro_info['hypermetro_id'])
+                        {'id': volume.group_id}, metro_id)
                 except Exception:
-                    metro.delete_hypermetro(volume, metro_info)
+                    metro.delete_hypermetro(volume)
                     raise
 
         replica_info = {}
@@ -484,7 +494,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                         volume, replica_info['replication_driver_data'])
                     raise
 
-        return metro_info, replica_info
+        return metro_id, replica_info
 
     def _create_volume_from_src(self, volume, src_obj, src_type, lun_params):
         metadata = huawei_utils.get_volume_metadata(volume)
@@ -623,16 +633,18 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 volume, src_obj, src_type, lun_params)
 
         try:
-            metro_info, replica_info = self._add_extend_type_to_volume(
+            metro_id, replica_info = self._add_extend_type_to_volume(
                 volume, volume_type, opts, lun_params, lun_info, is_sync)
         except Exception:
             LOG.exception('Add extend feature to volume %s failed.', volume.id)
             self._delete_lun_with_check(lun_info['ID'])
             raise
 
+        hypermetro = True if metro_id else False
+
         provider_location = huawei_utils.to_string(
             huawei_lun_id=lun_info['ID'], huawei_sn=self.sn,
-            huawei_lun_wwn=lun_info['WWN'], **metro_info)
+            huawei_lun_wwn=lun_info['WWN'], hypermetro=hypermetro)
         model_update = {'provider_location': provider_location}
         model_update.update(replica_info)
 
@@ -665,8 +677,9 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         return self._common_create_volume(volume, src_vref, objects.Volume,
                                           is_sync=True)
 
-    def _delete_volume(self, volume):
-        lun_id, lun_wwn = huawei_utils.get_volume_lun_id(self.client, volume)
+    def _delete_volume(self, volume, lun_id=None):
+        if not lun_id:
+            lun_id, lun_wwn = huawei_utils.get_volume_lun_id(self.client, volume)
         if not lun_id:
             return
 
@@ -685,10 +698,9 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         Thirdly, remove the lun.
         """
         metadata = huawei_utils.get_lun_metadata(volume)
-        if metadata.get('hypermetro_id'):
-            metro = hypermetro.HuaweiHyperMetro(self.client,
-                                                self.rmt_client,
-                                                self.configuration)
+        if metadata.get('hypermetro'):
+            metro = hypermetro.HuaweiHyperMetro(
+                self.client, self.rmt_client, self.configuration)
             try:
                 metro.delete_hypermetro(volume)
             except exception.VolumeBackendAPIException as err:
@@ -696,7 +708,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 lun_id = self._check_volume_exist_on_array(
                     volume, constants.VOLUME_NOT_EXISTS_WARN)
                 if lun_id:
-                    self._delete_volume(volume)
+                    self._delete_volume(volume, lun_id)
                 raise
 
         # Delete a replication volume
@@ -710,7 +722,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                     lun_id = self._check_volume_exist_on_array(
                         volume, constants.VOLUME_NOT_EXISTS_WARN)
                     if lun_id:
-                        self._delete_volume(volume)
+                        self._delete_volume(volume, lun_id)
 
         lun_id = self._check_volume_exist_on_array(
             volume, constants.VOLUME_NOT_EXISTS_WARN)
@@ -723,7 +735,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 smart_qos = smartx.SmartQos(self.client)
                 smart_qos.remove(qos_id, lun_id)
 
-        self._delete_volume(volume)
+        self._delete_volume(volume, lun_id)
 
     def _delete_lun_with_check(self, lun_id, lun_wwn=None):
         if not lun_id:
@@ -959,26 +971,16 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         client = self.client if local else self.rmt_client
 
         # Firstly, try to find LUN ID from volume.
-        # Or metadata['remote_lun_id'] which is on the remote array.
-        metadata = huawei_utils.get_lun_metadata(volume)
-        if local:
-            lun_id = metadata.get('huawei_lun_id')
-        else:
-            lun_id = metadata.get('remote_lun_id')
-
-        # If LUN ID not recorded, find LUN ID by LUN NAME.
+        lun_id, lun_wwn = huawei_utils.get_volume_lun_id(client, volume)
         if not lun_id:
-            lun_id, lun_wwn = huawei_utils.get_volume_lun_id(client, volume)
-            if not lun_id:
-                msg = (_("Volume %s does not exist on the array.")
-                       % volume.id)
-                if action == constants.VOLUME_NOT_EXISTS_WARN:
-                    LOG.warning(msg)
-                if action == constants.VOLUME_NOT_EXISTS_RAISE:
-                    raise exception.VolumeBackendAPIException(data=msg)
-                return
+            msg = (_("Volume %s does not exist on the array.")
+                   % volume.id)
+            if action == constants.VOLUME_NOT_EXISTS_WARN:
+                LOG.warning(msg)
+            if action == constants.VOLUME_NOT_EXISTS_RAISE:
+                raise exception.VolumeBackendAPIException(data=msg)
+            return
 
-        lun_wwn = metadata.get('huawei_lun_wwn')
         if not lun_wwn:
             LOG.debug("No LUN WWN recorded for volume %s.", volume.id)
 
@@ -992,24 +994,31 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             return
         return lun_id
 
-    def _extend_hypermetro_volume(self, metro_id, new_size):
-        metro_info = self.client.get_hypermetro_by_id(metro_id)
-        if metro_info:
-            metro = hypermetro.HuaweiHyperMetro(
-                self.client, self.rmt_client, self.configuration)
-            if metro_info['ISINCG'] == 'true':
-                metro.stop_consistencygroup(metro_info['CGID'])
-            else:
-                metro.check_metro_need_to_stop(metro_id)
+    def _extend_hypermetro_volume(self, volume, new_size):
+        lun_name = huawei_utils.encode_name(volume.id)
+        metro_info = self.client.get_hypermetro_by_lun_name(lun_name)
+        if not metro_info:
+            msg = _('Volume %s is not in hypermetro pair') % lun_name
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
-            try:
-                self.rmt_client.extend_lun(metro_info['REMOTEOBJID'], new_size)
-                self.client.extend_lun(metro_info['LOCALOBJID'], new_size)
-            finally:
-                if metro_info['ISINCG'] == 'true':
-                    self.client.sync_metrogroup(metro_info['CGID'])
-                else:
-                    self.client.sync_hypermetro(metro_id)
+        metro_id = metro_info['ID']
+
+        metro = hypermetro.HuaweiHyperMetro(
+            self.client, self.rmt_client, self.configuration)
+        if metro_info['ISINCG'] == 'true':
+            metro.stop_consistencygroup(metro_info['CGID'])
+        else:
+            metro.check_metro_need_to_stop(metro_id)
+
+        try:
+            self.rmt_client.extend_lun(metro_info['REMOTEOBJID'], new_size)
+            self.client.extend_lun(metro_info['LOCALOBJID'], new_size)
+        finally:
+            if metro_info['ISINCG'] == 'true':
+                self.client.sync_metrogroup(metro_info['CGID'])
+            else:
+                self.client.sync_hypermetro(metro_id)
 
     def _extend_replica_volume(self, pair_id, new_size):
         replica_info = self.client.get_pair_by_id(pair_id)
@@ -1063,8 +1072,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
              'newsize': new_size})
 
         metadata = huawei_utils.get_lun_metadata(volume)
-        if metadata.get('hypermetro_id'):
-           self._extend_hypermetro_volume(metadata['hypermetro_id'], new_size)
+        if metadata.get('hypermetro'):
+            self._extend_hypermetro_volume(volume, new_size)
         elif volume.replication_driver_data:
             replica_data = replication.get_replication_driver_data(volume)
             self._extend_replica_volume(replica_data['pair_id'], new_size)
@@ -1176,8 +1185,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 self.client, self.rmt_client, self.configuration)
             metro.delete_hypermetro(volume)
             metadata = huawei_utils.get_lun_metadata(volume)
-            metadata.pop('hypermetro_id', None)
-            metadata.pop('remote_lun_id', None)
+            metadata['hypermetro'] = False
             model_update['provider_location'] = huawei_utils.to_string(
                 **metadata)
 
@@ -1559,8 +1567,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         change_opts = self._check_needed_changes(lun_id, old_opts, new_opts,
                                                  change_opts, new_type)
 
-        if change_opts.get('add_hypermetro') == 'true' \
-                or change_opts.get('delete_hypermetro') == 'true':
+        if (change_opts.get('add_hypermetro') == 'true'
+                or change_opts.get('delete_hypermetro') == 'true'):
             if lun_params.get('EXPOSEDTOINITIATOR') == 'true':
                 msg = _("Cann't add hypermetro to the volume in use.")
                 LOG.error(msg)
@@ -2031,10 +2039,18 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             raise exception.VolumeBackendAPIException(data=err_msg)
 
         if self._cg_volume_type_support(cg_opts, 'hypermetro'):
-            if not self.support_func.get('hypermetro'):
-                msg = (_("Can't create hypermetro consistency group, local or "
-                         "remote array not support hypermetro consistentgroup,"
-                         " group id: %(group_id)s.")
+            if not self.check_local_func_support("HyperMetro_ConsistentGroup"):
+                msg = (_("Can't create consistency group, array not "
+                         "support hypermetro consistentgroup, "
+                         "group id: %(group_id)s.")
+                       % {"group_id": group.id})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+
+            if not self.check_rmt_func_support("HyperMetro_ConsistentGroup"):
+                msg = (_("Can't create consistency group, remote array "
+                         "not support hypermetro consistentgroup, "
+                         "group id: %(group_id)s.")
                        % {"group_id": group.id})
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
@@ -2046,6 +2062,22 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             return model_update
 
         if self._cg_volume_type_support(cg_opts, 'replication_enabled'):
+            if not self.check_local_func_support("CONSISTENTGROUP"):
+                msg = (_("Can't create consistency group, array not "
+                         "support replication consistentgroup, "
+                         "group id: %(group_id)s.")
+                       % {"group_id": group.id})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+
+            if not self.check_replica_func_support("CONSISTENTGROUP"):
+                msg = (_("Can't create consistency group, remote array "
+                         "not support replication consistentgroup, "
+                         "group id: %(group_id)s.")
+                       % {"group_id": group.id})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+
             replica_model = self._get_cg_volume_type_value(
                 cg_opts, 'replication_type')
             if not replica_model:
@@ -2485,7 +2517,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         # Attach remote lun if exists.
         metadata = huawei_utils.get_lun_metadata(volume)
         LOG.info(_LI("Attach Volume, metadata is: %s."), metadata)
-        if metadata.get('hypermetro_id'):
+        if metadata.get('hypermetro'):
             try:
                 rmt_iscsi_info = (
                     self._initialize_connection(volume, connector, False))
@@ -2558,7 +2590,8 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         # Create hostgroup if not exist.
         host_id = client.add_host_with_check(connector['host'])
         try:
-            client.ensure_initiator_added(initiator_name, host_id)
+            client.ensure_initiator_added(initiator_name, host_id,
+                                          connector['host'])
         except Exception:
             with excutils.save_and_reraise_exception():
                 self.remove_host_with_check(host_id)
@@ -2566,8 +2599,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         hostgroup_id = client.add_host_to_hostgroup(host_id)
 
         metadata = huawei_utils.get_lun_metadata(volume)
-        hypermetro_lun = ('hypermetro_id' in metadata and
-                          metadata['hypermetro_id'])
+        hypermetro_lun = metadata.get('hypermetro')
 
         # Mapping lungroup and hostgroup to view.
         map_info = client.do_mapping(lun_id, hostgroup_id, host_id,
@@ -2578,7 +2610,9 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         LOG.info(_LI("initialize_connection, host lun id is: %s."),
                  hostlun_id)
 
-        chapinfo = client.find_chap_info(client.iscsi_info, initiator_name)
+        chapinfo = client.find_chap_info(
+            client.iscsi_info, initiator_name, connector['host'])
+
         if (not chapinfo
                 and client.is_initiator_used_chap(initiator_name)):
             msg = (_("Chap is not configed but initiator %s used chap on "
@@ -2636,7 +2670,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         LOG.info(_LI("terminate_connection, metadata is: %s."), metadata)
         self._terminate_connection(volume, connector)
 
-        if metadata.get('hypermetro_id'):
+        if metadata.get('hypermetro'):
             self._terminate_connection(volume, connector, False)
 
         LOG.info(_LI('terminate_connection success.'))
@@ -2662,16 +2696,11 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
              'lunid': lun_id,
              'lun_type': lun_type})
 
-        portgroup = None
         portgroup_id = None
         view_id = None
         left_lunnum = -1
-        for ini in client.iscsi_info:
-            if ini['Name'] == initiator_name:
-                for key in ini:
-                    if key == 'TargetPortGroup':
-                        portgroup = ini['TargetPortGroup']
-                        break
+        portgroup = client.find_portgroup_info(
+            initiator_name, host_name)
 
         if portgroup:
             portgroup_id = client.get_tgt_port_group(portgroup)
@@ -2797,7 +2826,8 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                 raise exception.VolumeBackendAPIException(data=msg)
 
             for ini in init_targ_map:
-                self.client.ensure_fc_initiator_added(ini, host_id)
+                self.client.ensure_fc_initiator_added(ini, host_id,
+                                                      connector['host'])
         else:
             # Not use FC switch.
             online_wwns_in_host = (
@@ -2827,7 +2857,8 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                     raise exception.VolumeBackendAPIException(data=msg)
 
             for wwn in wwns:
-                self.client.ensure_fc_initiator_added(wwn, host_id)
+                self.client.ensure_fc_initiator_added(wwn, host_id,
+                                                      connector['host'])
 
             (tgt_port_wwns, init_targ_map) = (
                 self.client.get_init_targ_map(wwns))
@@ -2837,8 +2868,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
 
         metadata = huawei_utils.get_lun_metadata(volume)
         LOG.info(_LI("initialize_connection, metadata is: %s."), metadata)
-        hypermetro_lun = ('hypermetro_id' in metadata and
-                          metadata['hypermetro_id'])
+        hypermetro_lun = metadata.get('hypermetro')
 
         map_info = self.client.do_mapping(lun_id, hostgroup_id,
                                           host_id, portg_id,
@@ -2976,10 +3006,9 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         metadata = huawei_utils.get_lun_metadata(volume)
         LOG.info(_LI("Detach Volume, metadata is: %s."), metadata)
 
-        if metadata.get('hypermetro_id'):
-            hyperm = hypermetro.HuaweiHyperMetro(self.client,
-                                                 self.rmt_client,
-                                                 self.configuration)
+        if metadata.get('hypermetro'):
+            hyperm = hypermetro.HuaweiHyperMetro(
+                self.client, self.rmt_client, self.configuration)
             hyperm.disconnect_volume_fc(volume, connector)
 
         LOG.info(_LI("terminate_connection, return data is: %s."),

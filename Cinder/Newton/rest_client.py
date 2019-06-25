@@ -15,6 +15,7 @@
 
 import json
 import netaddr
+import re
 import requests
 import six
 import threading
@@ -596,14 +597,17 @@ class RestClient(object):
 
         return False
 
-    def ensure_initiator_added(self, initiator_name, host_id):
+    def ensure_initiator_added(self, initiator_name, host_id, host_name):
         added = self._initiator_is_added_to_array(initiator_name)
         if not added:
             self._add_initiator_to_array(initiator_name)
         if not self.is_initiator_associated_to_host(initiator_name, host_id):
-            self._associate_initiator_to_host(initiator_name, host_id)
+            self._associate_initiator_to_host(initiator_name, host_id,
+                                              host_name)
 
-        alua_info = self._find_alua_info(self.iscsi_info, initiator_name)
+        alua_info = self._find_alua_info(
+            self.iscsi_info, initiator_name, host_name)
+
         LOG.info('Use ALUA %s when adding initiator to host.', alua_info)
         self._use_iscsi_alua(initiator_name, alua_info)
 
@@ -916,47 +920,80 @@ class RestClient(object):
         self._assert_rest_result(result,
                                  _('Associate initiator to host error.'))
 
-    def _associate_initiator_to_host(self,
-                                     initiator_name,
-                                     host_id):
+    def _associate_initiator_to_host(self, initiator_name, host_id, host_name):
         """Associate initiator with the host."""
-        chapinfo = self.find_chap_info(self.iscsi_info, initiator_name)
+        chapinfo = self.find_chap_info(
+            self.iscsi_info, initiator_name, host_name)
+
         if chapinfo:
             LOG.info(_LI('Use CHAP when adding initiator to host.'))
             self._use_chap(chapinfo, initiator_name, host_id)
         else:
             self._add_initiator_to_host(initiator_name, host_id)
 
-    def find_chap_info(self, iscsi_info, initiator_name):
+    def find_chap_info(self, iscsi_info, initiator_name, host_name):
         """Find CHAP info from xml."""
         chapinfo = None
+        find_initiator_flag = False
         for ini in iscsi_info:
-            if ini['Name'] == initiator_name:
+            if ini.get("Name") == initiator_name:
+                find_initiator_flag = True
                 if 'CHAPinfo' in ini:
                     chapinfo = ini['CHAPinfo']
                     break
 
+        tmp_chap_info = None
+        if not find_initiator_flag:
+            for info in iscsi_info:
+                if info.get('HostName'):
+                    if info.get('HostName') == '*':
+                        tmp_chap_info = info.get('CHAPinfo')
+                    elif re.search(info.get('HostName'), host_name):
+                        chapinfo = info.get('CHAPinfo')
+                        break
+
+        if chapinfo is None and tmp_chap_info:
+            chapinfo = tmp_chap_info
         return chapinfo
 
-    def _find_alua_info(self, config, initiator_name):
+    def _find_alua_info(self, config, initiator_name, host_name):
         """Find ALUA info from xml."""
         alua_info = {'ALUA': '0'}
+        find_initiator_flag = False
+        find_info = None
         for ini in config:
             if ini.get('Name') == initiator_name:
-                if 'ALUA' in ini:
-                    alua_info['ALUA'] = ini['ALUA']
-
-                if alua_info['ALUA'] not in ('0', '1'):
-                    msg = _('Invalid ALUA value. ALUA value must be 1 or 0.')
-                    LOG.error(msg)
-                    raise exception.InvalidInput(msg)
-
-                if alua_info['ALUA'] == '1':
-                    for k in ('FAILOVERMODE', 'SPECIALMODETYPE', 'PATHTYPE'):
-                        if k in ini:
-                            alua_info[k] = ini[k]
-
+                find_initiator_flag = True
+                find_info = ini
                 break
+
+        tmp_find_info = None
+        if not find_initiator_flag:
+            for info in config:
+                if info.get('HostName'):
+                    if info.get('HostName') == '*':
+                        tmp_find_info = info
+                    elif re.search(info.get('HostName'), host_name):
+                        find_info = info
+                        break
+
+        if find_info is None and tmp_find_info:
+            find_info = tmp_find_info
+
+        if find_info:
+            if 'ALUA' in find_info:
+                alua_info['ALUA'] = find_info['ALUA']
+
+            if alua_info['ALUA'] not in ('0', '1'):
+                msg = _(
+                    'Invalid ALUA value. ALUA value must be 1 or 0.')
+                LOG.error(msg)
+                raise exception.InvalidInput(msg)
+
+            if alua_info['ALUA'] == '1':
+                for k in ('FAILOVERMODE', 'SPECIALMODETYPE', 'PATHTYPE'):
+                    if k in find_info:
+                        alua_info[k] = find_info[k]
 
         return alua_info
 
@@ -1344,19 +1381,42 @@ class RestClient(object):
 
         return target_ips
 
+    def find_portgroup_info(self, initiator_name, host_name):
+        portgroup = None
+        find_initiator_flag = False
+        for ini in self.iscsi_info:
+            if ini.get("Name") == initiator_name:
+                find_initiator_flag = True
+                if 'TargetPortGroup' in ini:
+                    portgroup = ini['TargetPortGroup']
+                    break
+
+        tmp_portgroup = None
+        if not find_initiator_flag:
+            for info in self.iscsi_info:
+                if info.get('HostName'):
+                    if info.get('HostName') == '*':
+                        tmp_portgroup = info.get('TargetPortGroup')
+                    elif re.search(info.get('HostName'), host_name):
+                        portgroup = info.get('TargetPortGroup')
+                        break
+
+        if portgroup is None and tmp_portgroup:
+            portgroup = tmp_portgroup
+
+        return portgroup
+
     def get_iscsi_params(self, connector):
         """Get target iSCSI params, including iqn, IP."""
         initiator = connector['initiator']
         multipath = connector.get('multipath', False)
+        host_name = connector['host']
         target_ips = []
         target_iqns = []
         temp_tgt_ips = []
-        portgroup = None
         portgroup_id = None
 
-        for ini in self.iscsi_info:
-            if ini['Name'] == initiator:
-                portgroup = ini.get('TargetPortGroup')
+        portgroup = self.find_portgroup_info(initiator, host_name)
 
         if portgroup:
             portgroup_id = self.get_tgt_port_group(portgroup)
@@ -1378,7 +1438,7 @@ class RestClient(object):
                 raise exception.VolumeBackendAPIException(data=msg)
 
         if not target_ips:
-            target_ips = self._get_target_ip(initiator)
+            target_ips = self._get_target_ip(initiator, host_name)
 
         # Deal with the remote tgt ip.
         if 'remote_target_ip' in connector:
@@ -1416,12 +1476,28 @@ class RestClient(object):
             format_ips.append(ip)
         return format_ips
 
-    def _get_target_ip(self, initiator):
+    def _get_target_ip(self, initiator, host_name):
         target_ips = []
+        find_initiator_flag = False
         for ini in self.iscsi_info:
-            if ini['Name'] == initiator:
+            if ini.get("Name") == initiator:
+                find_initiator_flag = True
                 if ini.get('TargetIP'):
                     target_ips.append(ini.get('TargetIP'))
+
+        tmp_target_ip = None
+        if not find_initiator_flag:
+            for info in self.iscsi_info:
+                if info.get('HostName'):
+                    if info.get('HostName') == '*':
+                        tmp_target_ip = info.get('TargetIP')
+                    elif re.search(info.get('HostName'), host_name):
+                        if info.get('TargetIP'):
+                            target_ips.append(info.get('TargetIP'))
+                            break
+
+        if not target_ips and tmp_target_ip:
+            target_ips.append(tmp_target_ip)
 
         # If not specify target IP for some initiators, use default IP.
         if not target_ips:
@@ -1921,14 +1997,16 @@ class RestClient(object):
         result = self.call(url, data)
         self._assert_rest_result(result, _('Add fc initiator to array error.'))
 
-    def ensure_fc_initiator_added(self, initiator_name, host_id):
+    def ensure_fc_initiator_added(self, initiator_name, host_id, host_name):
         added = self._fc_initiator_is_added_to_array(initiator_name)
         if not added:
             self._add_fc_initiator_to_array(initiator_name)
         # Just add, no need to check whether have been added.
         self.add_fc_port_to_host(host_id, initiator_name)
 
-        alua_info = self._find_alua_info(self.fc_info, initiator_name)
+        alua_info = self._find_alua_info(
+            self.fc_info, initiator_name, host_name)
+
         LOG.info('Use ALUA %s when adding initiator to host.', alua_info)
         self._use_fc_alua(initiator_name, alua_info)
 
@@ -2030,6 +2108,14 @@ class RestClient(object):
         if result.get('data'):
             return result['data'][0]
 
+    def get_hypermetro_by_lun_name(self, lun_name):
+        url = "/HyperMetroPair?filter=LOCALOBJNAME::%s" % lun_name
+        result = self.call(url, None, "GET")
+        msg = _('Get hypermetro by local lun name %s error.') % lun_name
+        self._assert_rest_result(result, msg)
+        if result.get('data'):
+            return result['data'][0]
+
     def change_hostlun_id(self, map_info, hostlun_id):
         url = "/mappingview"
         view_id = six.text_type(map_info['view_id'])
@@ -2079,7 +2165,7 @@ class RestClient(object):
                 "TYPE": "15364",
                 "DESCRIPTION": description,
                 "RECOVERYPOLICY": "1",
-                "SPEED": "2",
+                "SPEED": self.configuration.hyper_sync_speed,
                 "PRIORITYSTATIONTYPE": "0",
                 "DOMAINID": domain_id}
         result = self.call(url, data, "POST")
@@ -2428,7 +2514,8 @@ class RestClient(object):
         result = self.call(url, None, "GET", filter_flag=True)
 
         if result['error']['code'] != 0:
-            raise
+            msg = 'Get obj %s count error' % obj_name
+            raise exception.VolumeBackendAPIException(data=msg)
 
         if result.get("data"):
             return result.get("data").get("COUNT")

@@ -163,4 +163,7 @@ REPLICA_SECONDARY_ACCESS_RIGHTS = (
 HUAWEI_UNIFIED_DRIVER_REGISTRY = {
     'V3': 'manila.share.drivers.huawei.v3.connection.V3StorageConnection',
     'V5': 'manila.share.drivers.huawei.v3.connection.V3StorageConnection',
+    'Dorado': 'manila.share.drivers.huawei.v3.connection.V3StorageConnection',
 }
+
+VALID_PRODUCT = ['V3', 'V5', 'Dorado']

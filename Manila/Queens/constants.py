@@ -49,6 +49,7 @@ ERROR_UNAUTHORIZED_TO_SERVER = -401
 ERROR_LOGICAL_PORT_EXIST = 1073813505
 ERROR_USER_OR_GROUP_NOT_EXIST = 1077939723
 ERROR_REPLICATION_PAIR_NOT_EXIST = 1077937923
+ERROR_HYPERMETRO_NOT_EXIST = 1077674242
 
 PORT_TYPE_ETH = '1'
 PORT_TYPE_BOND = '7'
@@ -89,6 +90,7 @@ OPTS_CAPABILITIES = {
     'qos': False,
     'huawei_sectorsize': None,
     'huawei_share_privilege': False,
+    'hypermetro': False,
 }
 
 OPTS_VALUE = {
@@ -162,7 +164,20 @@ REPLICA_SECONDARY_ACCESS_RIGHTS = (
     REPLICA_SECONDARY_RO,
     REPLICA_SECONDARY_RW) = ('1', '2', '3')
 
+METRO_RUNNING_STATUSES = (
+    METRO_RUNNING_STATUS_NORMAL,
+    METRO_RUNNING_STATUS_SYNCING,
+    METRO_RUNNING_STATUS_INVALID,
+    METRO_RUNNING_STATUS_PAUSE,
+    METRO_RUNNING_STATUS_FORCED_START,
+    METRO_RUNNING_STATUS_ERROR,
+    METRO_RUNNING_STATUS_TO_BE_SYNC) = (
+    '1', '23', '35', '41', '93', '94', '100')
+
 HUAWEI_UNIFIED_DRIVER_REGISTRY = {
     'V3': 'manila.share.drivers.huawei.v3.connection.V3StorageConnection',
     'V5': 'manila.share.drivers.huawei.v3.connection.V3StorageConnection',
+    'Dorado': 'manila.share.drivers.huawei.v3.connection.V3StorageConnection',
 }
+
+VALID_PRODUCT = ['V3', 'V5', 'Dorado']
