@@ -447,8 +447,9 @@ class HuaweiHyperMetro(object):
 
         try:
             self.client.sync_hypermetro(metro_id)
-            huawei_utils.wait_for_condition(
-                _is_sync_complete, constants.HYPERMETRO_WAIT_INTERVAL,
-                constants.DEFAULT_WAIT_TIMEOUT)
+            if self.rmt_client.metro_sync_completed:
+                huawei_utils.wait_for_condition(
+                    _is_sync_complete, constants.HYPERMETRO_WAIT_INTERVAL,
+                    constants.DEFAULT_WAIT_TIMEOUT)
         except Exception as err:
             raise exception.VolumeBackendAPIException(data=err)

@@ -194,6 +194,7 @@ def _get_opts_from_specs(specs):
     for key, value in six.iteritems(specs):
         if key not in opts_capability:
             continue
+
         func = opts_capability[key][0]
         opt_key = _get_opt_key(key)
         opts[opt_key] = func(key, value)

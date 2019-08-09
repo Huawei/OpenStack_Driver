@@ -24,6 +24,7 @@ import time
 from oslo_concurrency import lockutils
 from oslo_log import log as logging
 from oslo_utils import excutils
+from oslo_utils import strutils
 from requests.adapters import HTTPAdapter
 
 from cinder import exception
@@ -61,6 +62,8 @@ class RestClient(object):
             'iscsi_default_target_ip',
             self.configuration.iscsi_default_target_ip)
         self.metro_domain = kwargs.get('metro_domain', None)
+        self.metro_sync_completed = strutils.bool_from_string(
+            kwargs.get('metro_sync_completed'))
         self.semaphore = threading.Semaphore(20)
         self.call_lock = lockutils.ReaderWriterLock()
         self.session = None
@@ -1200,7 +1203,8 @@ class RestClient(object):
 
         pool_disk = []
         for i, x in enumerate(['ssd', 'sas', 'nl_sas']):
-            if pool_info['TIER%dCAPACITY' % i] != '0':
+            if (pool_info['TIER%dCAPACITY' % i] and
+                    pool_info['TIER%dCAPACITY' % i] != '0'):
                 pool_disk.append(x)
 
         if len(pool_disk) > 1:
@@ -1209,7 +1213,7 @@ class RestClient(object):
         return pool_disk[0] if pool_disk else None
 
     def _get_smarttier(self, disk_type):
-        return disk_type is not None and disk_type == ['mix']
+        return disk_type is not None and disk_type == 'mix'
 
     def get_luncopy_info(self, luncopy_id):
         """Get LUNcopy information."""
@@ -1483,21 +1487,24 @@ class RestClient(object):
             if ini.get("Name") == initiator:
                 find_initiator_flag = True
                 if ini.get('TargetIP'):
-                    target_ips.append(ini.get('TargetIP'))
+                    target_ips = [ip.strip() for ip in ini['TargetIP'].split()
+                                  if ip.strip()]
 
-        tmp_target_ip = None
+        tmp_target_ips = []
         if not find_initiator_flag:
             for info in self.iscsi_info:
                 if info.get('HostName'):
                     if info.get('HostName') == '*':
-                        tmp_target_ip = info.get('TargetIP')
+                        tmp_target_ips = [ip.strip() for ip in info.get(
+                            'TargetIP').split() if ip.strip()]
                     elif re.search(info.get('HostName'), host_name):
                         if info.get('TargetIP'):
-                            target_ips.append(info.get('TargetIP'))
+                            target_ips = [ip.strip() for ip in info.get(
+                                'TargetIP').split() if ip.strip()]
                             break
 
-        if not target_ips and tmp_target_ip:
-            target_ips.append(tmp_target_ip)
+        if not target_ips and tmp_target_ips:
+            target_ips = tmp_target_ips
 
         # If not specify target IP for some initiators, use default IP.
         if not target_ips:

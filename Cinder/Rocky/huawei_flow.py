@@ -638,9 +638,10 @@ class CreateLunCopyTask(task.Task):
 
 
 class WaitLunCopyDoneTask(task.Task):
-    def __init__(self, client, *args, **kwargs):
+    def __init__(self, client, configuration, *args, **kwargs):
         super(WaitLunCopyDoneTask, self).__init__(*args, **kwargs)
         self.client = client
+        self.configuration = configuration
 
     def execute(self, luncopy_id):
         self.client.start_luncopy(luncopy_id)
@@ -654,10 +655,9 @@ class WaitLunCopyDoneTask(task.Task):
 
             return (luncopy['RUNNINGSTATUS'] in
                     constants.LUNCOPY_STATUS_COMPLETE)
-
         huawei_utils.wait_for_condition(
-            _luncopy_done, constants.DEFAULT_WAIT_INTERVAL,
-            constants.DEFAULT_WAIT_TIMEOUT)
+            _luncopy_done, self.configuration.lun_copy_wait_interval,
+            self.configuration.lun_timeout)
 
         self.client.delete_luncopy(luncopy_id)
 
@@ -1196,7 +1196,7 @@ class GetISCSIConnectionTask(task.Task):
 
     def _get_config_target_ips(self, ini):
         if ini and ini.get('TargetIP'):
-            target_ips = [ip.strip() for ip in ini['TargetIP'].split(';')
+            target_ips = [ip.strip() for ip in ini['TargetIP'].split()
                           if ip.strip()]
         else:
             target_ips = self.iscsi_info['default_target_ips']
@@ -1220,6 +1220,7 @@ class GetISCSIConnectionTask(task.Task):
 
         config_info = huawei_utils.find_config_info(self.iscsi_info,
                                                     connector=connector)
+        
         config_ips = self._get_config_target_ips(config_info)
         LOG.info('Configured iscsi ips %s.', config_ips)
 
@@ -1989,7 +1990,7 @@ def create_volume_from_snapshot(
             CreateLunTask(local_cli, configuration, feature_support),
             WaitLunOnlineTask(local_cli),
             CreateLunCopyTask(local_cli, feature_support, configuration),
-            WaitLunCopyDoneTask(local_cli),)
+            WaitLunCopyDoneTask(local_cli, configuration),)
 
     work_flow.add(
         AddQoSTask(local_cli),
@@ -2041,7 +2042,7 @@ def create_volume_from_volume(
             CreateLunTask(local_cli, configuration, feature_support),
             WaitLunOnlineTask(local_cli),
             CreateLunCopyTask(local_cli, feature_support, configuration),
-            WaitLunCopyDoneTask(local_cli),
+            WaitLunCopyDoneTask(local_cli, configuration),
             DeleteTempSnapshotTask(local_cli),
         )
 

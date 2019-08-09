@@ -330,18 +330,19 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 scope = key_split[0].lower()
                 key = key_split[1].lower()
 
-            if ((not scope or scope == 'capabilities')
+            if (not scope or scope == 'capabilities'
                     and key in opts_capability):
-                words = value.split()
-                if words and len(words) == 2 and words[0] in ('<is>', '<in>'):
-                    opts[key] = words[1].lower()
-                elif key == 'replication_type':
-                    LOG.error("Extra specs must be specified as "
-                              "replication_type='<in> sync' or "
-                              "'<in> async'.")
-                else:
-                    LOG.error("Extra specs must be specified as "
-                              "capabilities:%s='<is> True'.", key)
+                    words = value.split()
+                    if words and len(words) == 2 and words[0] in (
+                            '<is>', '<in>'):
+                        opts[key] = words[1].lower()
+                    elif key == 'replication_type':
+                        LOG.error("Extra specs must be specified as "
+                                  "replication_type='<in> sync' or "
+                                  "'<in> async'.")
+                    else:
+                        LOG.error("Extra specs must be specified as "
+                                  "capabilities:%s='<is> True'.", key)
 
             if ((scope in opts_capability)
                     and (key in opts_value)
@@ -457,7 +458,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
         metro_id = None
         if opts.get('hypermetro') == 'true':
-            if "WORKLOADTYPEID" in lun_params:
+            if "WORKLOADTYPEID" in lun_params and opts.get('application_type'):
                 workload_type_id = self.rmt_client.get_workload_type_id(
                     opts['application_type'])
                 if workload_type_id:
@@ -548,11 +549,16 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 src_id = self._check_snapshot_exist_on_array(
                     src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
 
-            lun_info = self._create_volume_by_luncopy(
-                src_id, lun_params, copyspeed)
-
-            if src_type == objects.Volume:
-                self._delete_snapshot(src_id)
+            try:
+                lun_info = self._create_volume_by_luncopy(
+                    src_id, lun_params, copyspeed)
+            except Exception as err:
+                msg = _("Create volume by lun copy error. Reason: %s" % err)
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(msg)
+            finally:
+                if src_type == objects.Volume:
+                    self._delete_snapshot(src_id)
 
         return lun_info
 
@@ -1537,13 +1543,11 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         new_specs = new_type['extra_specs']
         new_opts = self._get_volume_params_from_specs(new_specs)
 
-        if 'LUNType' not in new_opts:
-            new_opts['LUNType'] = self.configuration.lun_type
-
         if volume.host != host['host']:
             migration = True
             change_opts['host'] = (volume.host, host['host'])
-        if old_opts['LUNType'] != new_opts['LUNType']:
+        if ('LUNType' in new_opts and
+                old_opts['LUNType'] != new_opts['LUNType']):
             migration = True
             change_opts['LUNType'] = (old_opts['LUNType'], new_opts['LUNType'])
 

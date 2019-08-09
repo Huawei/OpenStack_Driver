@@ -168,7 +168,7 @@ class HuaweiBaseDriver(object):
             return pool_disks[0] if pool_disks else None
 
         def _get_smarttier(disk_type):
-            return disk_type is not None and disk_type == ['mix']
+            return disk_type is not None and disk_type == 'mix'
 
         pools = []
         for pool_name in self.configuration.storage_pools:

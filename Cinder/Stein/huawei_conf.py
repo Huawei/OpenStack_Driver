@@ -70,6 +70,8 @@ class HuaweiConf(object):
             self._storage_pools,
             self._lun_copy_speed,
             self._lun_copy_mode,
+            self._lun_copy_wait_interval,
+            self._lun_timeout,
         )
 
         for f in attr_funcs:
@@ -251,7 +253,7 @@ class HuaweiConf(object):
         text = xml_root.findtext('iSCSI/DefaultTargetIP')
         if text:
             iscsi_info['default_target_ips'] = [
-                ip.strip() for ip in text.split(';') if ip.strip()]
+                ip.strip() for ip in text.split() if ip.strip()]
 
         initiators = {}
         nodes = xml_root.findall('iSCSI/Initiator')
@@ -314,7 +316,7 @@ class HuaweiConf(object):
         if ini_type in dev:
             # Analyze initiators configure text, convert to:
             # [{'Name':'xxx'}, {'Name':'xxx','CHAPinfo':'mm-usr#mm-pwd'}]
-            ini_list = re.split('\s', dev[ini_type])
+            ini_list = re.split('\n', dev[ini_type])
 
             def _convert_one_iscsi_info(ini_text):
                 # get initiator configure attr list
@@ -332,16 +334,16 @@ class HuaweiConf(object):
                     else:
                         value = pair[1]
                     ini[pair[0]] = value
-
-                if 'Name' not in ini:
-                    msg = _('Name must be specified for initiator.')
+                if 'Name' not in ini and 'HostName' not in ini:
+                    msg = _('Name or HostName must be specified for'
+                            ' initiator.')
                     LOG.error(msg)
                     raise exception.InvalidInput(msg)
 
                 return ini
 
             for text in ini_list:
-                ini = _convert_one_iscsi_info(text)
+                ini = _convert_one_iscsi_info(text.strip())
                 if 'Name' in ini:
                     initiators[ini['Name']] = ini
                 if 'HostName' in ini:
@@ -373,6 +375,8 @@ class HuaweiConf(object):
                 'fc_info': self._parse_remote_initiator_info(
                     dev, 'fc_info'),
                 'sync_speed': self.conf.hyper_sync_speed,
+                'metro_sync_completed': dev['metro_sync_completed']
+                if 'metro_sync_completed' in dev else "True"
             }
 
         setattr(self.conf, 'hypermetro', config)
@@ -462,3 +466,28 @@ class HuaweiConf(object):
         else:
             speed = text.strip()
         setattr(self.conf, 'replica_sync_speed', int(speed))
+
+    def _lun_copy_wait_interval(self, xml_root):
+        text = xml_root.findtext('LUN/LUNcopyWaitInterval')
+
+        if text and not text.isdigit():
+            msg = (_("Invalid LUN_Copy_Wait_Interval '%s', "
+                     "LUN_Copy_Wait_Interval must be a digit.")
+                   % text)
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        interval = text.strip() if text else constants.DEFAULT_WAIT_INTERVAL
+        setattr(self.conf, 'lun_copy_wait_interval', int(interval))
+
+    def _lun_timeout(self, xml_root):
+        text = xml_root.findtext('LUN/Timeout')
+
+        if text and not text.isdigit():
+            msg = (_("Invalid LUN timeout '%s', LUN timeout must be a digit.")
+                   % text)
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        interval = text.strip() if text else constants.DEFAULT_WAIT_TIMEOUT
+        setattr(self.conf, 'lun_timeout', int(interval))

@@ -388,7 +388,7 @@ class HuaweiConf(object):
 
         # Step 1, ignore whitespace characters, convert to:
         # '{Name:xxx;;TargetPortGroup:xxx};{Name:xxx;CHAPinfo:mm-usr#mm-pwd}'
-        iscsi_info = ''.join(iscsi_info.split())
+        iscsi_info = ''.join(iscsi_info.split("\n"))
 
         # Step 2, make initiators configure list, convert to:
         # ['Name:xxx;;TargetPortGroup:xxx', 'Name:xxx;CHAPinfo:mm-usr#mm-pwd']
@@ -445,6 +445,9 @@ class HuaweiConf(object):
                 dev['iscsi_default_target_ip'].split(';')
                 if 'iscsi_default_target_ip' in dev
                 else [])
+            dev_config['metro_sync_completed'] = (
+                dev['metro_sync_completed']
+                if 'metro_sync_completed' in dev else "True")
             devs_config.append(dev_config)
 
         return devs_config
