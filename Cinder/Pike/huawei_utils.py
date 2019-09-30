@@ -235,3 +235,10 @@ def get_apply_type_id(opts):
         opts['application_type'] = None
 
     return opts
+
+
+def is_support_clone_pair(client):
+    array_info = client.get_array_info()
+    version_info = array_info['PRODUCTVERSION']
+    if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
+        return True

@@ -13,9 +13,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import re
 import six
 import uuid
-import re
 
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -147,29 +147,30 @@ class HuaweiBaseDriver(object):
     def remove_export_snapshot(self, context, snapshot):
         pass
 
+    def _get_capacity(self, pool_info):
+        """Get free capacity and total capacity of the pool."""
+        free = pool_info.get('DATASPACE', pool_info['USERFREECAPACITY'])
+        total = pool_info.get('USERTOTALCAPACITY')
+        return (float(total) / constants.CAPACITY_UNIT,
+                float(free) / constants.CAPACITY_UNIT)
+
+    def _get_disk_type(self, pool_info):
+        """Get disk type of the pool."""
+        pool_disks = []
+        for i, x in enumerate(constants.TIER_DISK_TYPES):
+            if (pool_info.get('TIER%dCAPACITY' % i) and
+                    pool_info.get('TIER%dCAPACITY' % i) != '0'):
+                pool_disks.append(x)
+
+        if len(pool_disks) > 1:
+            pool_disks = ['mix']
+
+        return pool_disks[0] if pool_disks else None
+
+    def _get_smarttier(self, disk_type):
+        return disk_type is not None and disk_type == 'mix'
+
     def _update_pool_stats(self):
-        def _get_capacity(pool_info):
-            """Get free capacity and total capacity of the pool."""
-            free = pool_info.get('DATASPACE', pool_info['USERFREECAPACITY'])
-            total = pool_info.get('USERTOTALCAPACITY')
-            return (float(total) / constants.CAPACITY_UNIT,
-                    float(free) / constants.CAPACITY_UNIT)
-
-        def _get_disk_type(pool_info):
-            """Get disk type of the pool."""
-            pool_disks = []
-            for i, x in enumerate(constants.TIER_DISK_TYPES):
-                if pool_info.get('TIER%dCAPACITY' % i) != '0':
-                    pool_disks.append(x)
-
-            if len(pool_disks) > 1:
-                pool_disks = ['mix']
-
-            return pool_disks[0] if pool_disks else None
-
-        def _get_smarttier(disk_type):
-            return disk_type is not None and disk_type == 'mix'
-
         pools = []
         for pool_name in self.configuration.storage_pools:
             pool = {
@@ -208,9 +209,9 @@ class HuaweiBaseDriver(object):
 
             pool_info = self.local_cli.get_pool_by_name(pool_name)
             if pool_info:
-                total_capacity, free_capacity = _get_capacity(pool_info)
-                disk_type = _get_disk_type(pool_info)
-                tier_support = _get_smarttier(disk_type)
+                total_capacity, free_capacity = self._get_capacity(pool_info)
+                disk_type = self._get_disk_type(pool_info)
+                tier_support = self._get_smarttier(disk_type)
 
                 pool['total_capacity_gb'] = total_capacity
                 pool['free_capacity_gb'] = free_capacity
@@ -222,6 +223,24 @@ class HuaweiBaseDriver(object):
             pools.append(pool)
 
         return pools
+
+    def _update_hypermetro_capability(self):
+        if self.hypermetro_rmt_cli:
+            feature_status = self.hypermetro_rmt_cli.get_feature_status()
+            if (feature_status.get('HyperMetro') not in
+                    constants.AVAILABLE_FEATURE_STATUS):
+                    self.support_capability['HyperMetro'] = False
+        else:
+            self.support_capability['HyperMetro'] = False
+
+    def _update_replication_capability(self):
+        if self.replication_rmt_cli:
+            feature_status = self.replication_rmt_cli.get_feature_status()
+            if (feature_status.get('HyperReplication') not in
+                    constants.AVAILABLE_FEATURE_STATUS):
+                    self.support_capability['HyperReplication'] = False
+        else:
+            self.support_capability['HyperReplication'] = False
 
     def _update_support_capability(self):
         feature_status = self.local_cli.get_feature_status()
@@ -239,21 +258,8 @@ class HuaweiBaseDriver(object):
                     self.support_capability[c] = self.local_cli.check_feature(
                         constants.CHECK_FEATURES[c])
 
-        if self.hypermetro_rmt_cli:
-            feature_status = self.hypermetro_rmt_cli.get_feature_status()
-            if (feature_status.get('HyperMetro') not in
-                    constants.AVAILABLE_FEATURE_STATUS):
-                    self.support_capability['HyperMetro'] = False
-        else:
-            self.support_capability['HyperMetro'] = False
-
-        if self.replication_rmt_cli:
-            feature_status = self.replication_rmt_cli.get_feature_status()
-            if (feature_status.get('HyperReplication') not in
-                    constants.AVAILABLE_FEATURE_STATUS):
-                    self.support_capability['HyperReplication'] = False
-        else:
-            self.support_capability['HyperReplication'] = False
+        self._update_hypermetro_capability()
+        self._update_replication_capability()
 
         LOG.debug('Update backend capabilities: %s.', self.support_capability)
 
@@ -490,8 +496,7 @@ class HuaweiBaseDriver(object):
         return {'status': fields.GroupStatus.AVAILABLE}
 
     def create_group_from_src(self, context, group, volumes,
-                              group_snapshot=None, snapshots=None,
-                              source_group=None, source_vols=None):
+                              snapshots=None, source_vols=None):
         model_update = self.create_group(context, group)
         volumes_model_update = []
         delete_snapshots = False

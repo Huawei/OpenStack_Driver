@@ -307,6 +307,7 @@ class RestHelper(object):
                 poolinfo['CAPACITY'] = item['USERFREECAPACITY']
                 poolinfo['TOTALCAPACITY'] = item['USERTOTALCAPACITY']
                 poolinfo['CONSUMEDCAPACITY'] = item['USERCONSUMEDCAPACITY']
+                poolinfo['PROVISIONEDCAPACITY'] = item['TOTALFSCAPACITY']
                 poolinfo['TIER0CAPACITY'] = item['TIER0CAPACITY']
                 if 'TIER1CAPACITY' in item:
                     poolinfo['TIER1CAPACITY'] = item['TIER1CAPACITY']

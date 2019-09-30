@@ -305,6 +305,30 @@ class HuaweiConf(object):
                     LOG.error(msg)
                     raise exception.InvalidInput(msg)
 
+    def _convert_one_iscsi_info(self, ini_text):
+        # get initiator configure attr list
+        attr_list = re.split('[{;}]', ini_text)
+
+        # get initiator configures
+        ini = {}
+        for attr in attr_list:
+            if not attr:
+                continue
+
+            pair = attr.split(':', 1)
+            if pair[0] == 'CHAPinfo':
+                value = pair[1].replace('#', ';', 1)
+            else:
+                value = pair[1]
+            ini[pair[0]] = value
+        if 'Name' not in ini and 'HostName' not in ini:
+            msg = _('Name or HostName must be specified for'
+                    ' initiator.')
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+
+        return ini
+
     def _parse_remote_initiator_info(self, dev, ini_type):
         ini_info = {'default_target_ips': []}
 
@@ -318,32 +342,8 @@ class HuaweiConf(object):
             # [{'Name':'xxx'}, {'Name':'xxx','CHAPinfo':'mm-usr#mm-pwd'}]
             ini_list = re.split('\n', dev[ini_type])
 
-            def _convert_one_iscsi_info(ini_text):
-                # get initiator configure attr list
-                attr_list = re.split('[{;}]', ini_text)
-
-                # get initiator configures
-                ini = {}
-                for attr in attr_list:
-                    if not attr:
-                        continue
-
-                    pair = attr.split(':', 1)
-                    if pair[0] == 'CHAPinfo':
-                        value = pair[1].replace('#', ';', 1)
-                    else:
-                        value = pair[1]
-                    ini[pair[0]] = value
-                if 'Name' not in ini and 'HostName' not in ini:
-                    msg = _('Name or HostName must be specified for'
-                            ' initiator.')
-                    LOG.error(msg)
-                    raise exception.InvalidInput(msg)
-
-                return ini
-
             for text in ini_list:
-                ini = _convert_one_iscsi_info(text.strip())
+                ini = self._convert_one_iscsi_info(text.strip())
                 if 'Name' in ini:
                     initiators[ini['Name']] = ini
                 if 'HostName' in ini:

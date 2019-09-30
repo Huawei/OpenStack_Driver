@@ -66,8 +66,8 @@ class HuaweiTISCSIDriver(driver.ISCSIDriver):
 
     def do_setup(self, context):
         """Instantiate common class."""
-        self.sshclient = ssh_client.TseriesClient(configuration=
-                                                  self.configuration)
+        self.sshclient = ssh_client.TseriesClient(
+            configuration=self.configuration)
         self.sshclient.do_setup(context)
         self.sshclient.check_storage_pools()
 
@@ -408,8 +408,8 @@ class HuaweiTFCDriver(driver.FibreChannelDriver):
 
     def do_setup(self, context):
         """Instantiate common class."""
-        self.sshclient = ssh_client.TseriesClient(configuration=
-                                                  self.configuration)
+        self.sshclient = ssh_client.TseriesClient(
+            configuration=self.configuration)
         self.sshclient.do_setup(context)
         self.sshclient.check_storage_pools()
 

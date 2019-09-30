@@ -15,7 +15,6 @@
 
 import ipaddress
 import json
-import re
 import six
 import uuid
 
@@ -29,12 +28,12 @@ from taskflow.types import failure
 
 from cinder import exception
 from cinder.i18n import _
-from cinder.volume import utils as volume_utils
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
 from cinder.volume.drivers.huawei import hypermetro
 from cinder.volume.drivers.huawei import replication
 from cinder.volume.drivers.huawei import smartx
+from cinder.volume import utils as volume_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -42,7 +41,8 @@ LOG = logging.getLogger(__name__)
 class LunOptsCheckTask(task.Task):
     default_provides = 'opts'
 
-    def __init__(self, client, feature_support, new_opts=None, *args, **kwargs):
+    def __init__(self, client, feature_support, new_opts=None,
+                 *args, **kwargs):
         super(LunOptsCheckTask, self).__init__(*args, **kwargs)
         self.client = client
         self.feature_support = feature_support
@@ -98,7 +98,29 @@ class CreateLunTask(task.Task):
         self.configuration = configuration
         self.feature_support = feature_support
 
-    def execute(self, volume, opts):
+    def _get_lun_application_name(self, opts, lun_params):
+        if opts.get('applicationname') is not None:
+            workload_type_id = self.client.get_workload_type_id(
+                opts['applicationname'])
+            if workload_type_id:
+                lun_params['WORKLOADTYPEID'] = workload_type_id
+            else:
+                msg = _("The workload type %s is not exist. Please create it "
+                        "on the array") % opts['applicationname']
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        elif self.configuration.san_product == "Dorado":
+            array_info = self.client.get_array_info()
+            if (array_info.get("PRODUCTVERSION") and (
+                    array_info.get("PRODUCTVERSION") >=
+                    constants.SUPPORT_WORKLOAD_TYPE_VERSION or
+                    array_info.get("PRODUCTVERSION").startswith(
+                        constants.SUPPORT_V6_VERSION))):
+                lun_params['WORKLOADTYPEID'] = \
+                    constants.DEFAULT_WORKLOAD_TYPE_ID
+        return lun_params
+
+    def execute(self, volume, opts, src_size=None):
         pool_name = volume_utils.extract_host(volume.host, level='pool')
         pool_id = self.client.get_pool_id(pool_name)
         if not pool_id:
@@ -111,7 +133,8 @@ class CreateLunTask(task.Task):
             'PARENTID': pool_id,
             'DESCRIPTION': volume.name,
             'ALLOCTYPE': opts.get('LUNType', self.configuration.lun_type),
-            'CAPACITY': int(volume.size) * constants.CAPACITY_UNIT,
+            'CAPACITY': (int(src_size) * constants.CAPACITY_UNIT if src_size
+                         else int(volume.size) * constants.CAPACITY_UNIT),
         }
 
         if opts.get('controllername'):
@@ -137,22 +160,7 @@ class CreateLunTask(task.Task):
         elif not self.feature_support['SmartCompression[\s\S]*LUN']:
             lun_params['ENABLECOMPRESSION'] = False
 
-        if opts.get('applicationname') is not None:
-            workload_type_id = self.client.get_workload_type_id(
-                opts['applicationname'])
-            if workload_type_id:
-                lun_params['WORKLOADTYPEID'] = workload_type_id
-            else:
-                msg = _("The workload type %s is not exist. Please create it "
-                        "on the array" % opts['applicationname'])
-                LOG.error(msg)
-                raise exception.InvalidInput(reason=msg)
-        elif self.configuration.san_product == "Dorado":
-            array_info = self.client.get_array_info()
-            if (array_info.get("PRODUCTVERSION") >=
-                    constants.SUPPORT_WORKLOAD_TYPE_VERSION):
-                lun_params['WORKLOADTYPEID'] = \
-                    constants.DEFAULT_WORKLOAD_TYPE_ID
+        lun_params = self._get_lun_application_name(opts, lun_params)
 
         lun = self.client.create_lun(lun_params)
         return lun['ID'], lun
@@ -260,7 +268,7 @@ class CreateHyperMetroTask(task.Task):
                     lun_params['WORKLOADTYPEID'] = rmt_workload_type_id
                 else:
                     msg = _("The workload type %s is not exist. Please create "
-                            "it on the array" % workload_type_name)
+                            "it on the array") % workload_type_name
                     LOG.error(msg)
                     raise exception.InvalidInput(reason=msg)
 
@@ -322,7 +330,7 @@ class CreateReplicationTask(task.Task):
                     lun_params['WORKLOADTYPEID'] = rmt_workload_type_id
                 else:
                     msg = _("The workload type %s is not exist. Please create "
-                            "it on the array" % workload_type_name)
+                            "it on the array") % workload_type_name
                     LOG.error(msg)
                     raise exception.InvalidInput(reason=msg)
 
@@ -602,7 +610,8 @@ class GetSnapshotIDTask(task.Task):
 class CreateLunCopyTask(task.Task):
     default_provides = 'luncopy_id'
 
-    def __init__(self, client, feature_support, configuration, *args, **kwargs):
+    def __init__(self, client, feature_support, configuration,
+                 *args, **kwargs):
         super(CreateLunCopyTask, self).__init__(*args, **kwargs)
         self.client = client
         self.feature_support = feature_support
@@ -660,6 +669,51 @@ class WaitLunCopyDoneTask(task.Task):
             self.configuration.lun_timeout)
 
         self.client.delete_luncopy(luncopy_id)
+
+
+class CreateClonePairTask(task.Task):
+    default_provides = 'clone_pair_id'
+
+    def __init__(self, client, feature_support, configuration,
+                 *args, **kwargs):
+        super(CreateClonePairTask, self).__init__(*args, **kwargs)
+        self.client = client
+        self.feature_support = feature_support
+        self.configuration = configuration
+
+    def execute(self, source_id, target_id):
+        clone_speed = self.configuration.lun_copy_speed
+        clone_pair_id = self.client.create_clone_pair(
+            source_id, target_id, clone_speed)
+        return clone_pair_id
+
+    def revert(self, result, **kwargs):
+        if isinstance(result, failure.Failure):
+            return
+        self.client.delete_clone_pair(result)
+
+
+class WaitClonePairDoneTask(task.Task):
+    def __init__(self, client, configuration, *args, **kwargs):
+        super(WaitClonePairDoneTask, self).__init__(*args, **kwargs)
+        self.client = client
+        self.configuration = configuration
+
+    def execute(self, clone_pair_id):
+        def _clone_pair_done():
+            clone_pair_info = self.client.get_clone_pair_info(clone_pair_id)
+            if clone_pair_info['copyStatus'] != constants.CLONE_STATUS_HEALTH:
+                msg = _("ClonePair %s is abnormal.") % clone_pair_id
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            return (clone_pair_info['syncStatus'] in
+                    constants.CLONE_STATUS_COMPLETE)
+
+        self.client.sync_clone_pair(clone_pair_id)
+        huawei_utils.wait_for_condition(
+            _clone_pair_done, self.configuration.lun_copy_wait_interval,
+            self.configuration.lun_timeout)
+        self.client.delete_clone_pair(clone_pair_id)
 
 
 class CreateLunCloneTask(task.Task):
@@ -1015,7 +1069,7 @@ class ManageVolumePreCheckTask(task.Task):
                 lun_info.get('SUBTYPE') != '0')
 
     def _check_lun_consistency(self, lun_info, opts):
-       return ('LUNType' in opts and
+        return ('LUNType' in opts and
                 opts['LUNType'] != lun_info['ALLOCTYPE'])
 
     def _check_lun_dedup_consistency(self, lun_info, opts):
@@ -1220,7 +1274,7 @@ class GetISCSIConnectionTask(task.Task):
 
         config_info = huawei_utils.find_config_info(self.iscsi_info,
                                                     connector=connector)
-        
+
         config_ips = self._get_config_target_ips(config_info)
         LOG.info('Configured iscsi ips %s.', config_ips)
 
@@ -1268,7 +1322,6 @@ class CreateHostTask(task.Task):
         return host_id
 
 
-
 class AddISCSIInitiatorTask(task.Task):
     default_provides = 'chap_info'
 
@@ -1308,9 +1361,8 @@ class AddISCSIInitiatorTask(task.Task):
 
         chap_info = self._get_chap_info(config_info)
         ini_info = self.client.get_iscsi_initiator(initiator)
-        if ini_info['USECHAP'] == 'true' and not chap_info:
-            self.client.update_iscsi_initiator_chap(initiator, chap_info)
-        elif ini_info['USECHAP'] == 'false' and chap_info:
+        if (ini_info['USECHAP'] == 'true' and not chap_info) or (
+                ini_info['USECHAP'] == 'false' and chap_info):
             self.client.update_iscsi_initiator_chap(initiator, chap_info)
 
         return chap_info
@@ -1972,6 +2024,7 @@ def create_volume_from_snapshot(
         configuration, feature_support):
     store_spec = {'volume': volume}
     metadata = huawei_utils.get_volume_metadata(volume)
+    clone_pair_flag = huawei_utils.is_support_clone_pair(local_cli)
     work_flow = linear_flow.Flow('create_volume_from_snapshot')
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support),
@@ -1985,6 +2038,17 @@ def create_volume_from_snapshot(
                 CreateLunCloneTask(local_cli,
                                    rebind={'src_id': 'snapshot_id'}),
             )
+    elif clone_pair_flag:
+        work_flow.add(
+            CreateLunTask(local_cli, configuration, feature_support,
+                          inject={"src_size": snapshot.volume_size}),
+            WaitLunOnlineTask(local_cli),
+            CreateClonePairTask(local_cli, feature_support, configuration,
+                                rebind={'source_id': 'snapshot_id',
+                                        'target_id': 'lun_id'}),
+            WaitClonePairDoneTask(local_cli, configuration),
+            ExtendVolumeTask(local_cli, inject={
+                "new_size": int(volume.size) * constants.CAPACITY_UNIT}), )
     else:
         work_flow.add(
             CreateLunTask(local_cli, configuration, feature_support),
@@ -2020,6 +2084,7 @@ def create_volume_from_volume(
         configuration, feature_support):
     store_spec = {'volume': volume}
     metadata = huawei_utils.get_volume_metadata(volume)
+    clone_pair_flag = huawei_utils.is_support_clone_pair(local_cli)
     work_flow = linear_flow.Flow('create_volume_from_volume')
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support),
@@ -2034,6 +2099,17 @@ def create_volume_from_volume(
             LunClonePreCheckTask(inject={'src_volume': src_volume}),
             CreateLunCloneTask(local_cli),
         )
+    elif clone_pair_flag:
+        work_flow.add(
+            CreateLunTask(local_cli, configuration, feature_support,
+                          inject={"src_size": src_volume.size}),
+            WaitLunOnlineTask(local_cli),
+            CreateClonePairTask(local_cli, feature_support, configuration,
+                                rebind={'source_id': 'src_id',
+                                        'target_id': 'lun_id'}),
+            WaitClonePairDoneTask(local_cli, configuration),
+            ExtendVolumeTask(local_cli, inject={
+                "new_size": int(volume.size) * constants.CAPACITY_UNIT}), )
     else:
         work_flow.add(
             CreateTempSnapshotTask(local_cli, feature_support),

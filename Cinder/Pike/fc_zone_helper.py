@@ -164,7 +164,7 @@ class FCZoneHelper(object):
         return selected_ports
 
     def _select_ports_per_slot(self, fabrics, slot_ports, port_map,
-                                used_ports, count):
+                               used_ports, count):
         count_left = count
         selected_ports = set()
 

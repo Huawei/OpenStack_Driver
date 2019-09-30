@@ -24,7 +24,9 @@ from oslo_serialization import jsonutils
 import six
 
 from manila import exception
-from manila.i18n import _, _LE, _LW
+from manila.i18n import _
+from manila.i18n import _LE
+from manila.i18n import _LW
 from manila.share.drivers.huawei import constants
 from manila.share.drivers.huawei import huawei_utils
 from manila import utils
@@ -54,7 +56,7 @@ class RestHelper(object):
         self.session.verify = False
 
     def do_call(self, url, data=None, method=None,
-                calltimeout=constants.SOCKET_TIMEOUT):
+                calltimeout=constants.SOCKET_TIMEOUT, filter_flag=False):
         """Send requests to server.
 
         Send HTTPS call, get response in JSON.
@@ -62,13 +64,6 @@ class RestHelper(object):
         """
         if self.url:
             url = self.url + url
-        if "xx/sessions" not in url:
-            LOG.debug('Request URL: %(url)s\n'
-                      'Call Method: %(method)s\n'
-                      'Request Data: %(data)s\n',
-                      {'url': url,
-                       'method': method,
-                       'data': data})
 
         kwargs = {'timeout': calltimeout}
         if data:
@@ -97,7 +92,14 @@ class RestHelper(object):
                               "description": six.text_type(exc)}}
 
         result = res.json()
-        LOG.debug('Response Data: %s', result)
+        if not filter_flag:
+            LOG.info('Request URL: %(url)s\n'
+                     'Call Method: %(method)s\n'
+                     'Request Data: %(data)s\n',
+                     {'url': url,
+                      'method': method,
+                      'data': data})
+            LOG.info('Response Data: %s', result)
         return result
 
     def login(self):
@@ -113,7 +115,8 @@ class RestHelper(object):
                                     "scope": "0"})
             self.init_http_head()
             result = self.do_call(url, data,
-                                  calltimeout=constants.LOGIN_SOCKET_TIMEOUT)
+                                  calltimeout=constants.LOGIN_SOCKET_TIMEOUT,
+                                  filter_flag=True)
 
             if((result['error']['code'] != 0)
                or ("data" not in result)
@@ -150,14 +153,14 @@ class RestHelper(object):
             self._assert_rest_result(result, _('Logout session error.'))
 
     @utils.synchronized('huawei_manila')
-    def call(self, url, data=None, method=None):
+    def call(self, url, data=None, method=None, filter_flag=False):
         """Send requests to server.
 
         If fail, try another RestURL.
         """
         deviceid = None
         old_url = self.url
-        result = self.do_call(url, data, method)
+        result = self.do_call(url, data, method, filter_flag=filter_flag)
         error_code = result['error']['code']
         if(error_code == constants.ERROR_CONNECT_TO_SERVER
            or error_code == constants.ERROR_UNAUTHORIZED_TO_SERVER):
@@ -170,7 +173,7 @@ class RestHelper(object):
                       'New URL: %(new_url)s\n',
                       {'old_url': old_url,
                        'new_url': self.url})
-            result = self.do_call(url, data, method)
+            result = self.do_call(url, data, method, filter_flag=filter_flag)
         return result
 
     def _create_filesystem(self, fs_param):
@@ -352,9 +355,12 @@ class RestHelper(object):
 
         self._assert_rest_result(result, 'Start CIFS service error.')
 
-    def _find_pool_info(self, pool_name, result):
+    def _find_pool_info(self, pool_name, result=None):
         if pool_name is None:
             return
+        if not result:
+            url = "/storagepool?filter=NAME::%s" % pool_name
+            result = self.call(url, None, "GET", filter_flag=True)
 
         poolinfo = {}
         pool_name = pool_name.strip()
@@ -365,6 +371,7 @@ class RestHelper(object):
                 poolinfo['CAPACITY'] = item['USERFREECAPACITY']
                 poolinfo['TOTALCAPACITY'] = item['USERTOTALCAPACITY']
                 poolinfo['CONSUMEDCAPACITY'] = item['USERCONSUMEDCAPACITY']
+                poolinfo['PROVISIONEDCAPACITY'] = item['TOTALFSCAPACITY']
                 poolinfo['TIER0CAPACITY'] = item['TIER0CAPACITY']
                 if 'TIER1CAPACITY' in item:
                     poolinfo['TIER1CAPACITY'] = item['TIER1CAPACITY']
@@ -376,7 +383,7 @@ class RestHelper(object):
 
     def _find_all_pool_info(self):
         url = "/storagepool"
-        result = self.call(url, None, "GET")
+        result = self.call(url, None, "GET", filter_flag=True)
 
         msg = "Query resource pool error."
         self._assert_rest_result(result, msg)
@@ -753,14 +760,12 @@ class RestHelper(object):
         return share_url_type
 
     def get_fsid_by_name(self, share_name):
-        url = "/FILESYSTEM?range=[0-8191]"
+        share_name = share_name.replace("-", "_")
+        url = "/FILESYSTEM?filter=NAME::%s" % share_name
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, 'Get filesystem by name error!')
-        share_name = share_name.replace("-", "_")
-
-        for item in result.get('data', []):
-            if share_name == item['NAME']:
-                return item['ID']
+        if "data" in result and result["data"]:
+            return result["data"][0]["ID"]
 
     def _get_fs_info_by_id(self, fsid):
         url = "/filesystem/%s" % fsid
@@ -814,11 +819,9 @@ class RestHelper(object):
                 reason=(_('No share with export location %s could be found.')
                         % export_location))
 
-        root = self._read_xml()
-        target_ip = root.findtext('Storage/LogicalPortIP')
-
-        if target_ip:
-            if share_ip != target_ip.strip():
+        target_ips = huawei_utils.get_logical_ips(self)
+        if target_ips:
+            if share_ip not in target_ips:
                 raise exception.InvalidInput(
                     reason=(_('The share IP %s is not configured.')
                             % share_ip))
@@ -1393,7 +1396,7 @@ class RestHelper(object):
 
     def _get_array_info(self):
         url = "/system/"
-        result = self.call(url, None, "GET")
+        result = self.call(url, None, "GET", filter_flag=True)
         msg = _('Get array info error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
@@ -1522,3 +1525,41 @@ class RestHelper(object):
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get all controller error.'))
         return result.get('data', [])
+
+    def get_all_access(self, share_id, share_proto):
+        share_client_type = self._get_share_client_type(share_proto)
+        return self._get_all_access(share_id, share_client_type)
+
+    def _get_all_access(self, share_id, share_client_type):
+        # Get all access info of a share
+        count = self._get_access_count(share_id, share_client_type)
+        range_begin = 0
+        access_info_list = []
+        while True:
+            if count < 0:
+                break
+            access_info = self._get_access_from_share_range(
+                share_id, range_begin, share_client_type)
+            for item in access_info:
+                access_level = item.get('permission') or item.get('accessVal')
+                access_to = item.get("name")
+                if "@" in access_to:
+                    access_type = "user"
+                else:
+                    access_type = "ip"
+
+                if (access_level == int(constants.ACCESS_NFS_RW)
+                        or access_level == int(constants.ACCESS_CIFS_RW)):
+                    access_level = 'rw'
+                elif (access_level == int(constants.ACCESS_NFS_RO)
+                      or access_level == int(constants.ACCESS_CIFS_RO)):
+                    access_level = 'ro'
+                else:
+                    access_level = ''
+
+                access_info_list.append({"access_level": access_level,
+                                         "access_to": access_to,
+                                         "access_type": access_type})
+            range_begin += constants.MAX_RANGE_LEN
+            count -= constants.MAX_RANGE_LEN
+        return access_info_list

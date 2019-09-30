@@ -315,9 +315,9 @@ class HuaweiHyperMetro(object):
 
     def _stop_hypermetro_if_need(self, metro_id):
         metro_info = self.local_cli.get_hypermetro_by_id(metro_id)
-        if metro_info:
-            if ((metro_info['HEALTHSTATUS'] == constants.METRO_HEALTH_NORMAL
-                 ) and metro_info['RUNNINGSTATUS'] in (
+        if metro_info and (
+                (metro_info['HEALTHSTATUS'] == constants.METRO_HEALTH_NORMAL)
+                and metro_info['RUNNINGSTATUS'] in (
                     constants.METRO_RUNNING_NORMAL,
                     constants.METRO_RUNNING_SYNC)):
                 self.local_cli.stop_hypermetro(metro_id)

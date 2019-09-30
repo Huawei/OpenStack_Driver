@@ -18,7 +18,8 @@ from oslo_utils import excutils
 
 from cinder import context
 from cinder import exception
-from cinder.i18n import _, _LI
+from cinder.i18n import _
+from cinder.i18n import _LI
 from cinder import utils
 from cinder.volume.drivers.huawei import constants
 from cinder.volume import qos_specs

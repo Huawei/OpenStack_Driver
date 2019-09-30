@@ -20,7 +20,10 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 
 from cinder import exception
-from cinder.i18n import _, _LI, _LE, _LW
+from cinder.i18n import _
+from cinder.i18n import _LE
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
 
@@ -730,7 +733,7 @@ class ReplicaPairManager(object):
                 params['WORKLOADTYPEID'] = rmt_workload_type_id
             else:
                 msg = _("The workload type %s is not exist. Please create "
-                        "it on the array" % workload_type_name)
+                        "it on the array") % workload_type_name
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
 

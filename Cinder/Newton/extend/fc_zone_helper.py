@@ -19,7 +19,9 @@ from oslo_utils import excutils
 from oslo_utils import importutils
 
 from cinder import exception
-from cinder.i18n import _, _LE, _LI
+from cinder.i18n import _
+from cinder.i18n import _LE
+from cinder.i18n import _LI
 from cinder.volume import configuration as config
 from cinder.zonemanager import utils as fczm_utils
 

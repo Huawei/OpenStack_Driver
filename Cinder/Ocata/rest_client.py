@@ -28,7 +28,10 @@ from oslo_utils import strutils
 from requests.adapters import HTTPAdapter
 
 from cinder import exception
-from cinder.i18n import _, _LE, _LI, _LW
+from cinder.i18n import _
+from cinder.i18n import _LE
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder import utils
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
@@ -419,7 +422,7 @@ class RestClient(object):
     def get_lun_id(self, volume, volume_name):
         metadata = huawei_utils.get_lun_metadata(volume)
         lun_id = (metadata.get('huawei_lun_id') or
-                      self.get_lun_id_by_name(volume_name))
+                  self.get_lun_id_by_name(volume_name))
 
         if not lun_id:
             msg = (_("Can't find lun info on the array. "
@@ -1535,7 +1538,7 @@ class RestClient(object):
             msg = (_(
                 "Can't find valid IP from rest, please check it on storage."))
             LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data = msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         if 'data' in result:
             for item in result['data']:
@@ -2642,8 +2645,8 @@ class RestClient(object):
         url = "/license/feature"
         result = self.call(url, None, "GET", filter_flag=True)
         if result['error']['code'] != 0:
-            msg = (_("Query license status of features failed.\nresult: %(res)s.")
-                   % {'res': result})
+            msg = (_("Query license status of features failed.\n"
+                     "result: %(res)s.") % {'res': result})
             LOG.error(msg)
             return {}
         dic_result = {}
@@ -2689,3 +2692,38 @@ class RestClient(object):
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get workload type by id error'))
         return result.get("data", {}).get("NAME")
+
+    def create_clone_pair(self, source_id, target_id, clone_speed):
+        url = "/clonepair/relation"
+        data = {"copyRate": clone_speed,
+                "sourceID": source_id,
+                "targetID": target_id,
+                "isNeedSynchronize": "0"}
+        result = self.call(url, data, "POST")
+        self._assert_rest_result(result, 'Create ClonePair error, source_id '
+                                         'is %s.' % source_id)
+        return result['data']['ID']
+
+    def sync_clone_pair(self, pair_id):
+        url = "/clonepair/synchronize"
+        data = {"ID": pair_id, "copyAction": 0}
+        result = self.call(url, data, "PUT")
+        self._assert_rest_result(result, 'Sync ClonePair error, pair is '
+                                         'is %s.' % pair_id)
+
+    def get_clone_pair_info(self, pair_id):
+        url = "/clonepair/%s" % pair_id
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, 'Get ClonePair %s error.' % pair_id)
+        return result.get('data', {})
+
+    def delete_clone_pair(self, pair_id, delete_dst_lun=False):
+        data = {"ID": pair_id,
+                "isDeleteDstLun": delete_dst_lun}
+        url = "/clonepair/%s" % pair_id
+        result = self.call(url, data, "DELETE")
+        if result['error']['code'] == constants.CLONE_PAIR_NOT_EXIST:
+            LOG.warning('ClonePair %s to delete not exist.', pair_id)
+            return
+        self._assert_rest_result(result, 'Delete ClonePair %s error.'
+                                 % pair_id)
