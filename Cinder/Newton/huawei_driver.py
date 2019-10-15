@@ -360,8 +360,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             'PARENTID': self.client.get_pool_id(pool_name),
             'DESCRIPTION': volume.name,
             'ALLOCTYPE': opts.get('LUNType', self.configuration.lun_type),
-            'CAPACITY': (int(src_size) * constants.CAPACITY_UNIT if src_size
-                         else huawei_utils.get_volume_size(volume)),
+            'CAPACITY': int(int(src_size) * constants.CAPACITY_UNIT if src_size
+                            else huawei_utils.get_volume_size(volume)),
             'WRITEPOLICY': self.configuration.lun_write_type,
             'PREFETCHPOLICY': self.configuration.lun_prefetch_type,
             'PREFETCHVALUE': self.configuration.lun_prefetch_value,
