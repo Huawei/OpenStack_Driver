@@ -993,7 +993,7 @@ class ReplicaPairManager(object):
             drv_data = get_replication_driver_data(v)
             pair_id = drv_data.get('pair_id')
             if not pair_id:
-                LOG.warning(_LW("No pair id in volume %s."), v.id)
+                LOG.warning(_("No pair id in volume %s."), v.id)
                 v_update['updates'] = {'replication_status': 'error'}
                 volumes_update.append(v_update)
                 continue

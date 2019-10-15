@@ -18,7 +18,9 @@ import six
 from oslo_log import log as logging
 
 from cinder import exception
-from cinder.i18n import _, _LW, _LI
+from cinder.i18n import _
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder.volume.drivers.huawei import constants
 
 
@@ -164,7 +166,7 @@ class FCZoneHelper(object):
         return selected_ports
 
     def _select_ports_per_slot(self, fabrics, slot_ports, port_map,
-                                used_ports, count):
+                               used_ports, count):
         count_left = count
         selected_ports = set()
 

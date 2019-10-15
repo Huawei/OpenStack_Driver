@@ -110,7 +110,8 @@ class Lun(CommonObject):
             "NAME": lun_name,
         }
         result = self.post(data=data)
-        _assert_result(result, 'Create clone lun for source ID %s error.', src_id)
+        _assert_result(result, 'Create clone lun for source ID %s error.',
+                       src_id)
         return result['data']
 
     def delete_lun(self, lun_id):
@@ -1155,6 +1156,39 @@ class LicenseFeature(CommonObject):
             status.update(feature)
 
         return status
+
+
+class ClonePair(CommonObject):
+    _obj_url = '/clonepair'
+
+    def create_clone_pair(self, source_id, target_id, clone_speed):
+        data = {"copyRate": clone_speed,
+                "sourceID": source_id,
+                "targetID": target_id,
+                "isNeedSynchronize": "0"}
+        result = self.post("/relation", data=data)
+        _assert_result(result, 'Create ClonePair error, source_id is %s.',
+                       source_id)
+        return result['data']['ID']
+
+    def sync_clone_pair(self, pair_id):
+        data = {"ID": pair_id, "copyAction": 0}
+        result = self.put("/synchronize", data=data)
+        _assert_result(result, 'Sync ClonePair error, pair is is %s.', pair_id)
+
+    def get_clone_pair_info(self, pair_id):
+        result = self.get('/%(id)s', id=pair_id)
+        _assert_result(result, 'Get ClonePair %s error.', pair_id)
+        return result.get('data', {})
+
+    def delete_clone_pair(self, pair_id, delete_dst_lun=False):
+        data = {"ID": pair_id,
+                "isDeleteDstLun": delete_dst_lun}
+        result = self.delete("/%(id)s", id=pair_id, data=data)
+        if _error_code(result) == constants.CLONE_PAIR_NOT_EXIST:
+            LOG.warning('ClonePair %s to delete not exist.', pair_id)
+            return
+        _assert_result(result, 'Delete ClonePair %s error.', pair_id)
 
 
 class HostNameIgnoringAdapter(HTTPAdapter):

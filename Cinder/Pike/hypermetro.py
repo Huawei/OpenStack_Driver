@@ -408,7 +408,8 @@ class HuaweiHyperMetro(object):
 
     def _check_metro_in_cg(self, metro_id, cg_id):
         metro_info = self.client.get_hypermetro_by_id(metro_id)
-        return metro_info and metro_info['ISINCG'] == 'true' and metro_info['CGID'] == cg_id
+        return (metro_info and metro_info['ISINCG'] == 'true'
+                and metro_info['CGID'] == cg_id)
 
     def _valid_rmt_metro_domain(self):
         domain_name = self.rmt_client.metro_domain

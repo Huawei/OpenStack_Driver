@@ -32,7 +32,9 @@ from oslo_utils import excutils
 
 from cinder import context
 from cinder import exception
-from cinder.i18n import _, _LE, _LI, _LW
+from cinder.i18n import _LE
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder import ssh_utils
 from cinder import utils
 from cinder.volume.drivers.huawei import constants

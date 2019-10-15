@@ -182,6 +182,9 @@ def get_volume_lun_id(client, volume):
         volume_name = old_encode_name(volume.id)
         lun_id = client.get_lun_id_by_name(volume_name)
 
+    if not lun_id:
+        lun_id = metadata.get("huawei_lun_id")
+
     return lun_id, metadata.get('huawei_lun_wwn')
 
 
@@ -235,3 +238,10 @@ def get_apply_type_id(opts):
         opts['application_type'] = None
 
     return opts
+
+
+def is_support_clone_pair(client):
+    array_info = client.get_array_info()
+    version_info = array_info['PRODUCTVERSION']
+    if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
+        return True

@@ -142,7 +142,8 @@ class SmartX(object):
                              'huawei_controller:controllername in key.'))
             else:
                 controller_name = opts['controllername']
-                controller_id = self.helper.get_controller_by_name(controller_name)
+                controller_id = self.helper.get_controller_by_name(
+                    controller_name)
                 opts['controllerid'] = controller_id
         else:
             opts['controllerid'] = None

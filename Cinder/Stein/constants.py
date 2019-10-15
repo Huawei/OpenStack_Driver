@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+STATUS_INITIALIZE = '0'
 STATUS_HEALTH = '1'
 LUN_TYPE = '11'
 SNAPSHOT_TYPE = '27'
@@ -154,3 +155,8 @@ REPLICA_SYNC_SPEED_TYPES = (
     REPLICA_SYNC_SPEED_HIGH,
     REPLICA_SYNC_SPEED_HIGHEST
 ) = ('1', '2', '3', '4')
+
+CLONE_STATUS_HEALTH = '0'
+CLONE_STATUS_COMPLETE = (CLONE_COMPLETE,) = ('2',)
+CLONE_PAIR_NOT_EXIST = "1073798147"
+SUPPORT_CLONE_PAIR_VERSION = "V600R003C00"

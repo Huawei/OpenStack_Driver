@@ -97,9 +97,9 @@ class HuaweiNasDriver(driver.ShareDriver):
             msg = _('Product %(product)s is not supported. Product '
                     'must be set to one of %(valid)s.'
                     ) % {
-                      'product': product,
-                      'valid': list(constants.HUAWEI_UNIFIED_DRIVER_REGISTRY),
-                  }
+                'product': product,
+                'valid': list(constants.HUAWEI_UNIFIED_DRIVER_REGISTRY),
+            }
             raise exception.InvalidInput(reason=msg)
 
         return backend_driver

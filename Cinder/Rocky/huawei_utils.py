@@ -124,40 +124,43 @@ def get_volume_params_from_specs(specs):
     return opts
 
 
+def _get_bool_param(k, v):
+    words = v.split()
+    if len(words) == 2 and words[0] == '<is>':
+        return strutils.bool_from_string(words[1], strict=True)
+
+    msg = _("%(k)s spec must be specified as %(k)s='<is> True' "
+            "or '<is> False'.") % {'k': k}
+    LOG.error(msg)
+    raise exception.InvalidInput(reason=msg)
+
+
+def _get_replication_type_param(k, v):
+    words = v.split()
+    if len(words) == 2 and words[0] == '<in>':
+        REPLICA_SYNC_TYPES = {'sync': constants.REPLICA_SYNC_MODEL,
+                              'async': constants.REPLICA_ASYNC_MODEL}
+        sync_type = words[1].lower()
+        if sync_type in REPLICA_SYNC_TYPES:
+            return REPLICA_SYNC_TYPES[sync_type]
+
+    msg = _("replication_type spec must be specified as "
+            "replication_type='<in> sync' or '<in> async'.")
+    LOG.error(msg)
+    raise exception.InvalidInput(reason=msg)
+
+
+def _get_string_param(k, v):
+    if not v:
+        msg = _("%s spec must be specified as a string.") % k
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+    return v
+
+
 def _get_opts_from_specs(specs):
     """Get the well defined extra specs."""
     opts = {}
-
-    def _get_bool_param(k, v):
-        words = v.split()
-        if len(words) == 2 and words[0] == '<is>':
-            return strutils.bool_from_string(words[1], strict=True)
-
-        msg = _("%(k)s spec must be specified as %(k)s='<is> True' "
-                "or '<is> False'.") % {'k': k}
-        LOG.error(msg)
-        raise exception.InvalidInput(reason=msg)
-
-    def _get_replication_type_param(k, v):
-        words = v.split()
-        if len(words) == 2 and words[0] == '<in>':
-            REPLICA_SYNC_TYPES = {'sync': constants.REPLICA_SYNC_MODEL,
-                                  'async': constants.REPLICA_ASYNC_MODEL}
-            sync_type = words[1].lower()
-            if sync_type in REPLICA_SYNC_TYPES:
-                return REPLICA_SYNC_TYPES[sync_type]
-
-        msg = _("replication_type spec must be specified as "
-                "replication_type='<in> sync' or '<in> async'.")
-        LOG.error(msg)
-        raise exception.InvalidInput(reason=msg)
-
-    def _get_string_param(k, v):
-        if not v:
-            msg = _("%s spec must be specified as a string.") % k
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-        return v
 
     opts_capability = {
         'capabilities:smarttier': (_get_bool_param, False),
@@ -299,12 +302,14 @@ def _verify_smartpartition_opts(opts):
 def wait_lun_online(client, lun_id, wait_interval=None, wait_timeout=None):
     def _lun_online():
         result = client.get_lun_info_by_id(lun_id)
-        if result['HEALTHSTATUS'] != constants.STATUS_HEALTH:
+        if result['HEALTHSTATUS'] not in (constants.STATUS_HEALTH,
+                                          constants.STATUS_INITIALIZE):
             err_msg = _('LUN %s is abnormal.') % lun_id
             LOG.error(err_msg)
             raise exception.VolumeBackendAPIException(data=err_msg)
 
-        if result['RUNNINGSTATUS'] == constants.LUN_INITIALIZING:
+        if result['RUNNINGSTATUS'] in (constants.LUN_INITIALIZING,
+                                       constants.STATUS_INITIALIZE):
             return False
 
         return True
@@ -515,6 +520,19 @@ def get_hypermetro(client, volume):
     return hypermetro
 
 
+def _set_config_info(ini, find_info, tmp_find_info):
+    if find_info is None and tmp_find_info:
+        find_info = tmp_find_info
+
+    if ini:
+        config = ini
+    elif find_info:
+        config = find_info
+    else:
+        config = {}
+    return config
+
+
 def find_config_info(config_info, connector=None, initiator=None):
     if connector:
         ini = config_info['initiators'].get(connector['initiator'])
@@ -533,13 +551,11 @@ def find_config_info(config_info, connector=None, initiator=None):
                     find_info = ini_info
                     break
 
-    if find_info is None and tmp_find_info:
-        find_info = tmp_find_info
+    return _set_config_info(ini, find_info, tmp_find_info)
 
-    if ini:
-        config = ini
-    elif find_info:
-        config = find_info
-    else:
-        config = {}
-    return config
+
+def is_support_clone_pair(client):
+    array_info = client.get_array_info()
+    version_info = array_info['PRODUCTVERSION']
+    if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
+        return True

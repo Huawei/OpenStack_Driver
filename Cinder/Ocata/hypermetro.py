@@ -17,7 +17,9 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 
 from cinder import exception
-from cinder.i18n import _, _LI, _LW
+from cinder.i18n import _
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder import utils
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
@@ -408,7 +410,8 @@ class HuaweiHyperMetro(object):
 
     def _check_metro_in_cg(self, metro_id, cg_id):
         metro_info = self.client.get_hypermetro_by_id(metro_id)
-        return metro_info and metro_info['ISINCG'] == 'true' and metro_info['CGID'] == cg_id
+        return (metro_info and metro_info['ISINCG'] == 'true' and
+                metro_info['CGID'] == cg_id)
 
     def _valid_rmt_metro_domain(self):
         domain_name = self.rmt_client.metro_domain

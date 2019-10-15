@@ -410,7 +410,7 @@ class V3StorageConnection(driver.HuaweiBase):
 
                 if disk_type:
                     pool['huawei_disk_type'] = disk_type
-                
+
                 if self.configuration.nas_product != "Dorado":
                     pool['thin_provisioning'] = [True, False]
                 else:
@@ -868,8 +868,8 @@ class V3StorageConnection(driver.HuaweiBase):
             else:
                 return
 
-        msg = _('Mount share %s through %s failed.'
-                ) % (share['name'], share['mount_paths'])
+        msg = (_('Mount share %(share)s through %(paths)s failed.')
+               % {"share": share['name'], "paths": share['mount_paths']})
         LOG.error(msg)
         raise exception.ShareMountException(reason=msg)
 
@@ -888,11 +888,11 @@ class V3StorageConnection(driver.HuaweiBase):
             total = float(poolinfo['TOTALCAPACITY']) / units.Mi / 2
             free = float(poolinfo['CAPACITY']) / units.Mi / 2
             consumed = float(poolinfo['CONSUMEDCAPACITY']) / units.Mi / 2
+            provision = float(poolinfo['PROVISIONEDCAPACITY']) / units.Mi / 2
             poolinfo['TOTALCAPACITY'] = total
             poolinfo['CAPACITY'] = free
             poolinfo['CONSUMEDCAPACITY'] = consumed
-            poolinfo['PROVISIONEDCAPACITYGB'] = round(
-                float(total) - float(free), 2)
+            poolinfo['PROVISIONEDCAPACITYGB'] = provision
 
         return poolinfo
 
@@ -2133,7 +2133,7 @@ class V3StorageConnection(driver.HuaweiBase):
 
         # Create a new share
         new_share_name = new_replica['name']
-        location = self.create_share(new_replica, share_server)
+        locations = self.create_share(new_replica, share_server)
 
         # create a replication pair.
         # replication pair only can be created by master node,
@@ -2165,7 +2165,7 @@ class V3StorageConnection(driver.HuaweiBase):
 
         # Get the state of the new created replica
         replica_state = self.replica_mgr.get_replica_state(local_pair_id)
-        return {'export_locations': [location],
+        return {'export_locations': locations,
                 'replica_state': replica_state}
 
     def update_replica_state(self, context, replica_list, replica,

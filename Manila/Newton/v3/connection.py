@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import copy
 import os
 import random
 import string
@@ -31,7 +32,10 @@ import six
 from manila.common import constants as common_constants
 from manila.data import utils as data_utils
 from manila import exception
-from manila.i18n import _, _LE, _LI, _LW
+from manila.i18n import _
+from manila.i18n import _LE
+from manila.i18n import _LI
+from manila.i18n import _LW
 from manila import rpc
 from manila.share.drivers.huawei import base as driver
 from manila.share.drivers.huawei import constants
@@ -121,8 +125,7 @@ class V3StorageConnection(driver.HuaweiBase):
             msg = _("Pool is not available in the share host field.")
             raise exception.InvalidHost(reason=msg)
 
-        result = self.helper._find_all_pool_info()
-        poolinfo = self.helper._find_pool_info(pool_name, result)
+        poolinfo = self.helper._find_pool_info(pool_name)
         if not poolinfo:
             msg = (_("Can not find pool info by pool name: %s.") % pool_name)
             raise exception.InvalidHost(reason=msg)
@@ -179,18 +182,17 @@ class V3StorageConnection(driver.HuaweiBase):
         self.private_storage.update(share['id'], {'replica_pair_id': ''})
 
         ip = self._get_share_ip(share_server)
-        location = self._get_location_path(share_name, share_proto, ip)
-        return location
+        locations = self._get_location_path(share_name, share_proto, ip)
+        return locations
 
     def _get_share_ip(self, share_server):
         """"Get share logical ip."""
         if share_server:
-            ip = share_server['backend_details'].get('ip')
+            ips = [share_server['backend_details'].get('ip')]
         else:
-            root = self.helper._read_xml()
-            ip = root.findtext('Storage/LogicalPortIP').strip()
+            ips = huawei_utils.get_logical_ips(self.helper)
 
-        return ip
+        return ips
 
     def extend_share(self, share, new_size, share_server):
         share_proto = share['share_proto']
@@ -412,6 +414,7 @@ class V3StorageConnection(driver.HuaweiBase):
     def create_share_from_snapshot(self, share, snapshot,
                                    share_server=None):
         """Create a share from snapshot."""
+        LOG.info("Start to create share from snapshot...")
         share_fs_id = self.helper.get_fsid_by_name(snapshot['share_name'])
         if not share_fs_id:
             err_msg = (_("The source filesystem of snapshot %s "
@@ -445,23 +448,23 @@ class V3StorageConnection(driver.HuaweiBase):
             raise exception.ShareResourceNotFound(
                 share_id=snapshot['share_id'])
 
-        new_share_path = self.create_share(share)
+        new_share_paths = self.create_share(share)
         new_share = {
             "share_proto": share['share_proto'],
             "size": share['size'],
             "name": share['name'],
-            "mount_path": new_share_path.replace("\\", "/"),
+            "mount_paths": [i.replace("\\", "/") for i in new_share_paths],
             "mount_src":
                 tempfile.mkdtemp(prefix=constants.TMP_PATH_DST_PREFIX),
             "id": snapshot['share_id'],
         }
 
-        old_share_path = self._get_location_path(old_share_name,
-                                                 old_share_proto)
+        old_share_paths = self._get_location_path(old_share_name,
+                                                  old_share_proto)
         old_share = {
             "share_proto": old_share_proto,
             "name": old_share_name,
-            "mount_path": old_share_path.replace("\\", "/"),
+            "mount_paths": [i.replace("\\", "/") for i in old_share_paths],
             "mount_src":
                 tempfile.mkdtemp(prefix=constants.TMP_PATH_SRC_PREFIX),
             "snapshot_name": ("share_snapshot_" +
@@ -485,7 +488,9 @@ class V3StorageConnection(driver.HuaweiBase):
                                   'err': six.text_type(err)})
                     LOG.warning(err_msg)
 
-        return new_share_path
+        LOG.info("Create share from snapshot successful! Return paths are: %s"
+                 % new_share_paths)
+        return new_share_paths
 
     def copy_data_from_parent_share(self, old_share, new_share):
         old_access = self.get_access(old_share)
@@ -621,27 +626,34 @@ class V3StorageConnection(driver.HuaweiBase):
     def mount_share_to_host(self, share, access):
         LOG.debug("Mounting share: %s to host, mount_src: %s",
                   share['name'], share['mount_src'])
-        try:
-            if share['share_proto'] == 'NFS':
-                utils.execute('mount', '-t', 'nfs',
-                              share['mount_path'], share['mount_src'],
-                              run_as_root=True)
 
-                LOG.debug("Execute mount. mount_src: %s",
-                          share['mount_src'])
+        for mount_path in share['mount_paths']:
+            try:
+                if share['share_proto'] == 'NFS':
+                    utils.execute('mount', '-t', 'nfs',
+                                  mount_path, share['mount_src'],
+                                  run_as_root=True)
 
-            elif share['share_proto'] == 'CIFS':
-                user = ('username=' + access['access_to'] + ',' +
-                        'password=' + access['access_password'])
-                utils.execute('mount', '-t', 'cifs',
-                              share['mount_path'], share['mount_src'],
-                              '-o', user, run_as_root=True)
-        except Exception as err:
-            message = (_('Bad response from mount share: %(share)s. '
-                         'Reason: %(reason)s.')
-                       % {'share': share['name'],
-                          'reason': six.text_type(err)})
-            raise exception.ShareMountException(reason=message)
+                    LOG.debug("Execute mount. mount_src: %s",
+                              share['mount_src'])
+                elif share['share_proto'] == 'CIFS':
+                    user = ('username=' + access['access_to'] + ',' +
+                            'password=' + access['access_password'])
+                    utils.execute('mount', '-t', 'cifs',
+                                  mount_path, share['mount_src'],
+                                  '-o', user, run_as_root=True)
+            except Exception as err:
+                LOG.error('Bad response from mount share %s to %s. '
+                          'Reason: %s.',
+                          share['name'], mount_path, err)
+                continue
+            else:
+                return
+
+        msg = (_('Mount share %(share)s through %(paths)s failed.')
+               % {"share": share['name'], "paths": share['mount_paths']})
+        LOG.error(msg)
+        raise exception.ShareMountException(reason=msg)
 
     def get_network_allocations_number(self):
         """Get number of network interfaces to be created."""
@@ -658,11 +670,11 @@ class V3StorageConnection(driver.HuaweiBase):
             total = float(poolinfo['TOTALCAPACITY']) / units.Mi / 2
             free = float(poolinfo['CAPACITY']) / units.Mi / 2
             consumed = float(poolinfo['CONSUMEDCAPACITY']) / units.Mi / 2
+            provision = float(poolinfo['PROVISIONEDCAPACITY']) / units.Mi / 2
             poolinfo['TOTALCAPACITY'] = total
             poolinfo['CAPACITY'] = free
             poolinfo['CONSUMEDCAPACITY'] = consumed
-            poolinfo['PROVISIONEDCAPACITYGB'] = round(
-                float(total) - float(free), 2)
+            poolinfo['PROVISIONEDCAPACITYGB'] = provision
 
         return poolinfo
 
@@ -866,14 +878,50 @@ class V3StorageConnection(driver.HuaweiBase):
                       delete_rules, share_server=None):
         """Update access rules list."""
         if not (add_rules or delete_rules):
-            self.clear_access(share, share_server)
-            for access in access_rules:
+            add_access, delete_access = self.compare_access(
+                share, access_rules)
+            for access in delete_access:
+                self.deny_access(share, access, share_server)
+            for access in add_access:
                 self.allow_access(share, access, share_server)
         else:
             for access in delete_rules:
                 self.deny_access(share, access, share_server)
             for access in add_rules:
                 self.allow_access(share, access, share_server)
+
+    def _compare_list_dict(self, access_in_db, access_in_array):
+        copy_access_list = copy.deepcopy(access_in_db)
+        for access in access_in_db:
+            if access in access_in_array:
+                copy_access_list.remove(access)
+                access_in_array.remove(access)
+
+        return copy_access_list, access_in_array
+
+    def compare_access(self, share, access_rules):
+        share_proto = share['share_proto']
+        share_name = share['name']
+        all_access_in_db = []
+        for access in access_rules:
+            all_access_in_db.append({"access_level": access['access_level'],
+                                     "access_to": access['access_to'],
+                                     "access_type": access['access_type']})
+
+        share_url_type = self.helper._get_share_url_type(share_proto)
+        share_stor = self.helper._get_share_by_name(share_name,
+                                                    share_url_type)
+        all_access_list = self.helper._get_all_access_from_share(
+            share_stor['ID'], share_proto) if share_stor else []
+        LOG.info("Access_rules in array count %d" % len(all_access_list))
+
+        access_in_db_not_in_array, access_in_array_not_in_db = (
+            self._compare_list_dict(all_access_in_db, all_access_list))
+
+        LOG.info("The access need to add: %s" % access_in_db_not_in_array)
+        LOG.info("The access need to delete: %s" % access_in_array_not_in_db)
+
+        return access_in_db_not_in_array, access_in_array_not_in_db
 
     def get_pool(self, share):
         pool_name = share_utils.extract_host(share['host'], level='pool')
@@ -970,8 +1018,7 @@ class V3StorageConnection(driver.HuaweiBase):
                         % {'fs_pool': fs['POOLNAME'],
                            'host_pool': pool_name}))
 
-        result = self.helper._find_all_pool_info()
-        poolinfo = self.helper._find_pool_info(pool_name, result)
+        poolinfo = self.helper._find_pool_info(pool_name)
 
         opts = huawei_utils.get_share_extra_specs_params(
             share['share_type_id'])
@@ -1000,8 +1047,8 @@ class V3StorageConnection(driver.HuaweiBase):
 
         share_size = int(fs['CAPACITY']) / units.Mi / 2
         self.helper._change_fs_name(fs_id, share_name)
-        location = self._get_location_path(share_name, share_proto)
-        return (share_size, [location])
+        locations = self._get_location_path(share_name, share_proto)
+        return share_size, locations
 
     def unmanage(self, share):
         self.private_storage.delete(share['id'])
@@ -1234,15 +1281,15 @@ class V3StorageConnection(driver.HuaweiBase):
                                            fs_list,
                                            qos_id)
 
-    def _get_location_path(self, share_name, share_proto, ip=None):
-        location = None
-        if ip is None:
-            root = self.helper._read_xml()
-            ip = root.findtext('Storage/LogicalPortIP').strip()
+    def _get_location_path(self, share_name, share_proto, ips=None):
+        if not ips:
+            ips = huawei_utils.get_logical_ips(self.helper)
+
+        path = share_name.replace("-", "_")
         if share_proto == 'NFS':
-            location = '%s:/%s' % (ip, share_name.replace("-", "_"))
+            location = ['%s:/%s' % (ip, path) for ip in ips]
         elif share_proto == 'CIFS':
-            location = '\\\\%s\\%s' % (ip, share_name.replace("-", "_"))
+            location = ['\\\\%s\\%s' % (ip, path) for ip in ips]
         else:
             raise exception.InvalidShareAccess(
                 reason=(_('Invalid NAS protocol supplied: %s.')
@@ -1760,8 +1807,8 @@ class V3StorageConnection(driver.HuaweiBase):
         self.assert_filesystem(fs_id)
 
         ip = self._get_share_ip(share_server)
-        location = self._get_location_path(share_name, share_proto, ip)
-        return [location]
+        locations = self._get_location_path(share_name, share_proto, ip)
+        return locations
 
     def create_replica(self, context, replica_list, new_replica,
                        access_rules, replica_snapshots, share_server=None):
@@ -1785,7 +1832,7 @@ class V3StorageConnection(driver.HuaweiBase):
 
         # Create a new share
         new_share_name = new_replica['name']
-        location = self.create_share(new_replica, share_server)
+        locations = self.create_share(new_replica, share_server)
 
         # create a replication pair.
         # replication pair only can be created by master node,
@@ -1817,7 +1864,7 @@ class V3StorageConnection(driver.HuaweiBase):
         # Get the state of the new created replica
         replica_state = self.replica_mgr.get_replica_state(replica_pair_id)
         replica_ref = {
-            'export_locations': [location],
+            'export_locations': locations,
             'replica_state': replica_state,
             'access_rules_status': common_constants.STATUS_ACTIVE,
         }
@@ -1854,16 +1901,14 @@ class V3StorageConnection(driver.HuaweiBase):
                           replica['id'])
             raise
 
-        updated_new_active_access = True
-        cleared_old_active_access = True
-
+        new_access_status = common_constants.STATUS_ACTIVE
         try:
             self.update_access(replica, access_rules, [], [], share_server)
         except Exception:
             LOG.warning(_LW('Failed to set access rules to '
                             'new active replica %s.'),
                         replica['id'])
-            updated_new_active_access = False
+            new_access_status = common_constants.SHARE_INSTANCE_RULES_ERROR
 
         old_active_replica = share_utils.get_active_replica(replica_list)
 
@@ -1875,28 +1920,21 @@ class V3StorageConnection(driver.HuaweiBase):
             LOG.warning(_LW("Failed to clear access rules from "
                             "old active replica %s."),
                         old_active_replica['id'])
-            cleared_old_active_access = False
 
         new_active_update = {
             'id': replica['id'],
             'replica_state': common_constants.REPLICA_STATE_ACTIVE,
+            'access_rules_status': new_access_status,
         }
-        new_active_update['access_rules_status'] = (
-            common_constants.STATUS_ACTIVE if updated_new_active_access
-            else common_constants.STATUS_OUT_OF_SYNC)
 
         # get replica state for new secondary after switch over
         replica_state = self.replica_mgr.get_replica_state(replica_pair_id)
-
         old_active_update = {
             'id': old_active_replica['id'],
             'replica_state': replica_state,
         }
-        old_active_update['access_rules_status'] = (
-            common_constants.STATUS_OUT_OF_SYNC if cleared_old_active_access
-            else common_constants.STATUS_ACTIVE)
 
-        return [new_active_update, old_active_update]
+        return [old_active_update, new_active_update]
 
     def delete_replica(self, context, replica_list, replica_snapshots,
                        replica, share_server=None):
@@ -1909,7 +1947,7 @@ class V3StorageConnection(driver.HuaweiBase):
                               'replica': replica['id']})
         else:
             self.replica_mgr.delete_replication_pair(replica_pair_id)
-            
+
             active_replica = share_utils.get_active_replica(replica_list)
             self.private_storage.update(active_replica['id'],
                                         {'replica_pair_id': ''})

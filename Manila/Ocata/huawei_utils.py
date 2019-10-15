@@ -77,3 +77,12 @@ def _get_opts_from_specs(specs):
                     (key in constants.OPTS_ASSOCIATE[scope])):
                 opts[key] = value
     return opts
+
+
+def get_logical_ips(helper):
+    root = helper._read_xml()
+    config = root.findtext('Storage/LogicalPortIP')
+    if not config:
+        return []
+
+    return [i.strip() for i in config.split(';') if i.strip()]
