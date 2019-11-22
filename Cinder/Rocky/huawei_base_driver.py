@@ -752,3 +752,11 @@ class HuaweiBaseDriver(object):
     def _merge_ini_tgt_map(self, loc, rmt):
         for k in rmt:
             loc[k] = loc.get(k, []) + rmt[k]
+
+    def _is_volume_multi_attach_to_same_host(self, volume, connector):
+        attachments = volume.volume_attachment
+        if volume.multiattach and sum(
+                1 for a in attachments if a.connector == connector) > 1:
+            LOG.info("Volume is multi-attach and attached to the same host"
+                     " multiple times")
+            return

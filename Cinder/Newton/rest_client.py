@@ -323,6 +323,8 @@ class RestClient(object):
         data = {"TYPE": "11",
                 "ID": lun_id}
         result = self.call(url, data, "DELETE")
+        if result['error']['code'] == constants.ERROR_LUN_NOT_EXIST:
+            return
         self._assert_rest_result(result, _('Delete lun error.'))
 
     def get_all_pools(self):
@@ -459,6 +461,8 @@ class RestClient(object):
         url = "/snapshot/%s" % snapshotid
         data = {"TYPE": "27", "ID": snapshotid}
         result = self.call(url, data, "DELETE")
+        if result['error']['code'] == constants.ERROR_SNAPSHOT_NOT_EXIST:
+            return
         self._assert_rest_result(result, _('Delete snapshot error.'))
 
     def get_snapshot_id_by_name(self, name):

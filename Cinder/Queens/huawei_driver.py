@@ -396,7 +396,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                     array_info.get("PRODUCTVERSION") >=
                     constants.SUPPORT_WORKLOAD_TYPE_VERSION or
                     array_info.get("PRODUCTVERSION").startswith(
-                        constants.SUPPORT_V6_VERSION))):
+                        constants.SUPPORT_CLONE_PAIR_VERSION))):
                 params['WORKLOADTYPEID'] = constants.DEFAULT_WORKLOAD_TYPE_ID
 
         LOG.info('volume: %(volume)s, lun params: %(params)s.',
@@ -2748,6 +2748,13 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
     @coordination.synchronized('huawei-mapping-{connector[host]}')
     def terminate_connection(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
+        attachments = volume.volume_attachment
+        if volume.multiattach and sum(
+                1 for a in attachments if a.connector == connector) > 1:
+            LOG.info("Volume is multi-attach and attached to the same host"
+                     " multiple times")
+            return
+
         metadata = huawei_utils.get_lun_metadata(volume)
         LOG.info("terminate_connection, metadata is: %s.", metadata)
         self._terminate_connection(volume, connector)
@@ -3007,6 +3014,13 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
     @coordination.synchronized('huawei-mapping-{connector[host]}')
     def terminate_connection(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
+        attachments = volume.volume_attachment
+        if volume.multiattach and sum(
+                1 for a in attachments if a.connector == connector) > 1:
+            LOG.info("Volume is multi-attach and attached to the same host"
+                     " multiple times")
+            return
+
         lun_id, lun_type = self.get_lun_id_and_type(
             volume, constants.VOLUME_NOT_EXISTS_WARN)
 

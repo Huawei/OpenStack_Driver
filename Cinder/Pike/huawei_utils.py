@@ -183,7 +183,7 @@ def get_volume_lun_id(client, volume):
         lun_id = client.get_lun_id_by_name(volume_name)
 
     if not lun_id:
-        lun_id = metadata.get("huawei_lun_id")
+        lun_id = metadata.get('huawei_lun_id')
 
     return lun_id, metadata.get('huawei_lun_wwn')
 

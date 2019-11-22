@@ -397,7 +397,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                     array_info.get("PRODUCTVERSION") >=
                     constants.SUPPORT_WORKLOAD_TYPE_VERSION or
                     array_info.get("PRODUCTVERSION").startswith(
-                        constants.SUPPORT_V6_VERSION))):
+                        constants.SUPPORT_CLONE_PAIR_VERSION))):
                 params['WORKLOADTYPEID'] = constants.DEFAULT_WORKLOAD_TYPE_ID
 
         LOG.info(_LI('volume: %(volume)s, lun params: %(params)s.'),

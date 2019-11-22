@@ -92,6 +92,9 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
         LOG.info('Terminate iscsi connection for volume %(id)s, '
                  'connector info %(conn)s.',
                  {'id': volume.id, 'conn': connector})
+        if self._is_volume_multi_attach_to_same_host(volume, connector):
+            return
+
         metadata = huawei_utils.get_volume_private_data(volume)
         if metadata.get('hypermetro'):
             hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
@@ -191,6 +194,9 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         LOG.info('Terminate FC connection for volume %(id)s, '
                  'connector info %(conn)s.',
                  {'id': volume.id, 'conn': connector})
+        if self._is_volume_multi_attach_to_same_host(volume, connector):
+            return
+
         metadata = huawei_utils.get_volume_private_data(volume)
         if metadata.get('hypermetro'):
             hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
