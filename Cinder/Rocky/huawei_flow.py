@@ -115,7 +115,7 @@ class CreateLunTask(task.Task):
                     array_info.get("PRODUCTVERSION") >=
                     constants.SUPPORT_WORKLOAD_TYPE_VERSION or
                     array_info.get("PRODUCTVERSION").startswith(
-                        constants.SUPPORT_V6_VERSION))):
+                        constants.SUPPORT_CLONE_PAIR_VERSION))):
                 lun_params['WORKLOADTYPEID'] = \
                     constants.DEFAULT_WORKLOAD_TYPE_ID
         return lun_params
@@ -133,8 +133,8 @@ class CreateLunTask(task.Task):
             'PARENTID': pool_id,
             'DESCRIPTION': volume.name,
             'ALLOCTYPE': opts.get('LUNType', self.configuration.lun_type),
-            'CAPACITY': (int(src_size) * constants.CAPACITY_UNIT if src_size
-                         else int(volume.size) * constants.CAPACITY_UNIT),
+            'CAPACITY': int(int(src_size) * constants.CAPACITY_UNIT if src_size
+                            else int(volume.size) * constants.CAPACITY_UNIT),
         }
 
         if opts.get('controllername'):
