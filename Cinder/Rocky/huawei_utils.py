@@ -559,3 +559,25 @@ def is_support_clone_pair(client):
     version_info = array_info['PRODUCTVERSION']
     if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
         return True
+
+
+def need_migrate(volume, host, new_opts, orig_lun_info):
+    if volume.host != host['host']:
+        return True
+    elif ('LUNType' in new_opts and
+          new_opts['LUNType'] != orig_lun_info['ALLOCTYPE']):
+        return True
+    elif (new_opts['compression'] and
+          not (orig_lun_info.get('ENABLECOMPRESSION') == 'true')):
+        return True
+    elif (new_opts['dedup'] and
+          not (orig_lun_info.get('ENABLESMARTDEDUP') == 'true')):
+        return True
+    return False
+
+
+def remove_lun_from_lungroup(client, lun_id):
+    lun_group_ids = client.get_lungroup_ids_by_lun_id(lun_id)
+    if lun_group_ids and len(lun_group_ids) == 1:
+        client.remove_lun_from_lungroup(
+            lun_group_ids[0], lun_id, constants.LUN_TYPE)

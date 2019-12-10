@@ -483,7 +483,7 @@ class TseriesClient(object):
             scope = None
             key_split = key.split(':')
             if len(key_split) > 2 and key_split[0] != "capabilities":
-                    continue
+                continue
 
             if len(key_split) == 1:
                 key = key_split[0]

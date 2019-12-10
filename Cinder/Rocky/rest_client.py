@@ -507,6 +507,18 @@ class LunGroup(CommonObject):
             return
         _assert_result(result, 'Delete lungroup %s error.', lungroup_id)
 
+    def get_lungroup_ids_by_lun_id(self, lun_id, lun_type=constants.LUN_TYPE):
+        result = self.get('/associate?TYPE=256&ASSOCIATEOBJTYPE=%(type)s&'
+                          'ASSOCIATEOBJID=%(id)s', type=lun_type, id=lun_id)
+        _assert_result(result, 'Get lungroup id by lun id %s error.', lun_id)
+
+        lungroup_ids = []
+        if 'data' in result:
+            for item in result['data']:
+                lungroup_ids.append(item['ID'])
+
+        return lungroup_ids
+
 
 class IscsiInitiator(CommonObject):
     _obj_url = '/iscsi_initiator'
@@ -669,8 +681,13 @@ class MappingView(CommonObject):
 class FCInitiator(CommonObject):
     _obj_url = '/fc_initiator'
 
-    def get_fc_initiators(self):
-        result = self.get()
+    def get_fc_initiator_count(self):
+        result = self.get("/count")
+        _assert_result(result, 'Get FC initiator count error.')
+        return int(result['data']['COUNT'])
+
+    def _get_fc_initiator(self, start, end):
+        result = self.get("?range=[%(start)s-%(end)s]", start=start, end=end)
         _assert_result(result, 'Get online free FC wwn error.')
 
         totals = []
@@ -679,6 +696,21 @@ class FCInitiator(CommonObject):
             totals.append(item['ID'])
             if item['RUNNINGSTATUS'] == '27' and item['ISFREE'] == 'true':
                 frees.append(item['ID'])
+        return totals, frees
+
+    def get_fc_initiators(self):
+        fc_initiator_count = self.get_fc_initiator_count()
+        totals = []
+        frees = []
+        range_start = 0
+
+        while fc_initiator_count > 0:
+            range_end = range_start + constants.GET_PATACH_NUM
+            _totals, _frees = self._get_fc_initiator(range_start, range_end)
+            totals += _totals
+            frees += _frees
+            fc_initiator_count -= constants.GET_PATACH_NUM
+            range_start += constants.GET_PATACH_NUM
         return totals, frees
 
     def add_fc_initiator(self, initiator):
@@ -1204,7 +1236,9 @@ def rest_operation_wrapper(func):
         need_relogin = False
 
         if not kwargs.get('log_filter'):
-            LOG.info('URL: %(url)s, Method: %(method)s, Data: %(data)s',
+            LOG.info('\nURL: %(url)s\n'
+                     'Method: %(method)s\n'
+                     'Data: %(data)s\n',
                      {'url': (self._login_url or '') + url,
                       'method': func.__name__,
                       'data': kwargs.get('data')})
@@ -1470,7 +1504,7 @@ class RestClient(object):
 
     def check_feature(self, obj):
         try:
-            result = self.get('/%s/count' % obj)
+            result = self.get('/%s/count' % obj, log_filter=True)
         except requests.HTTPError as exc:
             if exc.response.status_code == 404:
                 return False
