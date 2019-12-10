@@ -720,7 +720,8 @@ class ReplicaPairManager(object):
             if k in local_lun_info:
                 params[k] = local_lun_info[k]
 
-        if "WORKLOADTYPEID" in local_lun_info:
+        if local_lun_info.get("WORKLOADTYPENAME") and local_lun_info.get(
+                "WORKLOADTYPEID"):
             workload_type_name = self.local_client.get_workload_type_name(
                 local_lun_info['WORKLOADTYPEID'])
             rmt_workload_type_id = self.rmt_client.get_workload_type_id(

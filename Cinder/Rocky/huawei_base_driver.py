@@ -33,7 +33,6 @@ from cinder.volume.drivers.huawei import hypermetro
 from cinder.volume.drivers.huawei import replication
 from cinder.volume.drivers.huawei import rest_client
 
-
 LOG = logging.getLogger(__name__)
 
 huawei_opts = [
@@ -205,6 +204,7 @@ class HuaweiBaseDriver(object):
             }
 
             if self.configuration.san_product == "Dorado":
+                pool['thick_provisioning_support'] = False
                 pool['huawei_application_type'] = True
 
             pool_info = self.local_cli.get_pool_by_name(pool_name)
@@ -229,7 +229,7 @@ class HuaweiBaseDriver(object):
             feature_status = self.hypermetro_rmt_cli.get_feature_status()
             if (feature_status.get('HyperMetro') not in
                     constants.AVAILABLE_FEATURE_STATUS):
-                    self.support_capability['HyperMetro'] = False
+                self.support_capability['HyperMetro'] = False
         else:
             self.support_capability['HyperMetro'] = False
 
@@ -238,7 +238,7 @@ class HuaweiBaseDriver(object):
             feature_status = self.replication_rmt_cli.get_feature_status()
             if (feature_status.get('HyperReplication') not in
                     constants.AVAILABLE_FEATURE_STATUS):
-                    self.support_capability['HyperReplication'] = False
+                self.support_capability['HyperReplication'] = False
         else:
             self.support_capability['HyperReplication'] = False
 
@@ -250,13 +250,18 @@ class HuaweiBaseDriver(object):
             for f in feature_status:
                 if re.match(c, f):
                     self.support_capability[c] = (
-                        feature_status[f] in
-                        constants.AVAILABLE_FEATURE_STATUS)
+                            feature_status[f] in
+                            constants.AVAILABLE_FEATURE_STATUS)
                     break
             else:
                 if constants.CHECK_FEATURES[c]:
                     self.support_capability[c] = self.local_cli.check_feature(
                         constants.CHECK_FEATURES[c])
+
+        if self.support_capability["Effective Capacity"]:
+            self.support_capability["SmartDedupe[\s\S]*LUN"] = True
+            self.support_capability["SmartCompression[\s\S]*LUN"] = True
+            del self.support_capability["Effective Capacity"]
 
         self._update_hypermetro_capability()
         self._update_replication_capability()
@@ -269,8 +274,8 @@ class HuaweiBaseDriver(object):
 
         self._stats['pools'] = pools
         self._stats['volume_backend_name'] = (
-            self.configuration.safe_get('volume_backend_name') or
-            self.__class__.__name__)
+                self.configuration.safe_get('volume_backend_name') or
+                self.__class__.__name__)
         self._stats['driver_version'] = self.VERSION
         self._stats['vendor_name'] = 'Huawei'
         self._stats['replication_enabled'] = (
@@ -411,10 +416,13 @@ class HuaweiBaseDriver(object):
             raise exception.VolumeBackendAPIException(data=msg)
 
         new_opts = huawei_utils.get_volume_type_params(new_type)
+        if new_opts['compression'] is None:
+            new_opts['compression'] = (self.configuration.san_product
+                                       == "Dorado")
+        if new_opts['dedup'] is None:
+            new_opts['dedup'] = self.configuration.san_product == "Dorado"
 
-        if (volume.host != host['host'] or
-                ('LUNType' in new_opts and
-                 new_opts['LUNType'] != orig_lun_info['ALLOCTYPE'])):
+        if huawei_utils.need_migrate(volume, host, new_opts, orig_lun_info):
             hypermetro_id, replication_id = huawei_flow.retype_by_migrate(
                 volume, new_opts, host, self.local_cli,
                 self.hypermetro_rmt_cli, self.replication_rmt_cli,
@@ -496,7 +504,8 @@ class HuaweiBaseDriver(object):
         return {'status': fields.GroupStatus.AVAILABLE}
 
     def create_group_from_src(self, context, group, volumes,
-                              snapshots=None, source_vols=None):
+                              group_snapshot=None, snapshots=None,
+                              source_group=None, source_vols=None):
         model_update = self.create_group(context, group)
         volumes_model_update = []
         delete_snapshots = False
@@ -755,7 +764,7 @@ class HuaweiBaseDriver(object):
 
     def _is_volume_multi_attach_to_same_host(self, volume, connector):
         attachments = volume.volume_attachment
-        if volume.multiattach and sum(
+        if volume.multiattach and len(attachments) > 1 and sum(
                 1 for a in attachments if a.connector == connector) > 1:
             LOG.info("Volume is multi-attach and attached to the same host"
                      " multiple times")

@@ -109,15 +109,6 @@ class CreateLunTask(task.Task):
                         "on the array") % opts['applicationname']
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
-        elif self.configuration.san_product == "Dorado":
-            array_info = self.client.get_array_info()
-            if (array_info.get("PRODUCTVERSION") and (
-                    array_info.get("PRODUCTVERSION") >=
-                    constants.SUPPORT_WORKLOAD_TYPE_VERSION or
-                    array_info.get("PRODUCTVERSION").startswith(
-                        constants.SUPPORT_CLONE_PAIR_VERSION))):
-                lun_params['WORKLOADTYPEID'] = \
-                    constants.DEFAULT_WORKLOAD_TYPE_ID
         return lun_params
 
     def execute(self, volume, opts, src_size=None):
@@ -259,7 +250,8 @@ class CreateHyperMetroTask(task.Task):
             lun_params = {k: lun_info[k] for k in lun_keys if k in lun_info}
             lun_params['NAME'] = huawei_utils.encode_name(volume.id)
             lun_params['DESCRIPTION'] = volume.name
-            if "WORKLOADTYPEID" in lun_info:
+            if (lun_info.get("WORKLOADTYPENAME") and
+                    lun_info.get("WORKLOADTYPEID")):
                 workload_type_name = self.loc_client.get_workload_type_name(
                     lun_info['WORKLOADTYPEID'])
                 rmt_workload_type_id = self.rmt_client.get_workload_type_id(
@@ -321,7 +313,8 @@ class CreateReplicationTask(task.Task):
             lun_params = {k: lun_info[k] for k in lun_keys if k in lun_info}
             lun_params['NAME'] = huawei_utils.encode_name(volume.id)
             lun_params['DESCRIPTION'] = volume.name
-            if "WORKLOADTYPEID" in lun_info:
+            if (lun_info.get("WORKLOADTYPENAME") and
+                    lun_info.get("WORKLOADTYPEID")):
                 workload_type_name = self.loc_client.get_workload_type_name(
                     lun_info['WORKLOADTYPEID'])
                 rmt_workload_type_id = self.rmt_client.get_workload_type_id(
@@ -400,9 +393,10 @@ class CheckLunMappedTask(task.Task):
 
     def execute(self, lun_info):
         if lun_info.get('EXPOSEDTOINITIATOR') == 'true':
-            msg = _("LUN %s has been mapped to host.") % lun_info['ID']
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
+            msg = _("LUN %s has been mapped to host. Now force to "
+                    "delete it") % lun_info['ID']
+            LOG.warning(msg)
+            huawei_utils.remove_lun_from_lungroup(self.client, lun_info["ID"])
 
 
 class DeleteHyperMetroTask(task.Task):
@@ -513,7 +507,7 @@ class CreateMigratedLunTask(task.Task):
 
         lun_keys = ('DESCRIPTION', 'ALLOCTYPE', 'CAPACITY', 'WRITEPOLICY',
                     'PREFETCHPOLICY', 'PREFETCHVALUE', 'DATATRANSFERPOLICY',
-                    'OWNINGCONTROLLER', 'WORKLOADTYPEID')
+                    'OWNINGCONTROLLER')
         lun_params = {k: lun_info[k] for k in lun_keys if k in lun_info}
         lun_params['NAME'] = lun_info['NAME'][:-4] + '-mig'
         lun_params['PARENTID'] = pool_id
@@ -521,6 +515,9 @@ class CreateMigratedLunTask(task.Task):
             lun_params['ALLOCTYPE'] = new_lun_type
         if tier_policy:
             lun_params['DATATRANSFERPOLICY'] = tier_policy
+        if lun_info.get("WORKLOADTYPENAME") and lun_info.get(
+                "WORKLOADTYPEID"):
+            lun_params["WORKLOADTYPEID"] = lun_info["WORKLOADTYPEID"]
 
         lun = self.client.create_lun(lun_params)
         return lun['ID'], lun
@@ -870,6 +867,8 @@ class DeleteTempSnapshotTask(task.Task):
 
 
 class ExtendVolumeTask(task.Task):
+    default_provides = 'lun_info'
+
     def __init__(self, client, *args, **kwargs):
         super(ExtendVolumeTask, self).__init__(*args, **kwargs)
         self.client = client
@@ -881,6 +880,8 @@ class ExtendVolumeTask(task.Task):
             LOG.info('Extend LUN %(id)s to size %(new_size)s.',
                      {'id': lun_id,
                       'new_size': new_size})
+            lun_info = self.client.get_lun_info_by_id(lun_id)
+        return lun_info
 
 
 class ExtendHyperMetroTask(task.Task):
@@ -927,14 +928,10 @@ class UpdateLunTask(task.Task):
         compression_check = lun_info.get('ENABLECOMPRESSION') == 'true'
         if not opts['compression'] and compression_check:
             data["ENABLECOMPRESSION"] = 'false'
-        elif opts['compression'] and not compression_check:
-            data["ENABLECOMPRESSION"] = 'true'
 
         dedup_check = lun_info.get('ENABLESMARTDEDUP') == 'true'
         if not opts['dedup'] and dedup_check:
             data["ENABLESMARTDEDUP"] = 'false'
-        elif opts['dedup'] and not dedup_check:
-            data["ENABLESMARTDEDUP"] = 'true'
 
         if (opts.get('policy') and
                 opts['policy'] != lun_info.get('DATATRANSFERPOLICY')):
@@ -1611,10 +1608,11 @@ class ClearLunMappingTask(task.Task):
 class GetFCConnectionTask(task.Task):
     default_provides = ('ini_tgt_map', 'tgt_port_wwns')
 
-    def __init__(self, client, fc_san, *args, **kwargs):
+    def __init__(self, client, fc_san, configuration, *args, **kwargs):
         super(GetFCConnectionTask, self).__init__(*args, **kwargs)
         self.client = client
         self.fc_san = fc_san
+        self.configuration = configuration
 
     def _get_fc_ports(self, wwns):
         contr_map = {}
@@ -1759,7 +1757,20 @@ class GetFCConnectionTask(task.Task):
         initiators = set(wwns) & set(totals)
         invalids = initiators - set(host_initiators) - set(frees)
         if invalids:
-            msg = _("There are invalid initiators %s.") % invalids
+            if (self.configuration.min_fc_ini_online ==
+                    constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE):
+                msg = _("There are invalid initiators %s. If you want to "
+                        "continue to attach volume to host, configure "
+                        "MinFCIniOnline in the XML file.") % invalids
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            initiators = (set(host_initiators) | set(frees)) & wwns
+
+        if len(initiators) < self.configuration.min_fc_ini_online:
+            msg = (("The number of online fc initiator %(wwns)s less than"
+                    " the set number: %(set)s.")
+                   % {"wwns": initiators,
+                      "set": self.configuration.min_fc_ini_online})
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
@@ -2033,11 +2044,11 @@ def create_volume_from_snapshot(
     if (strutils.bool_from_string(metadata.get('fastclone', False)) or
             (metadata.get('fastclone') is None and
              configuration.clone_mode == "fastclone")):
-            work_flow.add(
-                LunClonePreCheckTask(inject={'src_volume': snapshot}),
-                CreateLunCloneTask(local_cli,
-                                   rebind={'src_id': 'snapshot_id'}),
-            )
+        work_flow.add(
+            LunClonePreCheckTask(inject={'src_volume': snapshot}),
+            CreateLunCloneTask(local_cli,
+                               rebind={'src_id': 'snapshot_id'}),
+        )
     elif clone_pair_flag:
         work_flow.add(
             CreateLunTask(local_cli, configuration, feature_support,
@@ -2046,9 +2057,7 @@ def create_volume_from_snapshot(
             CreateClonePairTask(local_cli, feature_support, configuration,
                                 rebind={'source_id': 'snapshot_id',
                                         'target_id': 'lun_id'}),
-            WaitClonePairDoneTask(local_cli, configuration),
-            ExtendVolumeTask(local_cli, inject={
-                "new_size": int(volume.size) * constants.CAPACITY_UNIT}), )
+            WaitClonePairDoneTask(local_cli, configuration),)
     else:
         work_flow.add(
             CreateLunTask(local_cli, configuration, feature_support),
@@ -2057,6 +2066,8 @@ def create_volume_from_snapshot(
             WaitLunCopyDoneTask(local_cli, configuration),)
 
     work_flow.add(
+        ExtendVolumeTask(local_cli, inject={
+            "new_size": int(volume.size) * constants.CAPACITY_UNIT}),
         AddQoSTask(local_cli),
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
@@ -2107,9 +2118,7 @@ def create_volume_from_volume(
             CreateClonePairTask(local_cli, feature_support, configuration,
                                 rebind={'source_id': 'src_id',
                                         'target_id': 'lun_id'}),
-            WaitClonePairDoneTask(local_cli, configuration),
-            ExtendVolumeTask(local_cli, inject={
-                "new_size": int(volume.size) * constants.CAPACITY_UNIT}), )
+            WaitClonePairDoneTask(local_cli, configuration),)
     else:
         work_flow.add(
             CreateTempSnapshotTask(local_cli, feature_support),
@@ -2123,6 +2132,8 @@ def create_volume_from_volume(
         )
 
     work_flow.add(
+        ExtendVolumeTask(local_cli, inject={
+            "new_size": int(volume.size) * constants.CAPACITY_UNIT}),
         AddQoSTask(local_cli),
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
@@ -2429,7 +2440,7 @@ def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
 
     work_flow.add(
         CreateHostTask(client),
-        GetFCConnectionTask(client, fc_san),
+        GetFCConnectionTask(client, fc_san, configuration),
         AddFCInitiatorTask(client, configuration.fc_info),
         CreateHostGroupTask(client),
         CreateLunGroupTask(client),
@@ -2452,7 +2463,7 @@ def initialize_remote_fc_connection(hypermetro_id, connector, fc_san, client,
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
         CreateHostTask(client),
-        GetFCConnectionTask(client, fc_san),
+        GetFCConnectionTask(client, fc_san, configuration),
         AddFCInitiatorTask(client, configuration.hypermetro['fc_info']),
         CreateHostGroupTask(client),
         CreateLunGroupTask(client),

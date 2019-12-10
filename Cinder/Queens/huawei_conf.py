@@ -90,7 +90,8 @@ class HuaweiConf(object):
                           self._lun_copy_speed,
                           self._lun_copy_mode,
                           self._hyper_pair_sync_speed,
-                          self._replication_pair_sync_speed,)
+                          self._replication_pair_sync_speed,
+                          self._get_local_minimum_fc_initiator,)
 
         tree = ET.parse(self.conf.cinder_huawei_conf_file)
         xml_root = tree.getroot()
@@ -555,3 +556,23 @@ class HuaweiConf(object):
         else:
             speed = text.strip()
         setattr(self.conf, 'replica_sync_speed', int(speed))
+
+    def _get_local_minimum_fc_initiator(self, xml_root):
+        text = xml_root.findtext('FC/MinOnlineFCInitiator')
+        minimum_fc_initiator = constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE
+        if text and text.strip() and text.strip().isdigit():
+            try:
+                minimum_fc_initiator = int(text.strip())
+                if minimum_fc_initiator < 0:
+                    msg = (_("Minimum FC initiator number %(num)s cannot"
+                             " be set to a negative number.")
+                           % {"num": minimum_fc_initiator})
+                    LOG.error(msg)
+                    raise exception.InvalidInput(reason=msg)
+            except Exception as err:
+                msg = (_("Minimum FC initiator number %(num)s is set"
+                         " too large, reason is %(err)s")
+                       % {"num": minimum_fc_initiator, "err": err})
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        setattr(self.conf, 'min_fc_ini_online', minimum_fc_initiator)

@@ -37,7 +37,7 @@ PORTGROUP_DESCRIP_PREFIX = "Please do NOT modify this. Engine ID: "
 FC_PORT_CONNECTED = '10'
 FC_INIT_ONLINE = '27'
 FC_PORT_MODE_FABRIC = '0'
-CAPACITY_UNIT = 1024.0 * 1024.0 * 2
+CAPACITY_UNIT = 1024 * 1024 * 2
 DEFAULT_WAIT_TIMEOUT = 3600 * 24 * 30
 DEFAULT_WAIT_INTERVAL = 5
 
@@ -166,10 +166,12 @@ OPTIMAL_MULTIPATH_NUM = 16
 AVAILABLE_FEATURE_STATUS = (1, 2)
 DEDUP_FEATURES = ('SmartDedupe (for LUN)',
                   'SmartDedupe (for LUNsAndFS)',
-                  'SmartDedupe & SmartCompression (for LUN)')
+                  'SmartDedupe & SmartCompression (for LUN)',
+                  'Effective Capacity')
 COMPRESSION_FEATURES = ('SmartCompression (for LUN)',
                         'SmartCompression (for LUNsAndFS)',
-                        'SmartDedupe & SmartCompression (for LUN)')
+                        'SmartDedupe & SmartCompression (for LUN)',
+                        'Effective Capacity')
 
 FEATURES_DICTS = {
     "SmartPartition": "cachepartition",
@@ -181,11 +183,11 @@ FEATURES_DICTS = {
 }
 
 DEFAULT_CLONE_MODE = "luncopy"
-DEFAULT_WORKLOAD_TYPE_ID = 0
-SUPPORT_WORKLOAD_TYPE_VERSION = "V300R001C20"
 
 HYPERMETRO_WAIT_INTERVAL = 5
 CLONE_STATUS_HEALTH = '0'
 CLONE_STATUS_COMPLETE = (CLONE_COMPLETE,) = ('2',)
 CLONE_PAIR_NOT_EXIST = "1073798147"
 SUPPORT_CLONE_PAIR_VERSION = "V600R003C00"
+
+DEFAULT_MINIMUM_FC_INITIATOR_ONLINE = 0
