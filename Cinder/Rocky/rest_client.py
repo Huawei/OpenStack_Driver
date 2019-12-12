@@ -705,12 +705,12 @@ class FCInitiator(CommonObject):
         range_start = 0
 
         while fc_initiator_count > 0:
-            range_end = range_start + constants.GET_PATACH_NUM
+            range_end = range_start + constants.GET_PATCH_NUM
             _totals, _frees = self._get_fc_initiator(range_start, range_end)
             totals += _totals
             frees += _frees
-            fc_initiator_count -= constants.GET_PATACH_NUM
-            range_start += constants.GET_PATACH_NUM
+            fc_initiator_count -= constants.GET_PATCH_NUM
+            range_start += constants.GET_PATCH_NUM
         return totals, frees
 
     def add_fc_initiator(self, initiator):
