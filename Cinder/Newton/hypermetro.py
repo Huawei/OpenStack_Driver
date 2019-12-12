@@ -145,16 +145,16 @@ class HuaweiHyperMetro(object):
         for wwn in wwns:
             if (wwn not in online_wwns_in_host
                     and wwn not in online_free_wwns):
-                wwns_in_host = (
-                    self.rmt_client.get_host_fc_initiators(host_id))
-                iqns_in_host = (
-                    self.rmt_client.get_host_iscsi_initiators(host_id))
-                if not (wwns_in_host or iqns_in_host):
-                    self.rmt_client.remove_host(host_id)
                 wwns.remove(wwn)
 
                 if (self.configuration.rmt_min_fc_ini_online ==
                         constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE):
+                    wwns_in_host = (
+                        self.rmt_client.get_host_fc_initiators(host_id))
+                    iqns_in_host = (
+                        self.rmt_client.get_host_iscsi_initiators(host_id))
+                    if not (wwns_in_host or iqns_in_host):
+                        self.rmt_client.remove_host(host_id)
                     msg = (("Can't add FC initiator %(wwn)s to host %(host)s,"
                             " please check if this initiator has been added "
                             "to other host or isn't present on array.")
