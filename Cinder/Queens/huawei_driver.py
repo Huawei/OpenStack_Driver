@@ -69,7 +69,8 @@ CONF = cfg.CONF
 CONF.register_opts(huawei_opts)
 
 snap_attrs = ('id', 'volume_id', 'volume', 'provider_location', 'metadata')
-vol_attrs = ('id', 'lun_type', 'provider_location', 'metadata')
+vol_attrs = ('id', 'lun_type', 'provider_location', 'metadata',
+             'multiattach', 'volume_attachment')
 Snapshot = collections.namedtuple('Snapshot', snap_attrs)
 Volume = collections.namedtuple('Volume', vol_attrs)
 
@@ -2530,7 +2531,9 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         volume = Volume(id=snapshot.id,
                         provider_location=snapshot.provider_location,
                         lun_type=constants.SNAPSHOT_TYPE,
-                        metadata=None)
+                        metadata=None,
+                        multiattach=False,
+                        volume_attachment=[])
 
         return self.initialize_connection(volume, connector)
 
