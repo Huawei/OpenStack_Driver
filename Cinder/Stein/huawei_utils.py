@@ -425,7 +425,7 @@ def get_lun_info(client, volume):
         lun_info = client.get_lun_info_by_name(volume_name)
 
     if not lun_info and metadata.get('huawei_lun_id'):
-        lun_info = client.get_lun_info_by_id(metadata['huawei_lun_id'])
+        lun_info = client.get_lun_info_filter_id(metadata['huawei_lun_id'])
 
     if lun_info and ('huawei_lun_wwn' in metadata and
                      lun_info.get('WWN') != metadata['huawei_lun_wwn']):

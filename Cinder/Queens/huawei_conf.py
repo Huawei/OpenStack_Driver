@@ -560,19 +560,19 @@ class HuaweiConf(object):
     def _get_local_minimum_fc_initiator(self, xml_root):
         text = xml_root.findtext('FC/MinOnlineFCInitiator')
         minimum_fc_initiator = constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE
+        if text and not text.isdigit():
+            msg = (_("Invalid FC MinOnlineFCInitiator '%s', "
+                     "MinOnlineFCInitiator must be a digit.") % text)
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
         if text and text.strip() and text.strip().isdigit():
             try:
                 minimum_fc_initiator = int(text.strip())
-                if minimum_fc_initiator < 0:
-                    msg = (_("Minimum FC initiator number %(num)s cannot"
-                             " be set to a negative number.")
-                           % {"num": minimum_fc_initiator})
-                    LOG.error(msg)
-                    raise exception.InvalidInput(reason=msg)
             except Exception as err:
                 msg = (_("Minimum FC initiator number %(num)s is set"
                          " too large, reason is %(err)s")
-                       % {"num": minimum_fc_initiator, "err": err})
+                       % {"num": text.strip(), "err": err})
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
         setattr(self.conf, 'min_fc_ini_online', minimum_fc_initiator)

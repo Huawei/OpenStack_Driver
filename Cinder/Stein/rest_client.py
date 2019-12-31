@@ -173,6 +173,12 @@ class Lun(CommonObject):
         _assert_result(result, 'Get lun info by id %s error.', lun_id)
         return result['data']
 
+    def get_lun_info_filter_id(self, lun_id):
+        result = self.get("?filter=ID::%(lun_id)s", lun_id=lun_id)
+        _assert_result(result, 'Get lun info filter id %s error.', lun_id)
+        if result.get('data'):
+            return result['data'][0]
+
     def get_lun_host_lun_id(self, host_id, lun_id):
         result = self.get(
             "/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%(id)s", id=host_id)

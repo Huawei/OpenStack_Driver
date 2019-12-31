@@ -261,7 +261,7 @@ class HuaweiBaseDriver(object):
         if self.support_capability["Effective Capacity"]:
             self.support_capability["SmartDedupe[\s\S]*LUN"] = True
             self.support_capability["SmartCompression[\s\S]*LUN"] = True
-            del self.support_capability["Effective Capacity"]
+        del self.support_capability["Effective Capacity"]
 
         self._update_hypermetro_capability()
         self._update_replication_capability()
@@ -720,7 +720,7 @@ class HuaweiBaseDriver(object):
         if local_mapping['hostlun_id'] == remote_mapping['hostlun_id']:
             return local_mapping['hostlun_id']
 
-        for i in xrange(1, 512):
+        for i in range(1, 512):
             if i in loc_aval_host_lun_ids and i in rmt_aval_host_lun_ids:
                 same_host_lun_id = i
                 break
