@@ -2997,8 +2997,8 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                         iqns_in_host = (
                             self.client.get_host_iscsi_initiators(host_id))
                         if not (wwns_in_host or iqns_in_host or
-                           self.client.is_host_associated_to_hostgroup(
-                               host_id)):
+                                self.client.is_host_associated_to_hostgroup(
+                                    host_id)):
                             self.client.remove_host(host_id)
                         msg = ("There is an Fc initiator in an invalid "
                                "state. If you want to continue to attach "
