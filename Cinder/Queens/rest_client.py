@@ -338,6 +338,16 @@ class RestClient(object):
         if result.get('data'):
             return result['data'][0]
 
+    @staticmethod
+    def _get_capacity_info(info, pool):
+        info['CAPACITY'] = pool.get('DATASPACE', pool['USERFREECAPACITY'])
+        info['TOTALCAPACITY'] = pool['USERTOTALCAPACITY']
+        if 'totalSizeWithoutSnap' in pool:
+            info['LUNCONFIGEDCAPACITY'] = pool['totalSizeWithoutSnap']
+        elif 'LUNCONFIGEDCAPACITY' in pool:
+            info['LUNCONFIGEDCAPACITY'] = pool['LUNCONFIGEDCAPACITY']
+        return info
+
     def get_pool_info(self, pool_name=None, pools=None):
         info = {}
         if not pool_name:
@@ -351,11 +361,10 @@ class RestClient(object):
                 break
 
             info['ID'] = pool.get('ID')
-            info['CAPACITY'] = pool.get('DATASPACE', pool['USERFREECAPACITY'])
-            info['TOTALCAPACITY'] = pool.get('USERTOTALCAPACITY')
             info['TIER0CAPACITY'] = pool.get('TIER0CAPACITY')
             info['TIER1CAPACITY'] = pool.get('TIER1CAPACITY')
             info['TIER2CAPACITY'] = pool.get('TIER2CAPACITY')
+            self._get_capacity_info(info, pool)
 
         return info
 
@@ -1195,6 +1204,12 @@ class RestClient(object):
             pool_capacity['total_capacity'] = total
             pool_capacity['free_capacity'] = free
 
+            configed_capacity = pool_info.get('LUNCONFIGEDCAPACITY')
+            if configed_capacity:
+                provisioned = float(
+                    configed_capacity) / constants.CAPACITY_UNIT
+                pool_capacity['provisioned_capacity'] = provisioned
+
         return pool_capacity
 
     def _get_disk_type(self, pool_name, result):
@@ -1332,6 +1347,9 @@ class RestClient(object):
                     'max_over_subscription_ratio'),
                 smarttier=tier_support
             ))
+            if capacity.get('provisioned_capacity'):
+                pool['provisioned_capacity_gb'] = capacity[
+                    'provisioned_capacity']
             if disk_type:
                 pool['disk_type'] = disk_type
 

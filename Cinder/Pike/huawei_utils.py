@@ -141,9 +141,19 @@ def get_lun_metadata(volume):
     if not volume.provider_location:
         return {}
 
-    info = json.loads(volume.provider_location)
+    try:
+        info = json.loads(volume.provider_location)
+    except Exception as err:
+        LOG.warning("get_lun_metadata get provider_location error, params: "
+                    "%(loc)s, reason: %(err)s",
+                    {"loc": volume.provider_location, "err": err})
+        return {}
+
     if isinstance(info, dict):
-        return info
+        if "huawei" in volume.provider_location:
+            return info
+        else:
+            return {}
 
     # To keep compatible with old driver version
     admin_metadata = get_admin_metadata(volume)

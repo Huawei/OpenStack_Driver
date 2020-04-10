@@ -346,9 +346,12 @@ def get_volume_private_data(volume):
         return {}
 
     if isinstance(info, dict):
-        info['hypermetro'] = (info.get('hypermetro_id')
-                              or info.get('hypermetro'))
-        return info
+        if "huawei" in volume.provider_location:
+            info['hypermetro'] = (info.get('hypermetro_id')
+                                  or info.get('hypermetro'))
+            return info
+        else:
+            return {}
 
     # To keep compatible with old driver version
     return {'huawei_lun_id': six.text_type(info),
