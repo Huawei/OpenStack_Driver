@@ -150,8 +150,14 @@ class HuaweiBaseDriver(object):
         """Get free capacity and total capacity of the pool."""
         free = pool_info.get('DATASPACE', pool_info['USERFREECAPACITY'])
         total = pool_info.get('USERTOTALCAPACITY')
+        provisioned = 0
+        if 'totalSizeWithoutSnap' in pool_info:
+            provisioned = pool_info['totalSizeWithoutSnap']
+        elif 'LUNCONFIGEDCAPACITY' in pool_info:
+            provisioned = pool_info['LUNCONFIGEDCAPACITY']
         return (float(total) / constants.CAPACITY_UNIT,
-                float(free) / constants.CAPACITY_UNIT)
+                float(free) / constants.CAPACITY_UNIT,
+                float(provisioned) / constants.CAPACITY_UNIT)
 
     def _get_disk_type(self, pool_info):
         """Get disk type of the pool."""
@@ -209,7 +215,8 @@ class HuaweiBaseDriver(object):
 
             pool_info = self.local_cli.get_pool_by_name(pool_name)
             if pool_info:
-                total_capacity, free_capacity = self._get_capacity(pool_info)
+                total_capacity, free_capacity, provisioned_capacity = (
+                    self._get_capacity(pool_info))
                 disk_type = self._get_disk_type(pool_info)
                 tier_support = self._get_smarttier(disk_type)
 
@@ -217,6 +224,8 @@ class HuaweiBaseDriver(object):
                 pool['free_capacity_gb'] = free_capacity
                 pool['smarttier'] = (self.support_capability['SmartTier'] and
                                      tier_support)
+                if provisioned_capacity:
+                    pool['provisioned_capacity_gb'] = provisioned_capacity
                 if disk_type:
                     pool['disk_type'] = disk_type
 

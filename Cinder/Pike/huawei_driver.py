@@ -342,8 +342,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                               "replication_type='<in> sync' or "
                               "'<in> async'.")
                 else:
-                    LOG.error("Extra specs must be specified as "
-                              "capabilities:%s='<is> True'.", key)
+                    LOG.warning("Extra specs must be specified as "
+                                "capabilities:%s='<is> True'.", key)
 
             if ((scope in opts_capability)
                     and (key in opts_value)
@@ -816,12 +816,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         if not lun_id:
             return
 
-        if self.support_func.get('QoS_support'):
-            qos_id = self.client.get_qosid_by_lunid(lun_id)
-            if qos_id:
-                smart_qos = smartx.SmartQos(self.client)
-                smart_qos.remove(qos_id, lun_id)
-
+        qos_id = self.client.get_qosid_by_lunid(lun_id)
+        if qos_id:
+            smart_qos = smartx.SmartQos(self.client)
+            smart_qos.remove(qos_id, lun_id)
         self._delete_volume(volume, lun_id)
 
     def _delete_lun_with_check(self, lun_id, lun_wwn=None):
@@ -829,11 +827,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             return
 
         if self.client.check_lun_exist(lun_id, lun_wwn):
-            if self.support_func.get('QoS_support'):
-                qos_id = self.client.get_qosid_by_lunid(lun_id)
-                if qos_id:
-                    smart_qos = smartx.SmartQos(self.client)
-                    smart_qos.remove(qos_id, lun_id)
+            qos_id = self.client.get_qosid_by_lunid(lun_id)
+            if qos_id:
+                smart_qos = smartx.SmartQos(self.client)
+                smart_qos.remove(qos_id, lun_id)
 
             self.client.delete_lun(lun_id)
 

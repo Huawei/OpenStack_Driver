@@ -342,8 +342,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                               "replication_type='<in> sync' or "
                               "'<in> async'.")
                 else:
-                    LOG.error("Extra specs must be specified as "
-                              "capabilities:%s='<is> True'.", key)
+                    LOG.warning("Extra specs must be specified as "
+                                "capabilities:%s='<is> True'.", key)
 
             if ((scope in opts_capability)
                     and (key in opts_value)
