@@ -224,7 +224,7 @@ class HuaweiBaseDriver(object):
                 pool['free_capacity_gb'] = free_capacity
                 pool['smarttier'] = (self.support_capability['SmartTier'] and
                                      tier_support)
-                if provisioned_capacity:
+                if provisioned_capacity is not None:
                     pool['provisioned_capacity_gb'] = provisioned_capacity
                 if disk_type:
                     pool['disk_type'] = disk_type
@@ -527,7 +527,8 @@ class HuaweiBaseDriver(object):
                     'provider_location': src_vol.provider_location,
                 }
                 snapshot_kwargs = {'id': six.text_type(uuid.uuid4()),
-                                   'volume': objects.Volume(**vol_kwargs)}
+                                   'volume': objects.Volume(**vol_kwargs),
+                                   'volume_size': src_vol.size}
                 snapshot = objects.Snapshot(**snapshot_kwargs)
                 snapshots.append(snapshot)
 

@@ -2231,6 +2231,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 snapshot_kwargs = {
                     'id': six.text_type(uuid.uuid4()),
                     'volume': objects.Volume(**vol_kwargs),
+                    'volume_size': src_vol.size
                 }
                 snapshot = objects.Snapshot(**snapshot_kwargs)
                 snapshots.append(snapshot)

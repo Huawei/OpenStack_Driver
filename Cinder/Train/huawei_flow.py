@@ -1405,6 +1405,20 @@ class CreateMappingViewTask(task.Task):
         super(CreateMappingViewTask, self).__init__(*args, **kwargs)
         self.client = client
 
+    def _get_hostlun_id(self, func, host_id, lun_id):
+        hostlun_id = func(host_id, lun_id)
+        if hostlun_id is None:
+            import time
+            time.sleep(3)
+            hostlun_id = func(host_id, lun_id)
+
+        if hostlun_id is None:
+            msg = _("Can not get hostlun id. Maybe the storage is busy, "
+                    "Please try it later")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+        return hostlun_id
+
     def execute(self, lun_id, lun_type, host_id, hostgroup_id, lungroup_id,
                 portgroup_id=None):
         mappingview_name = constants.MAPPING_VIEW_PREFIX + host_id
@@ -1418,9 +1432,11 @@ class CreateMappingViewTask(task.Task):
                 mappingview_id, portgroup_id)
 
         if lun_type == constants.LUN_TYPE:
-            hostlun_id = self.client.get_lun_host_lun_id(host_id, lun_id)
+            hostlun_id = self._get_hostlun_id(
+                self.client.get_lun_host_lun_id, host_id, lun_id)
         else:
-            hostlun_id = self.client.get_snapshot_host_lun_id(host_id, lun_id)
+            hostlun_id = self._get_hostlun_id(
+                self.client.get_snapshot_host_lun_id, host_id, lun_id)
 
         mappingview_info = self.client.get_mappingview_by_id(mappingview_id)
         aval_host_lun_ids = json.loads(

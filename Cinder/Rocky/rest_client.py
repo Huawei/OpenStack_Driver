@@ -1255,13 +1255,16 @@ def rest_operation_wrapper(func):
                 old_token = self._session.headers.get('iBaseToken')
                 try:
                     r = func(self, full_url, **kwargs)
-                except requests.RequestException:
-                    LOG.exception('Request URL: %(url)s, method: %(method)s '
-                                  'failed at first time. Will switch login '
-                                  'url and retry this request.',
-                                  {'url': full_url,
-                                   'method': func.__name__})
-                    need_relogin = True
+                except requests.RequestException as err:
+                    if "BadStatusLine" in six.text_type(err):
+                        need_relogin = True
+                    else:
+                        LOG.exception(
+                            'Request URL: %(url)s, method: %(method)s failed '
+                            'at first time. Will switch login url and retry '
+                            'this request.',
+                            {'url': full_url, 'method': func.__name__})
+                        need_relogin = True
                 else:
                     r.raise_for_status()
                     result = r.json()
@@ -1310,6 +1313,13 @@ class RestClient(object):
         self._session_lock = lockutils.ReaderWriterLock()
         self._session = None
         self._init_object_methods()
+
+        if not self.ssl_verify and hasattr(requests, 'packages'):
+            LOG.warning("Suppressing requests library SSL Warnings")
+            requests.packages.urllib3.disable_warnings(
+                requests.packages.urllib3.exceptions.InsecureRequestWarning)
+            requests.packages.urllib3.disable_warnings(
+                requests.packages.urllib3.exceptions.InsecurePlatformWarning)
 
     def _extract_obj_method(self, obj):
         filter_method_names = ('login', 'get', 'post', 'delete', 'put')
