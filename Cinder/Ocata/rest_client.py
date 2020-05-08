@@ -124,6 +124,10 @@ class RestClient(object):
         try:
             res = func(url, **kwargs)
         except Exception as exc:
+            if "BadStatusLine" in six.text_type(exc):
+                return {"error": {
+                    "code": constants.ERROR_BAD_STATUS_LINE,
+                    "description": "BadStatusLine."}}
             LOG.exception(_LE('Bad response from server: %(url)s.'
                               ' Error: %(err)s'),
                           {'url': url, 'err': six.text_type(exc)})
@@ -241,7 +245,8 @@ class RestClient(object):
 
         error_code = result['error']['code']
         if (error_code == constants.ERROR_CONNECT_TO_SERVER
-                or error_code == constants.ERROR_UNAUTHORIZED_TO_SERVER):
+                or error_code == constants.ERROR_UNAUTHORIZED_TO_SERVER
+                or error_code == constants.ERROR_BAD_STATUS_LINE):
             LOG.error(_LE("Can't open the recent url, relogin."))
             with self.call_lock.write_lock():
                 relogin_result = self.relogin(old_token)
@@ -1352,7 +1357,7 @@ class RestClient(object):
                     'max_over_subscription_ratio'),
                 smarttier=tier_support
             ))
-            if capacity.get('provisioned_capacity'):
+            if capacity.get('provisioned_capacity') is not None:
                 pool['provisioned_capacity_gb'] = capacity[
                     'provisioned_capacity']
             if disk_type:
