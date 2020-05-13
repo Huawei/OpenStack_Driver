@@ -147,7 +147,7 @@ class HuaweiHyperMetro(object):
                     and wwn not in online_free_wwns):
                 wwns.remove(wwn)
 
-                if (self.configuration.rmt_min_fc_ini_online ==
+                if (self.configuration.min_fc_ini_online ==
                         constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE):
                     wwns_in_host = (
                         self.rmt_client.get_host_fc_initiators(host_id))
@@ -162,11 +162,11 @@ class HuaweiHyperMetro(object):
                     LOG.error(msg)
                     raise exception.VolumeBackendAPIException(data=msg)
 
-        if len(wwns) < self.configuration.rmt_min_fc_ini_online:
+        if len(wwns) < self.configuration.min_fc_ini_online:
             msg = (("The number of online fc initiator %(wwns)s less than"
                     " the set %(set)s number.") % {
                 "wwns": wwns,
-                "set": self.configuration.rmt_min_fc_ini_online})
+                "set": self.configuration.min_fc_ini_online})
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
