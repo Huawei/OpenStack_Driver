@@ -211,20 +211,38 @@ class RestClient(object):
 
         When batch apporation failed
         """
-        if (self.url is None
-                or old_token == self.session.headers.get('iBaseToken')):
-            old_url = self.url
+        old_url = self.url
+        if self.url is None:
             try:
                 self.login()
-            except Exception:
+            except Exception as err:
+                LOG.error("Relogin failed. Error: %s.", err)
                 return False
-            LOG.info(_LI('Replace URL: \n'
-                         'Old URL: %(old_url)s\n,'
-                         'New URL: %(new_url)s\n.'),
+            LOG.info('Relogin: \n'
+                     'Replace URL: \n'
+                     'Old URL: %(old_url)s\n,'
+                     'New URL: %(new_url)s\n.',
+                     {'old_url': old_url,
+                      'new_url': self.url})
+        elif old_token == self.session.headers['iBaseToken']:
+            try:
+                self.logout()
+            except Exception as err:
+                LOG.warning('Logout failed. Error: %s.', err)
+
+            try:
+                self.login()
+            except Exception as err:
+                LOG.error("Relogin failed. Error: %s.", err)
+                return False
+            LOG.info('First logout then login: \n'
+                     'Replace URL: \n'
+                     'Old URL: %(old_url)s\n,'
+                     'New URL: %(new_url)s\n.',
                      {'old_url': old_url,
                       'new_url': self.url})
         else:
-            LOG.info(_LI('Relogin has been successed by other thread.'))
+            LOG.info('Relogin has been successed by other thread.')
         return True
 
     def call(self, url, data=None, method=None, filter_flag=False):
