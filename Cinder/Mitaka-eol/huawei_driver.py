@@ -2706,17 +2706,14 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         portgroup_id = None
         view_id = None
         left_lunnum = -1
-        portgroup = client.find_portgroup_info(
-            initiator_name, host_name)
 
-        if portgroup:
-            portgroup_id = client.get_tgt_port_group(portgroup)
         host_id = huawei_utils.get_host_id(client, host_name)
         if host_id:
             mapping_view_name = constants.MAPPING_VIEW_PREFIX + host_id
             view_id = client.find_mapping_view(mapping_view_name)
             if view_id:
                 lungroup_id = client.find_lungroup_from_map(view_id)
+				portgroup_id = client.get_portgroup_by_view(view_id)
 
         # Remove lun from lungroup.
         if lun_id and lungroup_id:
