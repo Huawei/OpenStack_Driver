@@ -115,7 +115,8 @@ class HuaweiNasDriver(driver.ShareDriver):
         s_pools = []
         pools = self.helper.get_all_pools()
         for pool in pools:
-            if pool.get('USAGETYPE') == constants.FILE_SYSTEM_POOL_TYPE:
+            if pool.get('USAGETYPE') in (constants.FILE_SYSTEM_POOL_TYPE,
+                                         constants.DORADO_V6_POOL_TYPE):
                 s_pools.append(pool['NAME'])
 
         for pool_name in self.configuration.storage_pools:
@@ -550,7 +551,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         data = {
             'share_backend_name': backend_name or 'HUAWEI_NAS_Driver',
             'vendor_name': 'Huawei',
-            'driver_version': '1.3',
+            'driver_version': '2.2.RC1',
             'storage_protocol': 'NFS_CIFS',
             'snapshot_support': (self.feature_supports['HyperSnap']
                                  and self.configuration.snapshot_support),
@@ -1161,8 +1162,7 @@ class HuaweiNasDriver(driver.ShareDriver):
             LOG.error(msg)
             raise exception.InvalidShare(reason=msg)
 
-        snapshot_id = huawei_utils.snapshot_id(
-            fs_info['ID'], snapshot['provider_location'])
+        snapshot_id = fs_info['ID'] + "@" + snapshot['provider_location']
         snapshot_info = self.helper.get_snapshot_by_id(snapshot_id)
         if snapshot_info['HEALTHSTATUS'] != constants.STATUS_SNAPSHOT_HEALTH:
             msg = _("Snapshot %s is abnormal, cannot import.") % snapshot_id
@@ -1334,6 +1334,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                     "HOMEPORTTYPE": home_port_type,
                     "NAME": ip,
                     "OPERATIONALSTATUS": True,
+                    "SUPPORTPROTOCOL": 3,
                     }
             if ip_type == 4:
                 data.update({"ADDRESSFAMILY": 0,
@@ -1510,7 +1511,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         # Get the state of the new created replica
         replica_state = self.replica_mgr.get_replica_state(local_pair_id)
         replica_ref = {
-            'export_locations': [location],
+            'export_locations': location,
             'replica_state': replica_state,
         }
 

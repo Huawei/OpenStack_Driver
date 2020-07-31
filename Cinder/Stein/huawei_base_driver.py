@@ -51,7 +51,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "1.0.0"
+    VERSION = "2.2.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -104,8 +104,9 @@ class HuaweiBaseDriver(object):
         def _check_storage_pools(client, config_pools):
             pools = client.get_all_pools()
             pool_names = [p['NAME'] for p in pools if
-                          p.get('USAGETYPE', constants.BLOCK_POOL_TYPE) ==
-                          constants.BLOCK_POOL_TYPE]
+                          p.get('USAGETYPE', constants.BLOCK_POOL_TYPE) in
+                          (constants.BLOCK_POOL_TYPE,
+                           constants.DORADO_V6_POOL_TYPE)]
 
             for pool_name in config_pools:
                 if pool_name not in pool_names:
@@ -243,13 +244,16 @@ class HuaweiBaseDriver(object):
             self.support_capability['HyperMetro'] = False
 
     def _update_replication_capability(self):
+        self.support_capability['RemoteHyperReplication'] = False
         if self.replication_rmt_cli:
             feature_status = self.replication_rmt_cli.get_feature_status()
-            if (feature_status.get('HyperReplication') not in
+            if (feature_status.get('HyperReplication') in
                     constants.AVAILABLE_FEATURE_STATUS):
-                self.support_capability['HyperReplication'] = False
-        else:
-            self.support_capability['HyperReplication'] = False
+                self.support_capability['RemoteHyperReplication'] = True
+
+        self.support_capability['HyperReplication'] = (
+            self.support_capability['RemoteHyperReplication'] and
+            self.support_capability['HyperReplication'])
 
     def _update_support_capability(self):
         feature_status = self.local_cli.get_feature_status()
@@ -270,7 +274,6 @@ class HuaweiBaseDriver(object):
         if self.support_capability["Effective Capacity"]:
             self.support_capability["SmartDedupe[\s\S]*LUN"] = True
             self.support_capability["SmartCompression[\s\S]*LUN"] = True
-        del self.support_capability["Effective Capacity"]
 
         self._update_hypermetro_capability()
         self._update_replication_capability()
@@ -288,6 +291,7 @@ class HuaweiBaseDriver(object):
         self._stats['driver_version'] = self.VERSION
         self._stats['vendor_name'] = 'Huawei'
         self._stats['replication_enabled'] = (
+            self.support_capability['RemoteHyperReplication'] and
             self.support_capability['HyperReplication'])
         if self._stats['replication_enabled']:
             self._stats['replication_targets'] = (

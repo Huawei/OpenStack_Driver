@@ -1389,7 +1389,8 @@ class RestClient(object):
         s_pools = []
         for pool in result:
             if 'USAGETYPE' in pool:
-                if pool['USAGETYPE'] == constants.BLOCK_STORAGE_POOL_TYPE:
+                if pool['USAGETYPE'] in (constants.BLOCK_STORAGE_POOL_TYPE,
+                                         constants.DORADO_V6_POOL_TYPE):
                     s_pools.append(pool['NAME'])
             else:
                 s_pools.append(pool['NAME'])

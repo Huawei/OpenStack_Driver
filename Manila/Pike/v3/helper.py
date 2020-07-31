@@ -254,12 +254,8 @@ class RestHelper(object):
             filepath = {
                 "SHAREPATH": share_path,
                 "DESCRIPTION": "",
-                "ABEENABLE": "false",
-                "ENABLENOTIFY": "true",
-                "ENABLEOPLOCK": "true",
                 "NAME": share_name.replace("-", "_"),
                 "FSID": fs_id,
-                "TENANCYID": "0",
             }
         else:
             raise exception.InvalidShare(
@@ -301,7 +297,8 @@ class RestHelper(object):
         poolinfo = {}
         pool_name = pool_name.strip()
         for item in result.get('data', []):
-            if pool_name == item['NAME'] and '2' == item['USAGETYPE']:
+            if pool_name == item['NAME'] and item['USAGETYPE'] in (constants.FILE_SYSTEM_POOL_TYPE,
+                                         constants.DORADO_V6_POOL_TYPE):
                 poolinfo['name'] = pool_name
                 poolinfo['ID'] = item['ID']
                 poolinfo['CAPACITY'] = item['USERFREECAPACITY']
@@ -756,8 +753,8 @@ class RestHelper(object):
         fs_result = result['data']
         fs_result.update(
             {"POOLNAME": fs_result.pop("PARENTNAME"),
-             "COMPRESSION": fs_result.pop("ENABLECOMPRESSION"),
-             "DEDUP": fs_result.pop("ENABLEDEDUP"),
+             "COMPRESSION": fs_result.pop("ENABLECOMPRESSION", "false"),
+             "DEDUP": fs_result.pop("ENABLEDEDUP", "false"),
              "SMARTPARTITIONID": fs_result.pop("CACHEPARTITIONID"),
              "SMARTCACHEID": fs_result.pop("SMARTCACHEPARTITIONID")})
         return fs_result

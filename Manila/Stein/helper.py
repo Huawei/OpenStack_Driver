@@ -271,7 +271,7 @@ class RestHelper(object):
 
         accesses = self.get_all_share_access(share_id, share_proto, vstore_id)
         for access in accesses:
-            if access['NAME'] == access_to:
+            if access['NAME'] in (access_to, '@' + access_to):
                 return access
 
     def _get_share_access_count(self, share_id, share_proto, vstore_id=None):

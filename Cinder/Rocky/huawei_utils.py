@@ -579,8 +579,13 @@ def need_migrate(volume, host, new_opts, orig_lun_info):
     return False
 
 
-def remove_lun_from_lungroup(client, lun_id):
+def remove_lun_from_lungroup(client, lun_id, force_delete_volume):
     lun_group_ids = client.get_lungroup_ids_by_lun_id(lun_id)
-    if lun_group_ids and len(lun_group_ids) == 1:
-        client.remove_lun_from_lungroup(
-            lun_group_ids[0], lun_id, constants.LUN_TYPE)
+    if lun_group_ids:
+        if force_delete_volume:
+            for lun_group_id in lun_group_ids:
+                client.remove_lun_from_lungroup(lun_group_id, lun_id,
+                                                constants.LUN_TYPE)
+        elif len(lun_group_ids) == 1:
+            client.remove_lun_from_lungroup(lun_group_ids[0], lun_id,
+                                            constants.LUN_TYPE)

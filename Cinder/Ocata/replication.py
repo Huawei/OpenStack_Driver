@@ -845,6 +845,8 @@ class ReplicaPairManager(object):
 
     def _delete_rmt_lun(self, lun_id):
         if lun_id and self.rmt_client.check_lun_exist(lun_id):
+            huawei_utils.remove_lun_from_lungroup(
+                self.rmt_client, lun_id, self.conf.force_delete_volume)
             self.rmt_client.delete_lun(lun_id)
 
     def delete_replica(self, volume, replication_driver_data=None):

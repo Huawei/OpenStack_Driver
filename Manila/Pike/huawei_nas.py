@@ -70,6 +70,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         1.3 - Add manage snapshot.
               Support reporting disk type of pool.
               Add replication support.
+        2.2.RC1 - Adapt to Dorado V6 NAS
     """
 
     def __init__(self, *args, **kwargs):
@@ -218,7 +219,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         data = dict(
             share_backend_name=backend_name or 'HUAWEI_NAS_Driver',
             vendor_name='Huawei',
-            driver_version='1.3',
+            driver_version='2.2.RC1',
             storage_protocol='NFS_CIFS',
             qos=True,
             total_capacity_gb=0.0,

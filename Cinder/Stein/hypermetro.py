@@ -133,7 +133,8 @@ class HuaweiHyperMetro(object):
     def __init__(self, local_cli, remote_cli, configs):
         self.local_cli = local_cli
         self.remote_cli = remote_cli
-        self.configs = configs
+        self.configs = configs.hypermetro
+        self.configuration = configs
 
     def create_hypermetro(self, local_lun_id, lun_params, is_sync):
         LOG.info('To create hypermetro for local lun %s', local_lun_id)
@@ -157,7 +158,8 @@ class HuaweiHyperMetro(object):
 
         if hypermetro:
             huawei_utils.remove_lun_from_lungroup(
-                self.remote_cli, hypermetro['REMOTEOBJID'])
+                self.remote_cli, hypermetro['REMOTEOBJID'],
+                self.configuration.force_delete_volume)
             if (hypermetro['RUNNINGSTATUS'] in (
                     constants.METRO_RUNNING_NORMAL,
                     constants.METRO_RUNNING_SYNC)):

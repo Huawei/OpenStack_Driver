@@ -387,16 +387,19 @@ class GetLunIDTask(task.Task):
 
 
 class CheckLunMappedTask(task.Task):
-    def __init__(self, client, *args, **kwargs):
+    def __init__(self, client, configuration, *args, **kwargs):
         super(CheckLunMappedTask, self).__init__(*args, **kwargs)
         self.client = client
+        self.configuration = configuration
 
     def execute(self, lun_info):
         if lun_info.get('EXPOSEDTOINITIATOR') == 'true':
             msg = _("LUN %s has been mapped to host. Now force to "
                     "delete it") % lun_info['ID']
             LOG.warning(msg)
-            huawei_utils.remove_lun_from_lungroup(self.client, lun_info["ID"])
+            huawei_utils.remove_lun_from_lungroup(
+                self.client, lun_info["ID"],
+                self.configuration.force_delete_volume)
 
 
 class DeleteHyperMetroTask(task.Task):
@@ -1986,14 +1989,14 @@ def create_volume(volume, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
         CreateHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro,
+            local_cli, hypermetro_rmt_cli, configuration,
             is_sync=False),
         AddHyperMetroGroupTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         CreateReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
         AddReplicationGroupTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -2012,11 +2015,12 @@ def delete_volume(volume, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
     work_flow = linear_flow.Flow('delete_volume')
     work_flow.add(
         CheckLunExistTask(local_cli),
-        CheckLunMappedTask(local_cli),
+        CheckLunMappedTask(local_cli,
+                           configuration),
         DeleteReplicationTask(local_cli, replication_rmt_cli,
-                              configuration.replication),
+                              configuration),
         DeleteHyperMetroTask(local_cli, hypermetro_rmt_cli,
-                             configuration.hypermetro),
+                             configuration),
         DeletePartitionTask(local_cli),
         DeleteCacheTask(local_cli),
         DeleteQoSTask(local_cli),
@@ -2088,13 +2092,13 @@ def create_volume_from_snapshot(
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
         CreateHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         AddHyperMetroGroupTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         CreateReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
         AddReplicationGroupTask(
-            local_cli, replication_rmt_cli, configuration.replication),)
+            local_cli, replication_rmt_cli, configuration),)
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
     engine.run()
@@ -2154,13 +2158,13 @@ def create_volume_from_volume(
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
         CreateHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         AddHyperMetroGroupTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         CreateReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
         AddReplicationGroupTask(
-            local_cli, replication_rmt_cli, configuration.replication),)
+            local_cli, replication_rmt_cli, configuration),)
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
     engine.run()
@@ -2231,13 +2235,13 @@ def retype(volume, new_opts, local_cli, hypermetro_rmt_cli,
         UpdateCacheTask(local_cli),
         UpdatePartitionTask(local_cli),
         DeleteHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         DeleteReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
         CreateHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         CreateReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -2264,10 +2268,10 @@ def retype_by_migrate(volume, new_opts, host, local_cli, hypermetro_rmt_cli,
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
         CreateHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro,
+            local_cli, hypermetro_rmt_cli, configuration,
             rebind={'lun_info': 'tgt_lun_info'}),
         CreateReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication,
+            local_cli, replication_rmt_cli, configuration,
             rebind={'lun_info': 'tgt_lun_info'}),
     )
 
@@ -2294,13 +2298,13 @@ def manage_existing(volume, existing_ref, local_cli, hypermetro_rmt_cli,
         UpdateCacheTask(local_cli),
         UpdatePartitionTask(local_cli),
         DeleteHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         DeleteReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
         CreateHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro),
+            local_cli, hypermetro_rmt_cli, configuration),
         CreateReplicationTask(
-            local_cli, replication_rmt_cli, configuration.replication),
+            local_cli, replication_rmt_cli, configuration),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -2337,10 +2341,10 @@ def create_group(group, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
     work_flow = linear_flow.Flow('create_group')
     work_flow.add(
         CreateHyperMetroGroupTask(
-            local_cli, hypermetro_rmt_cli, configuration.hypermetro,
+            local_cli, hypermetro_rmt_cli, configuration,
             feature_support),
         CreateReplicationGroupTask(
-            local_cli, replication_rmt_cli, configuration.replication,
+            local_cli, replication_rmt_cli, configuration,
             feature_support),
     )
 
@@ -2543,7 +2547,7 @@ def failover(volumes, local_cli, replication_rmt_cli, configuration):
     work_flow.add(
         ClassifyVolumeTask(),
         FailoverVolumeTask(local_cli, replication_rmt_cli,
-                           configuration.replication),
+                           configuration),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -2559,7 +2563,7 @@ def failback(volumes, local_cli, replication_rmt_cli, configuration):
     work_flow.add(
         ClassifyVolumeTask(),
         FailbackVolumeTask(local_cli, replication_rmt_cli,
-                           configuration.replication),
+                           configuration),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)

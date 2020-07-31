@@ -94,7 +94,8 @@ class V3StorageConnection(driver.HuaweiBase):
         s_pools = []
         all_pool_info = self.helper._find_all_pool_info()
         for pool in all_pool_info['data']:
-            if pool.get('USAGETYPE') == constants.FILE_SYSTEM_POOL_TYPE:
+            if pool.get('USAGETYPE') in (constants.FILE_SYSTEM_POOL_TYPE,
+                                         constants.DORADO_V6_POOL_TYPE):
                 s_pools.append(pool['NAME'])
 
         pool_name_list = root.findtext('Filesystem/StoragePool')
@@ -157,7 +158,7 @@ class V3StorageConnection(driver.HuaweiBase):
 
         self.private_storage.update(share['id'], {'replica_pair_id': ''})
 
-        ip = self._get_share_ip(share_server, vstore_id)
+        ip = self._get_share_ip(share_server, fs_info, vstore_id)
         location = self._get_location_path(share_name, share_proto, ip)
 
         return location
@@ -212,8 +213,9 @@ class V3StorageConnection(driver.HuaweiBase):
 
         return fs
 
-    def _get_share_ip(self, share_server, vstore_id=None):
+    def _get_share_ip(self, share_server, fs_info, vstore_id=None):
         """"Get share logical ip."""
+        metro_id = self._get_metro_id_from_fs_info(fs_info)
         if share_server:
             if vstore_id:
                 self.helper.modify_logical_port(
@@ -221,7 +223,7 @@ class V3StorageConnection(driver.HuaweiBase):
                     vstore_id)
             ips = [share_server['backend_details'].get('ip')]
         else:
-            if vstore_id:
+            if metro_id:
                 ips = [self.metro_logic_ip]
             else:
                 ips = huawei_utils.get_logical_ips(self.helper)
@@ -597,7 +599,7 @@ class V3StorageConnection(driver.HuaweiBase):
             for i in accesses:
                 self.helper._remove_access_from_share(i, share_proto)
 
-        ips = self._get_share_ip(share_server, vstore_id)
+        ips = self._get_share_ip(share_server, fs_info, vstore_id)
         locations = self._get_location_path(share_name, share_proto, ips)
 
         return locations
@@ -2098,6 +2100,11 @@ class V3StorageConnection(driver.HuaweiBase):
         share_id = share['id']
         vstore_id = self.get_vstore_id_by_fs_info(share_name)
         share_url_type = self.helper._get_share_url_type(share_proto)
+        fs_info = self.helper._get_fs_info_by_name(share_name)
+        if not fs_info:
+            msg = _("FS %s is not exist.") % share_name
+            LOG.error(msg)
+            raise exception.ShareResourceNotFound(msg=msg)
 
         share_storage = self.helper._get_share_by_name(
             share_name, share_url_type, vstore_id)
@@ -2107,7 +2114,7 @@ class V3StorageConnection(driver.HuaweiBase):
         fs_id = share_storage['FSID']
         self.assert_filesystem(fs_id)
 
-        ips = self._get_share_ip(share_server, vstore_id)
+        ips = self._get_share_ip(share_server, fs_info, vstore_id)
         locations = self._get_location_path(share_name, share_proto, ips)
         return locations
 

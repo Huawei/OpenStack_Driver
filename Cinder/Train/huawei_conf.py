@@ -68,6 +68,7 @@ class HuaweiConf(object):
             self._lun_write_type,
             self._lun_prefetch,
             self._storage_pools,
+            self._force_delete_volume,
             self._lun_copy_speed,
             self._lun_copy_mode,
             self._lun_copy_wait_interval,
@@ -248,6 +249,20 @@ class HuaweiConf(object):
             raise exception.InvalidInput(msg)
 
         setattr(self.conf, 'storage_pools', list(pools))
+
+    def _force_delete_volume(self, xml_root):
+        force_delete_volume = False
+        text = xml_root.findtext('LUN/ForceDeleteVolume')
+        if text:
+            if text.lower().strip() in ('true', 'false'):
+                if text.lower().strip() == 'true':
+                    force_delete_volume = True
+            else:
+                msg = _("ForceDeleteVolume configured error, "
+                        "ForceDeleteVolume is %s.") % text
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        setattr(self.conf, 'force_delete_volume', force_delete_volume)
 
     def _iscsi_info(self, xml_root):
         iscsi_info = {}

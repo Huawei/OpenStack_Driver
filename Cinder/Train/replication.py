@@ -288,7 +288,8 @@ class ReplicationManager(object):
         self.rmt_client = rmt_client
         self.pair_op = ReplicationPairOp(self.loc_client, self.rmt_client)
         self.group_op = ReplicationGroupOp(self.loc_client, self.rmt_client)
-        self.configs = configs
+        self.configs = configs.replication
+        self.configuration = configs
 
     def create_replica(self, local_lun_id, lun_params, replica_model):
         """Create remote LUN and replication pair.
@@ -330,6 +331,9 @@ class ReplicationManager(object):
 
         self.pair_op.split(pair_id)
         self.pair_op.delete(pair_id)
+        huawei_utils.remove_lun_from_lungroup(
+            self.rmt_client, pair_info['LOCALRESID'],
+            self.configuration.force_delete_volume)
         self.rmt_client.delete_lun(pair_info['LOCALRESID'])
 
     def extend_replica(self, pair_id, new_size):

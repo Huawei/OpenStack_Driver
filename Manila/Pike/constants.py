@@ -67,6 +67,7 @@ THIN_PROVISIONING = "true"
 THICK_PROVISIONING = "false"
 
 FILE_SYSTEM_POOL_TYPE = '2'
+DORADO_V6_POOL_TYPE = '0'
 
 OPTS_QOS_VALUE = {
     'maxiops': None,

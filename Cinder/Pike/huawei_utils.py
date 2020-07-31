@@ -255,3 +255,15 @@ def is_support_clone_pair(client):
     version_info = array_info['PRODUCTVERSION']
     if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
         return True
+
+
+def remove_lun_from_lungroup(client, lun_id, force_delete_volume):
+    lun_group_ids = client.get_lungroupids_by_lunid(lun_id)
+    if lun_group_ids:
+        if force_delete_volume:
+            for lun_group_id in lun_group_ids:
+                client.remove_lun_from_lungroup(lun_group_id, lun_id,
+                                                constants.LUN_TYPE)
+        elif len(lun_group_ids) == 1:
+            client.remove_lun_from_lungroup(lun_group_ids[0], lun_id,
+                                            constants.LUN_TYPE)

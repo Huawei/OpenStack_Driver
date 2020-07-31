@@ -758,9 +758,9 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         if not lun_id:
             return
 
-        lun_group_ids = self.client.get_lungroupids_by_lunid(lun_id)
-        if lun_group_ids and len(lun_group_ids) == 1:
-            self.client.remove_lun_from_lungroup(lun_group_ids[0], lun_id)
+        huawei_utils.remove_lun_from_lungroup(
+            self.client, lun_id,
+            self.configuration.force_delete_volume)
 
         self.client.delete_lun(lun_id)
 
@@ -770,10 +770,9 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         if not rmt_lun_id:
             return
 
-        lun_group_ids = self.rmt_client.get_lungroupids_by_lunid(rmt_lun_id)
-        if lun_group_ids and len(lun_group_ids) == 1:
-            self.rmt_client.remove_lun_from_lungroup(
-                lun_group_ids[0], rmt_lun_id)
+        huawei_utils.remove_lun_from_lungroup(
+            self.rmt_client, rmt_lun_id,
+            self.configuration.force_delete_volume)
 
     def delete_volume(self, volume):
         """Delete a volume.
@@ -2614,9 +2613,10 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
                 Cgsnapshot support
         2.0.8 - Backup snapshot optimal path support
         2.0.9 - Support reporting disk type of pool
+        2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.0.9"
+    VERSION = "2.2.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiISCSIDriver, self).__init__(*args, **kwargs)
@@ -2822,17 +2822,14 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         portgroup_id = None
         view_id = None
         left_lunnum = -1
-        portgroup = client.find_portgroup_info(
-            initiator_name, host_name)
 
-        if portgroup:
-            portgroup_id = client.get_tgt_port_group(portgroup)
         host_id = huawei_utils.get_host_id(client, host_name)
         if host_id:
             mapping_view_name = constants.MAPPING_VIEW_PREFIX + host_id
             view_id = client.find_mapping_view(mapping_view_name)
             if view_id:
                 lungroup_id = client.find_lungroup_from_map(view_id)
+                portgroup_id = client.get_portgroup_by_view(view_id)
 
         # Remove lun from lungroup.
         if lun_id and lungroup_id:
@@ -2897,9 +2894,10 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                 Cgsnapshot support
         2.0.8 - Backup snapshot optimal path support
         2.0.9 - Support reporting disk type of pool
+        2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.0.9"
+    VERSION = "2.2.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiFCDriver, self).__init__(*args, **kwargs)
