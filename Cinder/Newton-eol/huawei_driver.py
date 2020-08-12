@@ -643,8 +643,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
         return lun_info
 
-    def _create_volume_by_clone_pair(self, src_id, lun_params, clone_speed,
-                                     expected_size):
+    def _create_volume_by_clone_pair(self, src_id, lun_params, clone_speed):
         LOG.info('Create volume %s by ClonePair from source %s.',
                  lun_params['NAME'], src_id)
         lun_info = self.client.create_lun(lun_params)
