@@ -224,7 +224,7 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
                  {'id': snapshot.id, 'conn': connector})
         mapping_info = huawei_flow.initialize_fc_connection(
             snapshot, constants.SNAPSHOT_TYPE, connector, self.fc_san,
-            self.local_cli)
+            self.local_cli, self.configuration)
 
         mapping_info.pop('aval_host_lun_ids', None)
         conn = {'driver_volume_type': 'fibre_channel',
