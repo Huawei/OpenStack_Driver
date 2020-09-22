@@ -564,7 +564,7 @@ class HuaweiBaseDriver(object):
         if hypermetro_group:
             hypermetro_mgr = hypermetro.HuaweiHyperMetro(
                 self.local_cli, self.hypermetro_rmt_cli,
-                self.configuration.hypermetro)
+                self.configuration)
             hypermetro_mgr.delete_consistencygroup(group.id, volumes)
 
         replication_group = any(opt for opt in opts
@@ -572,7 +572,7 @@ class HuaweiBaseDriver(object):
         if replication_group:
             replication_mgr = replication.ReplicationManager(
                 self.local_cli, self.replication_rmt_cli,
-                self.configuration.replication)
+                self.configuration)
             replication_mgr.delete_group(group.id, volumes)
 
         model_update = {'status': fields.GroupStatus.DELETED}
@@ -598,7 +598,7 @@ class HuaweiBaseDriver(object):
         if hypermetro_group:
             hypermetro_mgr = hypermetro.HuaweiHyperMetro(
                 self.local_cli, self.hypermetro_rmt_cli,
-                self.configuration.hypermetro)
+                self.configuration)
             hypermetro_mgr.update_consistencygroup(
                 group.id, add_volumes, remove_volumes)
 
@@ -607,7 +607,7 @@ class HuaweiBaseDriver(object):
         if replication_group:
             replication_mgr = replication.ReplicationManager(
                 self.local_cli, self.replication_rmt_cli,
-                self.configuration.replication)
+                self.configuration)
             replication_mgr.update_group(
                 group.id, add_volumes, remove_volumes)
 

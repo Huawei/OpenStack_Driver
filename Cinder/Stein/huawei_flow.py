@@ -2364,7 +2364,7 @@ def initialize_iscsi_connection(lun, lun_type, connector, client,
     else:
         work_flow.add(
             CheckSnapshotExistTask(
-                client, provides=('snapshot_info', 'lun_id'),
+                client, provides=('lun_info', 'lun_id'),
                 rebind={'snapshot': 'lun'}))
 
     work_flow.add(
@@ -2455,7 +2455,7 @@ def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
     else:
         work_flow.add(
             CheckSnapshotExistTask(
-                client, provides=('snapshot_info', 'lun_id'),
+                client, provides=('lun_info', 'lun_id'),
                 rebind={'snapshot': 'lun'}))
 
     work_flow.add(
