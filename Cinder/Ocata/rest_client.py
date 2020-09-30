@@ -2754,8 +2754,15 @@ class RestClient(object):
         url = "/clonepair/synchronize"
         data = {"ID": pair_id, "copyAction": 0}
         result = self.call(url, data, "PUT")
-        self._assert_rest_result(result, 'Sync ClonePair error, pair is '
-                                         'is %s.' % pair_id)
+        self._assert_rest_result(result, 'Sync ClonePair error, pair is %s.'
+                                 % pair_id)
+
+    def stop_clone_pair(self, pair_id):
+        url = "/clonepair/synchronize"
+        data = {"ID": pair_id, "copyAction": 2}
+        result = self.call(url, data, "PUT")
+        self._assert_rest_result(
+            result, 'Stop ClonePair error, pair is %s.' % pair_id)
 
     def get_clone_pair_info(self, pair_id):
         url = "/clonepair/%s" % pair_id
