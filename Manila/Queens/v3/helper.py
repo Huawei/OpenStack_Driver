@@ -115,9 +115,9 @@ class RestHelper(object):
             result = self.do_call(url, data,
                                   calltimeout=constants.LOGIN_SOCKET_TIMEOUT)
 
-            if((result['error']['code'] != 0)
-               or ("data" not in result)
-               or (result['data']['deviceid'] is None)):
+            if ((result['error']['code'] != 0)
+                    or ("data" not in result)
+                    or (result['data']['deviceid'] is None)):
                 LOG.error("Login to %s failed, try another.", item_url)
                 continue
 
@@ -159,8 +159,8 @@ class RestHelper(object):
         old_url = self.url
         result = self.do_call(url, data, method)
         error_code = result['error']['code']
-        if(error_code == constants.ERROR_CONNECT_TO_SERVER
-           or error_code == constants.ERROR_UNAUTHORIZED_TO_SERVER):
+        if (error_code == constants.ERROR_CONNECT_TO_SERVER
+                or error_code == constants.ERROR_UNAUTHORIZED_TO_SERVER):
             LOG.error("Can't open the recent url, re-login.")
             deviceid = self.login()
 
@@ -297,8 +297,12 @@ class RestHelper(object):
         poolinfo = {}
         pool_name = pool_name.strip()
         for item in result.get('data', []):
-            if pool_name == item['NAME'] and item['USAGETYPE'] in (constants.FILE_SYSTEM_POOL_TYPE,
-                                         constants.DORADO_V6_POOL_TYPE):
+            if pool_name == item['NAME'] and (item['USAGETYPE'] in
+                                              (constants.FILE_SYSTEM_POOL_TYPE,
+                                               constants.DORADO_V6_POOL_TYPE) or
+                                              item.get('NEWUSAGETYPE') in
+                                              (constants.FILE_SYSTEM_POOL_TYPE,
+                                               constants.DORADO_V6_POOL_TYPE)):
                 poolinfo['name'] = pool_name
                 poolinfo['ID'] = item['ID']
                 poolinfo['CAPACITY'] = item['USERFREECAPACITY']
@@ -790,7 +794,8 @@ class RestHelper(object):
                         % export_location))
 
         target_ips = huawei_utils.get_logical_ips(self)
-        if share_ip not in target_ips:
+        dnses = huawei_utils.get_dns(self)
+        if share_ip not in target_ips and share_ip not in dnses:
             raise exception.InvalidInput(
                 reason=_('The share IP %s is not configured.') % share_ip)
 
@@ -1250,10 +1255,14 @@ class RestHelper(object):
 
     def modify_logical_port(self, logical_port_id, vstore_id):
         logical_port_info = self.get_logical_port_by_id(logical_port_id)
-        logical_port_info.update({'vstoreId': vstore_id,
-                                  'dnsZoneName': ""})
+        data = {'vstoreId': vstore_id,
+                'dnsZoneName': "",
+                'NAME': logical_port_info.get('NAME'),
+                'ID': logical_port_info.get('ID')}
         url = "/LIF/%s" % logical_port_id
-        result = self.call(url, jsonutils.dumps(logical_port_info), 'PUT')
+        result = self.call(url, jsonutils.dumps(data), 'PUT')
+        if result['error']['code'] == constants.LIF_ALREADY_EXISTS:
+            return
         self._assert_rest_result(result, _('Modify logical port error.'))
 
     def delete_logical_port(self, logical_port_id):

@@ -66,7 +66,7 @@ class V3StorageConnection(driver.HuaweiBase):
         self.rpc_client = v3_rpcapi.HuaweiV3API()
         self.private_storage = kwargs.get('private_storage')
         self.qos_support = False
-        self.snapshot_support = False
+        self.snapshot_support = True
         self.replication_support = False
         self.metro_domain = None
         self.remote_backend = None
@@ -95,7 +95,10 @@ class V3StorageConnection(driver.HuaweiBase):
         all_pool_info = self.helper._find_all_pool_info()
         for pool in all_pool_info['data']:
             if pool.get('USAGETYPE') in (constants.FILE_SYSTEM_POOL_TYPE,
-                                         constants.DORADO_V6_POOL_TYPE):
+                                         constants.DORADO_V6_POOL_TYPE) or \
+                    pool.get('NEWUSAGETYPE') in \
+                    (constants.FILE_SYSTEM_POOL_TYPE,
+                     constants.DORADO_V6_POOL_TYPE):
                 s_pools.append(pool['NAME'])
 
         pool_name_list = root.findtext('Filesystem/StoragePool')
@@ -227,6 +230,10 @@ class V3StorageConnection(driver.HuaweiBase):
                 ips = [self.metro_logic_ip]
             else:
                 ips = huawei_utils.get_logical_ips(self.helper)
+
+            dnses = huawei_utils.get_dns(self.helper)
+            if dnses:
+                ips = dnses
 
         return ips
 
@@ -1314,7 +1321,10 @@ class V3StorageConnection(driver.HuaweiBase):
         share_size = int(fs['CAPACITY']) / units.Mi / 2
         self.helper._change_fs_name(fs_id, share_name)
 
-        locations = self._get_location_path(share_name, share_proto)
+        if share_proto == 'CIFS':
+            locations = self._get_location_path(old_share_name, share_proto)
+        else:
+            locations = self._get_location_path(share_name, share_proto)
         return share_size, locations
 
     def unmanage(self, share):
@@ -1611,6 +1621,7 @@ class V3StorageConnection(driver.HuaweiBase):
         pwd = root.findtext('Storage/UserPassword')
         pool_node = root.findtext('Filesystem/StoragePool')
         logical_port_ip = root.findtext('Storage/LogicalPortIP')
+        dns = root.findtext('Storage/DNS')
 
         if not (resturl and username and pwd):
             err_msg = (_(
@@ -1630,10 +1641,13 @@ class V3StorageConnection(driver.HuaweiBase):
         if logical_port_ip:
             logical_ips = [i.strip() for i in logical_port_ip.split(';')
                            if i.strip()]
+        dnses = []
+        if dns:
+            dnses = [i.strip() for i in dns.split(';') if i.strip()]
         if not (self.configuration.driver_handles_share_servers
-                or logical_ips):
+                or logical_ips or dnses):
             err_msg = (_(
-                'check_conf_file: Config file invalid. LogicalPortIP '
+                'check_conf_file: Config file invalid. LogicalPortIP or DNS '
                 'must be set when driver_handles_share_servers is False.'))
             LOG.error(err_msg)
             raise exception.InvalidInput(reason=err_msg)

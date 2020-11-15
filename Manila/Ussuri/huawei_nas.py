@@ -674,7 +674,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         return access
 
     def create_share_from_snapshot(self, context, share, snapshot,
-                                   share_server=None):
+                                   share_server=None, parent_share=None):
         share_fs_info = self.helper.get_fs_info_by_name(
             snapshot['share_name'])
         if not share_fs_info:

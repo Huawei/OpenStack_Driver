@@ -107,12 +107,12 @@ class RestHelper(object):
 
     def _get_user_info(self):
         if self.nas_username.startswith('!$$$'):
-            username = base64.b64decode(self.nas_username[4:])
+            username = base64.b64decode(self.nas_username[4:]).decode()
         else:
             username = self.nas_username
 
         if self.nas_password.startswith('!$$$'):
-            password = base64.b64decode(self.nas_password[4:])
+            password = base64.b64decode(self.nas_password[4:]).decode()
         else:
             password = self.nas_password
 
@@ -647,10 +647,14 @@ class RestHelper(object):
 
     def modify_logical_port(self, logical_port_id, vstore_id):
         logical_port_info = self.get_logical_port_by_id(logical_port_id)
-        logical_port_info.update({'vstoreId': vstore_id,
-                                  'dnsZoneName': ""})
+        data = {'vstoreId': vstore_id,
+                'dnsZoneName': "",
+                'NAME': logical_port_info.get('NAME'),
+                'ID': logical_port_info.get('ID')}
         url = "/LIF/%s" % logical_port_id
-        result = self.call(url, 'PUT', logical_port_info)
+        result = self.call(url, 'PUT', data)
+        if result['error']['code'] == constants.LIF_ALREADY_EXISTS:
+            return
         _assert_result(result, 'Modify logical port error.')
 
     def delete_logical_port(self, logical_port_id):

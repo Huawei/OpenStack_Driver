@@ -116,7 +116,10 @@ class HuaweiNasDriver(driver.ShareDriver):
         pools = self.helper.get_all_pools()
         for pool in pools:
             if pool.get('USAGETYPE') in (constants.FILE_SYSTEM_POOL_TYPE,
-                                         constants.DORADO_V6_POOL_TYPE):
+                                         constants.DORADO_V6_POOL_TYPE) or \
+                    pool.get('NEWUSAGETYPE') in \
+                    (constants.FILE_SYSTEM_POOL_TYPE,
+                     constants.DORADO_V6_POOL_TYPE):
                 s_pools.append(pool['NAME'])
 
         for pool_name in self.configuration.storage_pools:
@@ -127,9 +130,10 @@ class HuaweiNasDriver(driver.ShareDriver):
 
     def _check_config(self):
         if (not self.configuration.driver_handles_share_servers and
-                not self.configuration.logical_ip):
-            msg = _('Either driver_handles_share_servers or LogicalPortIP '
-                    'must be set.')
+                not self.configuration.logical_ip and
+                not self.configuration.dns):
+            msg = _('driver_handles_share_servers or LogicalPortIP '
+                    'or DNS must be set at least one.')
             LOG.error(msg)
             raise exception.BadConfigurationException(reason=msg)
 
@@ -385,10 +389,17 @@ class HuaweiNasDriver(driver.ShareDriver):
             else:
                 ips = [self.metro_logic_ip]
 
+            dnses = self.configuration.dns
+            if dnses:
+                ips = dnses
+
         path_name = huawei_utils.share_name(share_name)
         if share_proto == 'NFS':
             locations = ['%s:/%s' % (ip, path_name) for ip in ips]
         elif share_proto == 'CIFS':
+            share_info = self.helper.get_share_by_name(
+                share_name, share_proto, fs_info.get('vstoreId'))
+            path_name = huawei_utils.share_name(share_info.get('NAME'))
             locations = [r'\\%s\%s' % (ip, path_name) for ip in ips]
         else:
             msg = _('Invalid NAS protocol %s.') % share_proto
@@ -1035,7 +1046,8 @@ class HuaweiNasDriver(driver.ShareDriver):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        if old_share_ip not in self.configuration.logical_ip:
+        if old_share_ip not in self.configuration.logical_ip \
+                and old_share_ip not in self.configuration.dns:
             msg = _('IP %s inconsistent with logical IP.') % old_share_ip
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
