@@ -60,6 +60,7 @@ class HuaweiConfig(object):
             self._cifs_client,
             self._snapshot_reserve,
             self._logical_ip,
+            self._dns,
         )
 
         for f in attr_funcs:
@@ -71,11 +72,13 @@ class HuaweiConfig(object):
 
         need_encode = False
         if name_node is not None and not name_node.text.startswith('!$$$'):
-            name_node.text = '!$$$' + base64.b64encode(name_node.text)
+            name_node.text = '!$$$' + base64.b64encode(
+                name_node.text.encode()).decode()
             need_encode = True
 
         if pwd_node is not None and not pwd_node.text.startswith('!$$$'):
-            pwd_node.text = '!$$$' + base64.b64encode(pwd_node.text)
+            pwd_node.text = '!$$$' + base64.b64encode(
+                pwd_node.text.encode()).decode()
             need_encode = True
 
         if need_encode:
@@ -178,6 +181,14 @@ class HuaweiConfig(object):
             logical_ip = [i.strip() for i in text.split(";") if i.strip()]
 
         setattr(self.config, 'logical_ip', logical_ip)
+
+    def _dns(self, xml_root):
+        dns = []
+        text = xml_root.findtext('Storage/DNS')
+        if text:
+            dns = [i.strip() for i in text.split(";") if i.strip()]
+
+        setattr(self.config, 'dns', dns)
 
     def _ports(self, xml_root):
         ports = []

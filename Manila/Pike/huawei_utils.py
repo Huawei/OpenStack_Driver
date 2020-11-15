@@ -104,6 +104,15 @@ def get_logical_ips(helper):
     return [i.strip() for i in config.split(';') if i.strip()]
 
 
+def get_dns(helper):
+    root = helper._read_xml()
+    config = root.findtext('Storage/DNS')
+    if not config:
+        return []
+
+    return [i.strip() for i in config.split(';') if i.strip()]
+
+
 def wait_fs_online(helper, fs_id, wait_interval, timeout):
     def _wait_fs_online():
         fs = helper._get_fs_info_by_id(fs_id)
