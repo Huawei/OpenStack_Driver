@@ -11,7 +11,7 @@ QoS and so on.
 The strategies of Huawei Cinder Driver and Manila Driver are consistent with the OpenStack community, we support the 
 latest 6 versions. **For other versions, it can be used but no longer maintained.**
 
-| OpenStack |Ocata|Pike|Queens|Rocky|Stein|Train|
+| OpenStack |Pike|Queens|Rocky|Stein|Train|Ussuri|
 |---|---|---|---|---|---|---|
 |Cinder Driver|√|√|√|√|√|√|
 |Manila Driver|√|√|√|√|√|√|

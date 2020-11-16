@@ -501,6 +501,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
     def _create_volume_from_src(self, volume, src_obj, src_type, lun_params,
                                 clone_pair_flag=None):
         metadata = huawei_utils.get_volume_metadata(volume)
+        expect_size = int(volume.size) * constants.CAPACITY_UNIT
         if (strutils.bool_from_string(metadata.get('fastclone')) or
                 (metadata.get('fastclone') is None and
                  self.configuration.clone_mode == "fastclone")):
@@ -517,7 +518,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 src_id = self._check_snapshot_exist_on_array(
                     src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
 
-            lun_info = self._create_volume_by_clone(src_id, lun_params)
+            lun_info = self._create_volume_by_clone(
+                src_id, lun_params, expect_size, clone_pair_flag)
         elif clone_pair_flag:
             clone_speed = self.configuration.lun_copy_speed
             if src_type == objects.Volume:
@@ -570,7 +572,6 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                     self._delete_snapshot(src_id)
 
         try:
-            expect_size = int(volume.size) * constants.CAPACITY_UNIT
             if int(lun_info['CAPACITY']) < expect_size:
                 self.client.extend_lun(lun_info["ID"], expect_size)
                 lun_info = self.client.get_lun_info(lun_info["ID"])
@@ -598,7 +599,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         self.client.stop_snapshot(snapshot_id)
         self.client.delete_snapshot(snapshot_id)
 
-    def _create_volume_by_clone(self, src_id, lun_params):
+    def _create_volume_by_clone(self, src_id, lun_params, expected_size,
+                                clone_pair_flag):
         LOG.info('Create volume %s by clone from source %s.',
                  lun_params['NAME'], src_id)
 
@@ -606,7 +608,9 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         lun_id = lun_info['ID']
 
         try:
-            expected_size = int(lun_params['CAPACITY'])
+            if clone_pair_flag:
+                self.client.stop_clone_pair(lun_id)
+
             if int(lun_info['CAPACITY']) < expected_size:
                 self.client.extend_lun(lun_id, expected_size)
 
