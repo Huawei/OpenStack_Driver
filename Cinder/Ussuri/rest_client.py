@@ -459,7 +459,8 @@ class LunGroup(CommonObject):
                 "ASSOCIATEOBJTYPE": obj_type,
                 "ASSOCIATEOBJID": obj_id}
         result = self.post('/associate', data=data)
-        if _error_code(result) == constants.OBJECT_ID_NOT_UNIQUE:
+        if _error_code(result) in (constants.OBJECT_ID_NOT_UNIQUE,
+                                   constants.LUN_ALREADY_IN_LUNGROUP):
             LOG.info('Object %(id)s already in lungroup %(group)s.',
                      {'id': obj_id, 'group': lungroup_id})
             return
