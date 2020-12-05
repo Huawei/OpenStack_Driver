@@ -124,7 +124,7 @@ class _CreateHyperMetroTask(task.Task):
                 huawei_utils.wait_for_condition(
                     lambda: self._is_sync_completed(hypermetro_pair['ID']),
                     constants.DEFAULT_WAIT_INTERVAL,
-                    constants.DEFAULT_WAIT_INTERVAL * 10)
+                    constants.DEFAULT_WAIT_TIMEOUT)
 
         return {'hypermetro_id': hypermetro_pair['ID']}
 
