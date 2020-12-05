@@ -51,7 +51,8 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
                  {'id': volume.id, 'conn': connector})
         metadata = huawei_utils.get_volume_private_data(volume)
         if metadata.get('hypermetro'):
-            if not connector.get('multipath'):
+            if (not connector.get('multipath') and
+                    self.configuration.enforce_multipath_for_hypermetro):
                 msg = _("Mapping hypermetro volume must use multipath.")
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
@@ -153,7 +154,8 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
 
         metadata = huawei_utils.get_volume_private_data(volume)
         if metadata.get('hypermetro'):
-            if not connector.get('multipath'):
+            if (not connector.get('multipath') and
+                    self.configuration.enforce_multipath_for_hypermetro):
                 msg = _("Mapping hypermetro volume must use multipath.")
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)

@@ -844,7 +844,7 @@ class WaitSnapshotReadyTask(task.Task):
 
         huawei_utils.wait_for_condition(_snapshot_ready,
                                         constants.DEFAULT_WAIT_INTERVAL,
-                                        constants.DEFAULT_WAIT_INTERVAL * 10)
+                                        constants.DEFAULT_WAIT_TIMEOUT)
         return self.snapshot['WWN']
 
 
