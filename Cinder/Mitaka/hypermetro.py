@@ -17,7 +17,9 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 
 from cinder import exception
-from cinder.i18n import _, _LI, _LW
+from cinder.i18n import _
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder import utils
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
@@ -143,16 +145,30 @@ class HuaweiHyperMetro(object):
         for wwn in wwns:
             if (wwn not in online_wwns_in_host
                     and wwn not in online_free_wwns):
-                wwns_in_host = (
-                    self.rmt_client.get_host_fc_initiators(host_id))
-                iqns_in_host = (
-                    self.rmt_client.get_host_iscsi_initiators(host_id))
-                if not (wwns_in_host or iqns_in_host):
-                    self.rmt_client.remove_host(host_id)
+                wwns.remove(wwn)
 
-                msg = _('Can not add FC port to host.')
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
+                if (self.configuration.min_fc_ini_online ==
+                        constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE):
+                    wwns_in_host = (
+                        self.rmt_client.get_host_fc_initiators(host_id))
+                    iqns_in_host = (
+                        self.rmt_client.get_host_iscsi_initiators(host_id))
+                    if not (wwns_in_host or iqns_in_host):
+                        self.rmt_client.remove_host(host_id)
+                    msg = (("Can't add FC initiator %(wwn)s to host %(host)s,"
+                            " please check if this initiator has been added "
+                            "to other host or isn't present on array.")
+                           % {"wwn": wwn, "host": host_id})
+                    LOG.error(msg)
+                    raise exception.VolumeBackendAPIException(data=msg)
+
+        if len(wwns) < self.configuration.min_fc_ini_online:
+            msg = (("The number of online fc initiator %(wwns)s less than"
+                    " the set %(set)s number.") % {
+                "wwns": wwns,
+                "set": self.configuration.min_fc_ini_online})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         for wwn in wwns:
             self.rmt_client.ensure_fc_initiator_added(wwn, host_id,
@@ -405,7 +421,8 @@ class HuaweiHyperMetro(object):
 
     def _check_metro_in_cg(self, metro_id, cg_id):
         metro_info = self.client.get_hypermetro_by_id(metro_id)
-        return metro_info and metro_info['ISINCG'] == 'true' and metro_info['CGID'] == cg_id
+        return (metro_info and metro_info['ISINCG'] == 'true'
+                and metro_info['CGID'] == cg_id)
 
     def _valid_rmt_metro_domain(self):
         domain_name = self.rmt_client.metro_domain

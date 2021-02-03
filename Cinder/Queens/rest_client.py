@@ -310,6 +310,18 @@ class RestClient(object):
             if lun_id:
                 return self.get_lun_info(lun_id)
 
+        if result['error']['code'] == constants.ERROR_VOLUME_TIMEOUT:
+            try_times = 2
+            while try_times:
+                time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
+                LOG.info(("Create LUN TimeOut, try get lun info in %s "
+                          "time"), 2 - try_times)
+                lun_id = self.get_lun_id_by_name(lun_params['NAME'])
+                if lun_id:
+                    return self.get_lun_info(lun_id)
+                else:
+                    try_times -= 1
+
         msg = _('Create lun error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
@@ -419,7 +431,7 @@ class RestClient(object):
         if not name:
             return
 
-        url = "/lun?filter=NAME::%s" % name
+        url = "/lun?filter=NAME::%s&range=[0-100]" % name
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get lun id by name error.'))
 
@@ -441,6 +453,22 @@ class RestClient(object):
                 "DESCRIPTION": snapshot_description,
                 "PARENTID": lun_id}
         result = self.call(url, data)
+        if result['error']['code'] == constants.ERROR_VOLUME_ALREADY_EXIST:
+            snapshot_id = self.get_snapshot_id_by_name(snapshot_name)
+            if snapshot_id:
+                return self.get_snapshot_info(snapshot_id)
+
+        if result['error']['code'] == constants.ERROR_VOLUME_TIMEOUT:
+            try_times = 2
+            while try_times:
+                time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
+                LOG.info(_("Create SNAPSHOT TimeOut, try get snapshot "
+                           "info in %s time"), 2 - try_times)
+                snapshot_id = self.get_snapshot_id_by_name(snapshot_name)
+                if snapshot_id:
+                    return self.get_snapshot_info(snapshot_id)
+                else:
+                    try_times -= 1
 
         msg = _('Create snapshot error.')
         self._assert_rest_result(result, msg)
@@ -496,7 +524,7 @@ class RestClient(object):
         if not name:
             return
 
-        url = "/snapshot?filter=NAME::%s" % name
+        url = "/snapshot?filter=NAME::%s&range=[0-100]" % name
         description = 'The snapshot license file is unavailable.'
         result = self.call(url, None, "GET")
         if 'error' in result:
@@ -774,7 +802,7 @@ class RestClient(object):
 
     def get_host_id_by_name(self, host_name):
         """Get the given host ID."""
-        url = "/host?filter=NAME::%s" % host_name
+        url = "/host?filter=NAME::%s&range=[0-100]" % host_name
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Find host in hostgroup error.'))
 
@@ -868,6 +896,8 @@ class RestClient(object):
                 "ASSOCIATEOBJID": host_id}
 
         result = self.call(url, data)
+        if result['error']['code'] == constants.HOST_ALREADY_IN_HOSTGROUP:
+            return
         self._assert_rest_result(result, _('Associate host to hostgroup '
                                  'error.'))
 
@@ -879,6 +909,8 @@ class RestClient(object):
                 "ASSOCIATEOBJTYPE": lun_type,
                 "ASSOCIATEOBJID": lun_id}
         result = self.call(url, data)
+        if result['error']['code'] == constants.LUN_ALREADY_IN_LUNGROUP:
+            return
         self._assert_rest_result(result, _('Associate lun to lungroup error.'))
 
     def remove_lun_from_lungroup(self, lungroup_id, lun_id,
@@ -1102,6 +1134,9 @@ class RestClient(object):
                 "TYPE": "245",
                 "ID": view_id}
         result = self.call(url, data, "PUT")
+        if (result['error']['code'] ==
+                constants.HOSTGROUP_ALREADY_IN_MAPPINGVIEW):
+            return
         self._assert_rest_result(result, _('Associate host to mapping view '
                                  'error.'))
 
@@ -1113,6 +1148,9 @@ class RestClient(object):
                 "ID": view_id}
 
         result = self.call(url, data, "PUT")
+        if (result['error']['code'] ==
+                constants.LUNGROUP_ALREADY_IN_MAPPINGVIEW):
+            return
         self._assert_rest_result(
             result, _('Associate lungroup to mapping view error.'))
 
@@ -2116,6 +2154,24 @@ class RestClient(object):
     def create_hypermetro(self, hcp_param):
         url = "/HyperMetroPair"
         result = self.call(url, hcp_param, "POST")
+        if result['error']['code'] == constants.HYPERMETRO_ALREADY_EXIST:
+            hypermetro_info = self.get_hypermetro_by_lun_id(
+                hcp_param["LOCALOBJID"])
+            if hypermetro_info:
+                return hypermetro_info
+
+        if result['error']['code'] == constants.CREATE_HYPERMETRO_TIMEOUT:
+            try_times = 2
+            while try_times:
+                time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
+                LOG.info(_("Create SNAPSHOT TimeOut, try get snapshot "
+                           "info in %s time"), 2 - try_times)
+                hypermetro_info = self.get_hypermetro_by_lun_id(
+                    hcp_param["LOCALOBJID"])
+                if hypermetro_info:
+                    return hypermetro_info
+                else:
+                    try_times -= 1
 
         msg = _('create_hypermetro_pair error.')
         self._assert_rest_result(result, msg)
@@ -2151,7 +2207,7 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
 
     def get_hypermetro_by_id(self, metro_id):
-        url = "/HyperMetroPair?filter=ID::%s" % metro_id
+        url = "/HyperMetroPair?filter=ID::%s&range=[0-100]" % metro_id
         result = self.call(url, None, "GET")
         msg = _('get_hypermetro_by_id error.')
         self._assert_rest_result(result, msg)
@@ -2162,6 +2218,14 @@ class RestClient(object):
         url = "/HyperMetroPair?filter=LOCALOBJNAME::%s" % lun_name
         result = self.call(url, None, "GET")
         msg = _('Get hypermetro by local lun name %s error.') % lun_name
+        self._assert_rest_result(result, msg)
+        if result.get('data'):
+            return result['data'][0]
+
+    def get_hypermetro_by_lun_id(self, lun_id):
+        url = "/HyperMetroPair?filter=LOCALOBJID::%s" % lun_id
+        result = self.call(url, None, "GET")
+        msg = _('Get hypermetro by local lun id %s error.') % lun_id
         self._assert_rest_result(result, msg)
         if result.get('data'):
             return result['data'][0]
@@ -2716,7 +2780,23 @@ class RestClient(object):
         }
 
         result = self.call('/lunclone_split_switch', data, "PUT")
+        if result['error']['code'] == constants.CLONE_PAIR_SYNC_NOT_EXIST:
+            return
         self._assert_rest_result(result, _('Split clone lun error.'))
+
+    def stop_split_lunclone(self, clone_id):
+        data = {
+            "ID": clone_id,
+            "SPLITACTION": 2,
+            "ISCLONE": True,
+            "SPLITSPEED": 4,
+        }
+        result = self.call('/lunclone_split_switch', data, "PUT")
+        if result['error']['code'] == constants.CLONE_PAIR_SYNC_COMPLETE:
+            LOG.info("Split lun finish, delete the clone pair %s." % clone_id)
+            self.delete_clone_pair(clone_id)
+            return
+        self._assert_rest_result(result, _('Stop split clone lun error.'))
 
     def get_workload_type_id(self, workload_type_name):
         url = "/workload_type?filter=NAME::%s" % workload_type_name

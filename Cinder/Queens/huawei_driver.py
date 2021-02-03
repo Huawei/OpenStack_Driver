@@ -94,6 +94,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         self.use_ultrapath = self.configuration.safe_get(
             'libvirt_iscsi_use_ultrapath')
         self.sn = 'NA'
+        self.support_dedup_and_compress = False
 
     def check_local_func_support(self, obj_name):
         try:
@@ -148,6 +149,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                                              **client_conf)
         self.sn = self.client.login()
         self.client.check_storage_pools()
+        self.support_dedup_and_compress = huawei_utils.is_support_clone_pair(
+            self.client)
 
         # init hypermetro remote client
         hypermetro_devs = self.huawei_conf.get_hypermetro_devices()
@@ -209,9 +212,11 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             'multiattach': True,
             'huawei_controller': True,
             'dedup': [huawei_utils.check_feature_available(
-                feature_status, constants.DEDUP_FEATURES), False],
+                feature_status, constants.DEDUP_FEATURES
+            ) or self.support_dedup_and_compress, False],
             'compression': [huawei_utils.check_feature_available(
-                feature_status, constants.COMPRESSION_FEATURES), False],
+                feature_status, constants.COMPRESSION_FEATURES
+            ) or self.support_dedup_and_compress, False],
             'huawei_application_type': False,
         }
 
@@ -519,7 +524,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                     src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
 
             lun_info = self._create_volume_by_clone(
-                src_id, lun_params, expect_size, clone_pair_flag)
+                src_id, lun_params, expect_size)
         elif clone_pair_flag:
             clone_speed = self.configuration.lun_copy_speed
             if src_type == objects.Volume:
@@ -599,8 +604,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         self.client.stop_snapshot(snapshot_id)
         self.client.delete_snapshot(snapshot_id)
 
-    def _create_volume_by_clone(self, src_id, lun_params, expected_size,
-                                clone_pair_flag):
+    def _create_volume_by_clone(self, src_id, lun_params, expected_size):
         LOG.info('Create volume %s by clone from source %s.',
                  lun_params['NAME'], src_id)
 
@@ -608,12 +612,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         lun_id = lun_info['ID']
 
         try:
-            if clone_pair_flag:
-                self.client.stop_clone_pair(lun_id)
-
             if int(lun_info['CAPACITY']) < expected_size:
                 self.client.extend_lun(lun_id, expected_size)
-
             self.client.split_clone_lun(lun_id)
         except Exception:
             LOG.exception('Split clone lun %s error.', lun_id)
@@ -2629,7 +2629,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.RC1"
+    VERSION = "2.2.RC3"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiISCSIDriver, self).__init__(*args, **kwargs)
@@ -2685,7 +2685,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
                 iscsi_info['data']['target_portals'] = target_portal
                 iscsi_info['data']['target_luns'].extend(
                     rmt_iscsi_info['data']['target_luns'])
-            else:
+            elif self.configuration.enforce_multipath_for_hypermetro:
                 msg = (_("Hypermetro must use multipath or ultrapath."))
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
@@ -2917,7 +2917,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.RC1"
+    VERSION = "2.2.RC3"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiFCDriver, self).__init__(*args, **kwargs)

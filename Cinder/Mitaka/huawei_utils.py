@@ -141,9 +141,19 @@ def get_lun_metadata(volume):
     if not volume.provider_location:
         return {}
 
-    info = json.loads(volume.provider_location)
+    try:
+        info = json.loads(volume.provider_location)
+    except Exception as err:
+        LOG.warning("get_lun_metadata get provider_location error, params: "
+                    "%(loc)s, reason: %(err)s",
+                    {"loc": volume.provider_location, "err": err})
+        return {}
+
     if isinstance(info, dict):
-        return info
+        if "huawei" in volume.provider_location:
+            return info
+        else:
+            return {}
 
     # To keep compatible with old driver version
     admin_metadata = get_admin_metadata(volume)
@@ -181,6 +191,9 @@ def get_volume_lun_id(client, volume):
     if not lun_id:
         volume_name = old_encode_name(volume.id)
         lun_id = client.get_lun_id_by_name(volume_name)
+
+    if not lun_id:
+        lun_id = metadata.get('huawei_lun_id')
 
     return lun_id, metadata.get('huawei_lun_wwn')
 
@@ -235,3 +248,22 @@ def get_apply_type_id(opts):
         opts['application_type'] = None
 
     return opts
+
+
+def is_support_clone_pair(client):
+    array_info = client.get_array_info()
+    version_info = array_info['PRODUCTVERSION']
+    if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
+        return True
+
+
+def remove_lun_from_lungroup(client, lun_id, force_delete_volume):
+    lun_group_ids = client.get_lungroupids_by_lunid(lun_id)
+    if lun_group_ids:
+        if force_delete_volume:
+            for lun_group_id in lun_group_ids:
+                client.remove_lun_from_lungroup(lun_group_id, lun_id,
+                                                constants.LUN_TYPE)
+        elif len(lun_group_ids) == 1:
+            client.remove_lun_from_lungroup(lun_group_ids[0], lun_id,
+                                            constants.LUN_TYPE)
