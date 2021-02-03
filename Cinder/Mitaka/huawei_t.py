@@ -22,7 +22,10 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 
 from cinder import exception
-from cinder.i18n import _, _LI, _LE, _LW
+from cinder.i18n import _
+from cinder.i18n import _LE
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder import utils
 from cinder.volume import driver
 from cinder.volume.drivers.huawei.extend import fc_zone_helper
@@ -66,8 +69,8 @@ class HuaweiTISCSIDriver(driver.ISCSIDriver):
 
     def do_setup(self, context):
         """Instantiate common class."""
-        self.sshclient = ssh_client.TseriesClient(configuration=
-                                                  self.configuration)
+        self.sshclient = ssh_client.TseriesClient(
+            configuration=self.configuration)
         self.sshclient.do_setup(context)
         self.sshclient.check_storage_pools()
 
@@ -409,8 +412,8 @@ class HuaweiTFCDriver(driver.FibreChannelDriver):
 
     def do_setup(self, context):
         """Instantiate common class."""
-        self.sshclient = ssh_client.TseriesClient(configuration=
-                                                  self.configuration)
+        self.sshclient = ssh_client.TseriesClient(
+            configuration=self.configuration)
         self.sshclient.do_setup(context)
         self.sshclient.check_storage_pools()
 

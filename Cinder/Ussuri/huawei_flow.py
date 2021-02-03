@@ -727,11 +727,10 @@ class CreateLunCloneTask(task.Task):
         name = huawei_utils.encode_name(volume.id)
         lun_info = self.client.create_lunclone(src_id, name)
         lun_id = lun_info["ID"]
+        expected_size = int(volume.size) * constants.CAPACITY_UNIT
         try:
-            expected_size = int(volume.size) * constants.CAPACITY_UNIT
             if int(lun_info['CAPACITY']) < expected_size:
                 self.client.extend_lun(lun_id, expected_size)
-
             self.client.split_lunclone(lun_id)
         except Exception:
             LOG.exception('Split clone lun %s error.', lun_id)

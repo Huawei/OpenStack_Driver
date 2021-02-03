@@ -92,7 +92,8 @@ class HuaweiConf(object):
                           self._lun_copy_mode,
                           self._hyper_pair_sync_speed,
                           self._replication_pair_sync_speed,
-                          self._get_local_minimum_fc_initiator,)
+                          self._get_local_minimum_fc_initiator,
+                          self._hyper_enforce_multipath)
 
         tree = ET.parse(self.conf.cinder_huawei_conf_file)
         xml_root = tree.getroot()
@@ -555,6 +556,21 @@ class HuaweiConf(object):
         else:
             speed = text.strip()
         setattr(self.conf, 'hyper_sync_speed', int(speed))
+
+    def _hyper_enforce_multipath(self, xml_root):
+        enforce_multipath_for_hypermetro = True
+        text = xml_root.findtext('LUN/HyperEnforceMultipath')
+        if text:
+            if text.lower().strip() in ('true', 'false'):
+                if text.lower().strip() == 'false':
+                    enforce_multipath_for_hypermetro = False
+            else:
+                msg = _("HyperEnforceMultipath configured error, "
+                        "HyperEnforceMultipath is %s.") % text
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        setattr(self.conf, 'enforce_multipath_for_hypermetro',
+                enforce_multipath_for_hypermetro)
 
     def _replication_pair_sync_speed(self, xml_root):
         text = xml_root.findtext('LUN/ReplicaSyncSpeed')

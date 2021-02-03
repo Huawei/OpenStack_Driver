@@ -82,6 +82,7 @@ class HuaweiConf(object):
                           self._lun_write_type,
                           self._lun_prefetch,
                           self._storage_pools,
+                          self._force_delete_volume,
                           self._iscsi_default_target_ip,
                           self._iscsi_info,
                           self._fc_info,
@@ -90,7 +91,9 @@ class HuaweiConf(object):
                           self._lun_copy_speed,
                           self._lun_copy_mode,
                           self._hyper_pair_sync_speed,
-                          self._replication_pair_sync_speed,)
+                          self._replication_pair_sync_speed,
+                          self._get_local_minimum_fc_initiator,
+                          self._hyper_enforce_multipath)
 
         tree = ET.parse(self.conf.cinder_huawei_conf_file)
         xml_root = tree.getroot()
@@ -326,6 +329,20 @@ class HuaweiConf(object):
 
         setattr(self.conf, 'storage_pools', list(pools))
 
+    def _force_delete_volume(self, xml_root):
+        force_delete_volume = False
+        text = xml_root.findtext('LUN/ForceDeleteVolume')
+        if text:
+            if text.lower().strip() in ('true', 'false'):
+                if text.lower().strip() == 'true':
+                    force_delete_volume = True
+            else:
+                msg = _("ForceDeleteVolume configured error, "
+                        "ForceDeleteVolume is %s.") % text
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        setattr(self.conf, 'force_delete_volume', force_delete_volume)
+
     def _iscsi_default_target_ip(self, xml_root):
         text = xml_root.findtext('iSCSI/DefaultTargetIP')
         target_ip = text.split() if text else []
@@ -540,6 +557,21 @@ class HuaweiConf(object):
             speed = text.strip()
         setattr(self.conf, 'hyper_sync_speed', int(speed))
 
+    def _hyper_enforce_multipath(self, xml_root):
+        enforce_multipath_for_hypermetro = True
+        text = xml_root.findtext('LUN/HyperEnforceMultipath')
+        if text:
+            if text.lower().strip() in ('true', 'false'):
+                if text.lower().strip() == 'false':
+                    enforce_multipath_for_hypermetro = False
+            else:
+                msg = _("HyperEnforceMultipath configured error, "
+                        "HyperEnforceMultipath is %s.") % text
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        setattr(self.conf, 'enforce_multipath_for_hypermetro',
+                enforce_multipath_for_hypermetro)
+
     def _replication_pair_sync_speed(self, xml_root):
         text = xml_root.findtext('LUN/ReplicaSyncSpeed')
         if text and text.strip() not in constants.HYPER_SYNC_SPEED_TYPES:
@@ -555,3 +587,23 @@ class HuaweiConf(object):
         else:
             speed = text.strip()
         setattr(self.conf, 'replica_sync_speed', int(speed))
+
+    def _get_local_minimum_fc_initiator(self, xml_root):
+        text = xml_root.findtext('FC/MinOnlineFCInitiator')
+        minimum_fc_initiator = constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE
+        if text and not text.isdigit():
+            msg = (_("Invalid FC MinOnlineFCInitiator '%s', "
+                     "MinOnlineFCInitiator must be a digit.") % text)
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if text and text.strip() and text.strip().isdigit():
+            try:
+                minimum_fc_initiator = int(text.strip())
+            except Exception as err:
+                msg = (_("Minimum FC initiator number %(num)s is set"
+                         " too large, reason is %(err)s")
+                       % {"num": text.strip(), "err": err})
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        setattr(self.conf, 'min_fc_ini_online', minimum_fc_initiator)

@@ -51,7 +51,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.2.RC1"
+    VERSION = "2.2.RC3"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -69,6 +69,7 @@ class HuaweiBaseDriver(object):
         self.hypermetro_rmt_cli = None
         self.replication_rmt_cli = None
         self.support_capability = {}
+        self.support_dedup_and_compress = False
 
     def do_setup(self, context):
         self.conf.update_config_value()
@@ -81,6 +82,11 @@ class HuaweiBaseDriver(object):
             self.configuration.ssl_cert_verify,
             self.configuration.ssl_cert_path)
         self.local_cli.login()
+        self.support_dedup_and_compress = huawei_utils.is_support_clone_pair(
+            self.local_cli)
+
+        for c in constants.CHECK_FEATURES:
+            self.support_capability[c] = False
 
         if self.configuration.hypermetro:
             self.hypermetro_rmt_cli = rest_client.RestClient(
@@ -259,7 +265,6 @@ class HuaweiBaseDriver(object):
         feature_status = self.local_cli.get_feature_status()
 
         for c in constants.CHECK_FEATURES:
-            self.support_capability[c] = False
             for f in feature_status:
                 if re.match(c, f):
                     self.support_capability[c] = (
@@ -271,7 +276,8 @@ class HuaweiBaseDriver(object):
                     self.support_capability[c] = self.local_cli.check_feature(
                         constants.CHECK_FEATURES[c])
 
-        if self.support_capability["Effective Capacity"]:
+        if (self.support_capability["Effective Capacity"] or
+                self.support_dedup_and_compress):
             self.support_capability["SmartDedupe[\s\S]*LUN"] = True
             self.support_capability["SmartCompression[\s\S]*LUN"] = True
 

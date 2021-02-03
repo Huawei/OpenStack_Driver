@@ -20,7 +20,10 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 
 from cinder import exception
-from cinder.i18n import _, _LI, _LE, _LW
+from cinder.i18n import _
+from cinder.i18n import _LE
+from cinder.i18n import _LI
+from cinder.i18n import _LW
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
 
@@ -721,7 +724,8 @@ class ReplicaPairManager(object):
             if k in local_lun_info:
                 params[k] = local_lun_info[k]
 
-        if "WORKLOADTYPEID" in local_lun_info:
+        if local_lun_info.get("WORKLOADTYPENAME") and local_lun_info.get(
+                "WORKLOADTYPEID"):
             workload_type_name = self.local_client.get_workload_type_name(
                 local_lun_info['WORKLOADTYPEID'])
             rmt_workload_type_id = self.rmt_client.get_workload_type_id(
@@ -730,7 +734,7 @@ class ReplicaPairManager(object):
                 params['WORKLOADTYPEID'] = rmt_workload_type_id
             else:
                 msg = _("The workload type %s is not exist. Please create "
-                        "it on the array" % workload_type_name)
+                        "it on the array") % workload_type_name
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
 
@@ -841,6 +845,8 @@ class ReplicaPairManager(object):
 
     def _delete_rmt_lun(self, lun_id):
         if lun_id and self.rmt_client.check_lun_exist(lun_id):
+            huawei_utils.remove_lun_from_lungroup(
+                self.rmt_client, lun_id, self.conf.force_delete_volume)
             self.rmt_client.delete_lun(lun_id)
 
     def delete_replica(self, volume, replication_driver_data=None):

@@ -100,6 +100,23 @@ class Lun(CommonObject):
         # Set the mirror switch always on
         lun_params['MIRRORPOLICY'] = '1'
         result = self.post(data=lun_params)
+        if result['error']['code'] == constants.ERROR_VOLUME_ALREADY_EXIST:
+            lun_info = self.get_lun_info_by_name(lun_params['NAME'])
+            if lun_info:
+                return lun_info
+
+        if result['error']['code'] == constants.ERROR_VOLUME_TIMEOUT:
+            try_times = 2
+            while try_times:
+                time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
+                LOG.info(("Create LUN TimeOut, try get lun info in %s "
+                          "time"), 2 - try_times)
+                lun_info = self.get_lun_info_by_name(lun_params['NAME'])
+                if lun_info:
+                    return lun_info
+                else:
+                    try_times -= 1
+
         _assert_result(result, 'Create lun %s error.', lun_params)
         return result['data']
 
@@ -122,7 +139,7 @@ class Lun(CommonObject):
         _assert_result(result, 'Delete lun %s error.', lun_id)
 
     def get_lun_info_by_name(self, name):
-        result = self.get('?filter=NAME::%(name)s', name=name)
+        result = self.get('?filter=NAME::%(name)s&range=[0-100]', name=name)
         _assert_result(result, 'Get lun info by name %s error.', name)
         if result.get('data'):
             return result['data'][0]
@@ -174,7 +191,8 @@ class Lun(CommonObject):
         return result['data']
 
     def get_lun_info_filter_id(self, lun_id):
-        result = self.get("?filter=ID::%(lun_id)s", lun_id=lun_id)
+        result = self.get("?filter=ID::%(lun_id)s&range=[0-100]",
+                          lun_id=lun_id)
         _assert_result(result, 'Get lun info filter id %s error.', lun_id)
         if result.get('data'):
             return result['data'][0]
@@ -231,6 +249,23 @@ class Snapshot(CommonObject):
                 "DESCRIPTION": snapshot_description,
                 "PARENTID": lun_id}
         result = self.post(data=data)
+        if result['error']['code'] == constants.ERROR_VOLUME_ALREADY_EXIST:
+            snapshot_info = self.get_snapshot_info_by_name(snapshot_name)
+            if snapshot_info:
+                return snapshot_info
+
+        if result['error']['code'] == constants.ERROR_VOLUME_TIMEOUT:
+            try_times = 2
+            while try_times:
+                time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
+                LOG.info(_("Create SNAPSHOT TimeOut, try get snapshot "
+                           "info in %s time"), 2 - try_times)
+                snapshot_info = self.get_snapshot_info_by_name(snapshot_name)
+                if snapshot_info:
+                    return snapshot_info
+                else:
+                    try_times -= 1
+
         _assert_result(result, 'Create snapshot %s for lun %s error.',
                        snapshot_name, lun_id)
         return result['data']
@@ -248,7 +283,7 @@ class Snapshot(CommonObject):
         _assert_result(result, 'Delete snapshot %s error.', snapshot_id)
 
     def get_snapshot_info_by_name(self, name):
-        result = self.get('?filter=NAME::%(name)s', name=name)
+        result = self.get('?filter=NAME::%(name)s&range=[0-100]', name=name)
         _assert_result(result, 'Get snapshot info by name %s error.', name)
         if 'data' in result and result['data']:
             return result['data'][0]
@@ -327,7 +362,8 @@ class Host(CommonObject):
     _obj_url = '/host'
 
     def get_host_id_by_name(self, host_name):
-        result = self.get('?filter=NAME::%(name)s', name=host_name)
+        result = self.get('?filter=NAME::%(name)s&range=[0-100]',
+                          name=host_name)
         _assert_result(result, 'Get host by name %s error.', host_name)
         if result.get('data'):
             return result['data'][0]['ID']
@@ -588,7 +624,7 @@ class MappingView(CommonObject):
     _obj_url = '/mappingview'
 
     def get_mappingview_by_name(self, name):
-        result = self.get('?filter=NAME::%(name)s', name=name)
+        result = self.get('?filter=NAME::%(name)s&range=[0-100]', name=name)
         _assert_result(result, 'Find mapping view by name %s error', name)
         if 'data' in result and result['data']:
             return result['data'][0]
@@ -956,6 +992,24 @@ class HyperMetroPair(CommonObject):
 
     def create_hypermetro(self, hcp_param):
         result = self.post(data=hcp_param)
+        if result['error']['code'] == constants.HYPERMETRO_ALREADY_EXIST:
+            hypermetro_info = self.get_hypermetro_by_lun_id(
+                hcp_param["LOCALOBJID"])
+            if hypermetro_info:
+                return hypermetro_info
+
+        if result['error']['code'] == constants.CREATE_HYPERMETRO_TIMEOUT:
+            try_times = 2
+            while try_times:
+                time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
+                LOG.info(_("Create SNAPSHOT TimeOut, try get snapshot "
+                           "info in %s time"), 2 - try_times)
+                hypermetro_info = self.get_hypermetro_by_lun_id(
+                    hcp_param["LOCALOBJID"])
+                if hypermetro_info:
+                    return hypermetro_info
+                else:
+                    try_times -= 1
         _assert_result(result, 'Create hypermetro pair %s error.', hcp_param)
         return result['data']
 
@@ -986,6 +1040,13 @@ class HyperMetroPair(CommonObject):
         result = self.get('?filter=LOCALOBJNAME::%(name)s', name=lun_name)
         _assert_result(result, 'Get hypermetro by local lun name'
                                ' %s error.', lun_name)
+        if result.get('data'):
+            return result['data'][0]
+
+    def get_hypermetro_by_lun_id(self, lun_id):
+        result = self.get('?filter=LOCALOBJID::%(name)s', name=lun_id)
+        _assert_result(result, 'Get hypermetro by local lun id %s error.',
+                       lun_id)
         if result.get('data'):
             return result['data'][0]
 
@@ -1213,7 +1274,12 @@ class ClonePair(CommonObject):
     def sync_clone_pair(self, pair_id):
         data = {"ID": pair_id, "copyAction": 0}
         result = self.put("/synchronize", data=data)
-        _assert_result(result, 'Sync ClonePair error, pair is is %s.', pair_id)
+        _assert_result(result, 'Sync ClonePair error, pair is %s.', pair_id)
+
+    def stop_clone_pair(self, pair_id):
+        data = {"ID": pair_id, "copyAction": 2}
+        result = self.put("/synchronize", data=data)
+        _assert_result(result, 'Stop ClonePair error, pair is %s.', pair_id)
 
     def get_clone_pair_info(self, pair_id):
         result = self.get('/%(id)s', id=pair_id)
@@ -1545,7 +1611,23 @@ class RestClient(object):
             "SPLITSPEED": 4,
         }
         result = self.put('/lunclone_split_switch', data=data)
+        if _error_code(result) == constants.CLONE_PAIR_SYNC_NOT_EXIST:
+            return
         _assert_result(result, 'split clone lun %s error.', clone_id)
+
+    def stop_split_lunclone(self, clone_id):
+        data = {
+            "ID": clone_id,
+            "SPLITACTION": 2,
+            "ISCLONE": True,
+            "SPLITSPEED": 4,
+        }
+        result = self.put('/lunclone_split_switch', data=data)
+        if _error_code(result) == constants.CLONE_PAIR_SYNC_COMPLETE:
+            LOG.info("Split lun finish, delete the clone pair %s." % clone_id)
+            self.delete_clone_pair(clone_id)
+            return
+        _assert_result(result, 'stop split clone lun %s error.', clone_id)
 
     def get_workload_type_id(self, workload_type_name):
         url = "/workload_type?filter=NAME::%s" % workload_type_name
