@@ -368,16 +368,23 @@ class Host(CommonObject):
         if result.get('data'):
             return result['data'][0]['ID']
 
-    def create_host(self, hostname, orig_host_name):
+    def create_host(self, hostname, orig_host_name, info):
         data = {"NAME": hostname,
                 "OPERATIONSYSTEM": "0",
                 "DESCRIPTION": orig_host_name}
+        data.update(info)
         result = self.post(data=data)
         if _error_code(result) == constants.OBJECT_NAME_ALREADY_EXIST:
             return self.get_host_id_by_name(hostname)
 
         _assert_result(result, 'Add host %s error.', hostname)
         return result['data']['ID']
+
+    def update_host(self, host_id, data):
+        result = self.put('/%(id)s', id=host_id, data=data)
+        if _error_code(result) == constants.HOST_NOT_EXIST:
+            return
+        _assert_result(result, 'Update host %s error.', host_id)
 
     def delete_host(self, host_id):
         result = self.delete('/%(id)s', id=host_id)

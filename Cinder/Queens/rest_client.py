@@ -70,6 +70,7 @@ class RestClient(object):
         self.url = None
         self.ssl_cert_verify = self.configuration.ssl_cert_verify
         self.ssl_cert_path = self.configuration.ssl_cert_path
+        self.is_dorado_v6 = False
 
         if not self.ssl_cert_verify and hasattr(requests, 'packages'):
             LOG.warning("Suppressing requests library SSL Warnings")
@@ -809,8 +810,13 @@ class RestClient(object):
         if 'data' in result and result['data']:
             return result['data'][0]['ID']
 
-    def add_host_with_check(self, host_name):
+    def add_host_with_check(self, host_name, is_dorado_v6):
+        self.is_dorado_v6 = is_dorado_v6
         host_id = huawei_utils.get_host_id(self, host_name)
+        new_alua_info = {}
+        if self.is_dorado_v6:
+            info = self.iscsi_info or self.fc_info
+            new_alua_info = self._find_new_alua_info(info, host_name)
         if host_id:
             LOG.info(
                 'add_host_with_check. '
@@ -818,12 +824,13 @@ class RestClient(object):
                 'host id: %(id)s',
                 {'name': host_name,
                  'id': host_id})
+            self._update_host(host_id, new_alua_info)
             return host_id
 
         encoded_name = huawei_utils.encode_host_name(host_name)
 
         try:
-            host_id = self._add_host(encoded_name, host_name)
+            host_id = self._add_host(encoded_name, host_name, new_alua_info)
         except Exception:
             LOG.info(
                 'Failed to create host: %(name)s. '
@@ -846,18 +853,27 @@ class RestClient(object):
              'id': host_id})
         return host_id
 
-    def _add_host(self, hostname, host_name_before_hash):
+    def _add_host(self, hostname, host_name_before_hash, info):
         """Add a new host."""
         url = "/host"
         data = {"TYPE": "21",
                 "NAME": hostname,
                 "OPERATIONSYSTEM": "0",
                 "DESCRIPTION": host_name_before_hash}
+        data.update(info)
         result = self.call(url, data)
         self._assert_rest_result(result, _('Add new host error.'))
 
         if 'data' in result:
             return result['data']['ID']
+
+    def _update_host(self, host_id, data):
+        """Update a host."""
+        url = "/host/" + host_id
+        result = self.call(url, data, "PUT")
+        if result['error']['code'] == constants.HOST_NOT_EXIST:
+            return
+        self._assert_rest_result(result, _('Update host error.'))
 
     def _is_host_associate_to_hostgroup(self, hostgroup_id, host_id):
         """Check whether the host is associated to the hostgroup."""
@@ -1050,6 +1066,8 @@ class RestClient(object):
             find_info = tmp_find_info
 
         if find_info:
+            if 'ACCESSMODE' in find_info and self.is_dorado_v6:
+                return alua_info
             if 'ALUA' in find_info:
                 alua_info['ALUA'] = find_info['ALUA']
 
@@ -1063,6 +1081,29 @@ class RestClient(object):
                 for k in ('FAILOVERMODE', 'SPECIALMODETYPE', 'PATHTYPE'):
                     if k in find_info:
                         alua_info[k] = find_info[k]
+
+        return alua_info
+
+    def _find_new_alua_info(self, config, host_name):
+        """Find new ALUA info from xml."""
+        alua_info = {'accessMode': '0'}
+
+        find_info = None
+        for info in config:
+            if info.get('HostName'):
+                if info.get('HostName') == '*':
+                    find_info = info
+                elif re.search(info.get('HostName'), host_name):
+                    find_info = info
+                    break
+
+        if (find_info and find_info.get('ACCESSMODE') and
+                find_info.get('HYPERMETROPATHOPTIMIZED')):
+            alua_info.update({
+                'accessMode': find_info['ACCESSMODE'],
+                'hyperMetroPathOptimized':
+                    find_info['HYPERMETROPATHOPTIMIZED']
+            })
 
         return alua_info
 

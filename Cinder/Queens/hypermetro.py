@@ -31,6 +31,7 @@ class HuaweiHyperMetro(object):
         self.client = client
         self.rmt_client = rmt_client
         self.configuration = configuration
+        self.is_dorado_v6 = huawei_utils.is_support_clone_pair(self.rmt_client)
 
     def create_hypermetro(self, local_lun_id, lun_params, is_sync=False):
         """Create hypermetro."""
@@ -133,7 +134,8 @@ class HuaweiHyperMetro(object):
         original_host_name = connector['host']
 
         # Create hostgroup if not exist.
-        host_id = self.rmt_client.add_host_with_check(original_host_name)
+        host_id = self.rmt_client.add_host_with_check(original_host_name,
+                                                      self.is_dorado_v6)
 
         online_wwns_in_host = (
             self.rmt_client.get_host_online_fc_initiators(host_id))
