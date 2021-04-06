@@ -94,7 +94,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         self.use_ultrapath = self.configuration.safe_get(
             'libvirt_iscsi_use_ultrapath')
         self.sn = 'NA'
-        self.support_dedup_and_compress = False
+        self.is_dorado_v6 = False
 
     def check_local_func_support(self, obj_name):
         try:
@@ -149,8 +149,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                                              **client_conf)
         self.sn = self.client.login()
         self.client.check_storage_pools()
-        self.support_dedup_and_compress = huawei_utils.is_support_clone_pair(
-            self.client)
+        self.is_dorado_v6 = huawei_utils.is_support_clone_pair(self.client)
 
         # init hypermetro remote client
         hypermetro_devs = self.huawei_conf.get_hypermetro_devices()
@@ -213,10 +212,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             'huawei_controller': True,
             'dedup': [huawei_utils.check_feature_available(
                 feature_status, constants.DEDUP_FEATURES
-            ) or self.support_dedup_and_compress, False],
+            ) or self.is_dorado_v6, False],
             'compression': [huawei_utils.check_feature_available(
                 feature_status, constants.COMPRESSION_FEATURES
-            ) or self.support_dedup_and_compress, False],
+            ) or self.is_dorado_v6, False],
             'huawei_application_type': False,
         }
 
@@ -699,14 +698,13 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             LOG.error(err_msg)
             raise exception.VolumeBackendAPIException(data=err_msg)
 
-        clone_pair_flag = huawei_utils.is_support_clone_pair(self.client)
         lun_params = self._get_lun_params(volume, opts, src_size)
 
         if not src_obj:
             lun_info = self.client.create_lun(lun_params)
         else:
             lun_info = self._create_volume_from_src(
-                volume, src_obj, src_type, lun_params, clone_pair_flag)
+                volume, src_obj, src_type, lun_params, self.is_dorado_v6)
 
         try:
             metro_id, replica_info = self._add_extend_type_to_volume(
@@ -1042,7 +1040,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             if k in lun_info:
                 lun_params[k] = lun_info[k]
 
-        for item in lun_params:
+        for item in list(lun_params.keys()):
             if lun_params.get(item) == '--':
                 lun_params.pop(item, None)
 
@@ -2629,7 +2627,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.RC3"
+    VERSION = "2.2.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiISCSIDriver, self).__init__(*args, **kwargs)
@@ -2724,7 +2722,8 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
                   'portgroup_id': portgroup_id})
 
         # Create hostgroup if not exist.
-        host_id = client.add_host_with_check(connector['host'])
+        host_id = client.add_host_with_check(connector['host'],
+                                             self.is_dorado_v6)
         try:
             client.ensure_initiator_added(initiator_name, host_id,
                                           connector['host'])
@@ -2917,7 +2916,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.RC3"
+    VERSION = "2.2.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiFCDriver, self).__init__(*args, **kwargs)
@@ -2950,7 +2949,8 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
              'lun_type': lun_type})
 
         portg_id = None
-        host_id = self.client.add_host_with_check(connector['host'])
+        host_id = self.client.add_host_with_check(connector['host'],
+                                                  self.is_dorado_v6)
 
         if not self.fcsan:
             self.fcsan = fczm_utils.create_lookup_service()

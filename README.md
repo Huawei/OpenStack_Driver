@@ -8,10 +8,4 @@ filesystem directly to the VMs. Also, manila driver support snapshot, replicatio
 QoS and so on.
 
 ## Compatibility Matrix
-The strategies of Huawei Cinder Driver and Manila Driver are consistent with the OpenStack community, we support the 
-latest 6 versions. **For other versions, it can be used but no longer maintained.**
-
-| OpenStack |Mitaka|Queens|Rocky|Stein|Train|Ussuri|Victoria|
-|---|---|---|---|---|---|---|---|
-|Cinder Driver|√|√|√|√|√|√|√|
-|Manila Driver|x|√|√|√|√|√|x|
+The strategies of Huawei Cinder Driver and Manila Driver are consistent with the OpenStack community, we support the latest 6 versions. For other versions, it can be used but no longer maintained. More details [release doc](https://github.com/Huawei/OpenStack_Driver/blob/master/RELEASE.md)
