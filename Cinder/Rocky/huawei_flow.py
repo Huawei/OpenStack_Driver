@@ -1285,14 +1285,15 @@ class GetISCSIConnectionTask(task.Task):
             ip_addr = ipaddress.ip_address(six.text_type(ip))
             normalized_ip = ip_addr.exploded
             if normalized_ip in ip_iqn_map:
-                if ip_addr.version == 6:
-                    target_ips.append('[' + ip_addr.compressed + ']')
-                else:
-                    target_ips.append(ip_addr.compressed)
-
                 iqn = self._get_port_iqn(ip_iqn_map[normalized_ip][0])
                 target_iqns.append(iqn)
                 target_eths.append(ip_iqn_map[normalized_ip][1])
+
+        for iqn in target_iqns:
+            ip = iqn.split(':', 5)[5]
+            if ipaddress.ip_address(six.text_type(ip)).version == 6:
+                ip = '[' + ip + ']'
+            target_ips.append(ip)
 
         if not target_ips or not target_iqns or not target_eths:
             msg = _('Get iSCSI target ip&iqn&eth error.')
@@ -1308,26 +1309,46 @@ class GetISCSIConnectionTask(task.Task):
 class CreateHostTask(task.Task):
     default_provides = 'host_id'
 
-    def __init__(self, client, *args, **kwargs):
+    def __init__(self, client, iscsi_info, configuration, *args, **kwargs):
         super(CreateHostTask, self).__init__(*args, **kwargs)
         self.client = client
+        self.iscsi_info = iscsi_info
+        self.configuration = configuration
+
+    def _get_new_alua_info(self, config):
+        info = {'accessMode': '0'}
+        if config.get('ACCESSMODE') and config.get('HYPERMETROPATHOPTIMIZED'):
+            info.update({
+                'accessMode': config['ACCESSMODE'],
+                'hyperMetroPathOptimized': config['HYPERMETROPATHOPTIMIZED']
+            })
+
+        return info
 
     def execute(self, connector):
         orig_host_name = connector['host']
         host_id = huawei_utils.get_host_id(self.client, orig_host_name)
+        info = {}
+        if self.configuration.is_dorado_v6:
+            config_info = huawei_utils.find_config_info(
+                self.iscsi_info, connector=connector)
+            info = self._get_new_alua_info(config_info)
+        if host_id:
+            self.client.update_host(host_id, info)
         if not host_id:
             host_name = huawei_utils.encode_host_name(orig_host_name)
-            host_id = self.client.create_host(host_name, orig_host_name)
+            host_id = self.client.create_host(host_name, orig_host_name, info)
         return host_id
 
 
 class AddISCSIInitiatorTask(task.Task):
     default_provides = 'chap_info'
 
-    def __init__(self, client, iscsi_info, *args, **kwargs):
+    def __init__(self, client, iscsi_info, configuration, *args, **kwargs):
         super(AddISCSIInitiatorTask, self).__init__(*args, **kwargs)
         self.client = client
         self.iscsi_info = iscsi_info
+        self.configuration = configuration
 
     def _get_chap_info(self, config):
         chap_config = config.get('CHAPinfo')
@@ -1340,6 +1361,9 @@ class AddISCSIInitiatorTask(task.Task):
 
     def _get_alua_info(self, config):
         alua_info = {'MULTIPATHTYPE': '0'}
+        if config.get('ACCESSMODE') and self.configuration.is_dorado_v6:
+            return alua_info
+
         if config.get('ALUA'):
             alua_info['MULTIPATHTYPE'] = config['ALUA']
 
@@ -1819,13 +1843,17 @@ class GetFCConnectionTask(task.Task):
 
 
 class AddFCInitiatorTask(task.Task):
-    def __init__(self, client, fc_info, *args, **kwargs):
+    def __init__(self, client, fc_info, configuration, *args, **kwargs):
         super(AddFCInitiatorTask, self).__init__(*args, **kwargs)
         self.client = client
         self.fc_info = fc_info
+        self.configuration = configuration
 
     def _get_alua_info(self, config):
         alua_info = {'MULTIPATHTYPE': '0'}
+        if config.get('ACCESSMODE') and self.configuration.is_dorado_v6:
+            return alua_info
+
         if config.get('ALUA'):
             alua_info['MULTIPATHTYPE'] = config['ALUA']
 
@@ -2054,7 +2082,6 @@ def create_volume_from_snapshot(
         configuration, feature_support):
     store_spec = {'volume': volume}
     metadata = huawei_utils.get_volume_metadata(volume)
-    clone_pair_flag = huawei_utils.is_support_clone_pair(local_cli)
     work_flow = linear_flow.Flow('create_volume_from_snapshot')
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support),
@@ -2068,7 +2095,7 @@ def create_volume_from_snapshot(
             CreateLunCloneTask(local_cli,
                                rebind={'src_id': 'snapshot_id'}),
         )
-    elif clone_pair_flag:
+    elif configuration.is_dorado_v6:
         work_flow.add(
             CreateLunTask(local_cli, configuration, feature_support,
                           inject={"src_size": snapshot.volume_size}),
@@ -2114,7 +2141,6 @@ def create_volume_from_volume(
         configuration, feature_support):
     store_spec = {'volume': volume}
     metadata = huawei_utils.get_volume_metadata(volume)
-    clone_pair_flag = huawei_utils.is_support_clone_pair(local_cli)
     work_flow = linear_flow.Flow('create_volume_from_volume')
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support),
@@ -2129,7 +2155,7 @@ def create_volume_from_volume(
             LunClonePreCheckTask(inject={'src_volume': src_volume}),
             CreateLunCloneTask(local_cli),
         )
-    elif clone_pair_flag:
+    elif configuration.is_dorado_v6:
         work_flow.add(
             CreateLunTask(local_cli, configuration, feature_support,
                           inject={"src_size": src_volume.size}),
@@ -2367,9 +2393,9 @@ def initialize_iscsi_connection(lun, lun_type, connector, client,
                 rebind={'snapshot': 'lun'}))
 
     work_flow.add(
-        CreateHostTask(client),
+        CreateHostTask(client, configuration.iscsi_info, configuration),
         GetISCSIConnectionTask(client, configuration.iscsi_info),
-        AddISCSIInitiatorTask(client, configuration.iscsi_info),
+        AddISCSIInitiatorTask(client, configuration.iscsi_info, configuration),
         CreateHostGroupTask(client),
         CreateLunGroupTask(client),
         CreateMappingViewTask(client),
@@ -2389,9 +2415,11 @@ def initialize_remote_iscsi_connection(hypermetro_id, connector,
 
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
-        CreateHostTask(client),
+        CreateHostTask(client, configuration.hypermetro['iscsi_info'],
+                       configuration),
         GetISCSIConnectionTask(client, configuration.hypermetro['iscsi_info']),
-        AddISCSIInitiatorTask(client, configuration.hypermetro['iscsi_info']),
+        AddISCSIInitiatorTask(client, configuration.hypermetro['iscsi_info'],
+                              configuration),
         CreateHostGroupTask(client),
         CreateLunGroupTask(client),
         CreateMappingViewTask(client),
@@ -2458,9 +2486,9 @@ def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
                 rebind={'snapshot': 'lun'}))
 
     work_flow.add(
-        CreateHostTask(client),
+        CreateHostTask(client, configuration.fc_info, configuration),
         GetFCConnectionTask(client, fc_san, configuration),
-        AddFCInitiatorTask(client, configuration.fc_info),
+        AddFCInitiatorTask(client, configuration.fc_info, configuration),
         CreateHostGroupTask(client),
         CreateLunGroupTask(client),
         CreateFCPortGroupTask(client, fc_san),
@@ -2481,9 +2509,11 @@ def initialize_remote_fc_connection(hypermetro_id, connector, fc_san, client,
 
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
-        CreateHostTask(client),
+        CreateHostTask(client, configuration.hypermetro['fc_info'],
+                       configuration),
         GetFCConnectionTask(client, fc_san, configuration),
-        AddFCInitiatorTask(client, configuration.hypermetro['fc_info']),
+        AddFCInitiatorTask(client, configuration.hypermetro['fc_info'],
+                           configuration),
         CreateHostGroupTask(client),
         CreateLunGroupTask(client),
         CreateFCPortGroupTask(client, fc_san),

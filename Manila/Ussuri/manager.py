@@ -40,6 +40,22 @@ class HuaweiManager(object):
             local_share_info, remote_device_wwn, remote_fs_id,
             local_replication)
 
+    def create_replica_snapshot(
+            self, ctx, replica_share_name,
+            active_snapshot_name, replica_snapshot_name):
+        """Create replication snapshot."""
+        return self.driver.rpc_update_snapshot(
+            replica_share_name, active_snapshot_name, replica_snapshot_name)
+
+    def delete_replica_snapshot(self, ctx, replica_share_name,
+                                replica_snapshot_name):
+        """Delete replication snapshot."""
+        return self.driver.rpc_delete_snapshot(
+            replica_share_name, replica_snapshot_name)
+
+    def update_replica_filesystem(self, context, replica_fs_id, params):
+        return self.driver.update_replica_filesystem(replica_fs_id, params)
+
     def create_remote_filesystem(self, context, params):
         return self.metro_mgr.create_remote_filesystem(params)
 

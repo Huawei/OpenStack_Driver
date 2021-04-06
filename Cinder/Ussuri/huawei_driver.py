@@ -56,6 +56,10 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
                 msg = _("Mapping hypermetro volume must use multipath.")
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
+            elif (not connector.get('multipath') and
+                  not self.configuration.enforce_multipath_for_hypermetro):
+                LOG.warning("Mapping hypermetro volume not use multipath,"
+                            " so just mapping the local lun.")
             if not self.hypermetro_rmt_cli:
                 msg = _("Mapping hypermetro volume requires remote.")
                 LOG.error(msg)
@@ -64,7 +68,7 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
         local_mapping = huawei_flow.initialize_iscsi_connection(
             volume, constants.LUN_TYPE, connector, self.local_cli,
             self.configuration)
-        if metadata.get('hypermetro'):
+        if metadata.get('hypermetro') and connector.get('multipath'):
             hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
             if not hypermetro:
                 msg = _("Mapping hypermetro remote volume error.")
@@ -159,6 +163,10 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
                 msg = _("Mapping hypermetro volume must use multipath.")
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
+            elif (not connector.get('multipath') and
+                  not self.configuration.enforce_multipath_for_hypermetro):
+                LOG.warning("Mapping hypermetro volume not use multipath,"
+                            " so just mapping the local lun.")
             if not self.hypermetro_rmt_cli:
                 msg = _("Mapping hypermetro volume requires remote.")
                 LOG.error(msg)
@@ -167,7 +175,7 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         local_mapping = huawei_flow.initialize_fc_connection(
             volume, constants.LUN_TYPE, connector, self.fc_san, self.local_cli,
             self.configuration)
-        if metadata.get('hypermetro'):
+        if metadata.get('hypermetro') and connector.get('multipath'):
             hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
             if not hypermetro:
                 msg = _("Mapping hypermetro remote volume error.")

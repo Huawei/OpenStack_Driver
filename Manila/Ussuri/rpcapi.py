@@ -48,6 +48,15 @@ class HuaweiAPI(object):
             local_replication=local_replication,
         )
 
+    def update_replica_filesystem(self, context, host, replica_fs_id, params):
+        new_host = utils.extract_host(host)
+        call_context = self.client.prepare(server=new_host, version='1.0')
+        return call_context.call(
+            context, 'update_replica_filesystem',
+            replica_fs_id=replica_fs_id,
+            params=params
+        )
+
     def create_remote_filesystem(self, context, host, params):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
@@ -186,3 +195,25 @@ class HuaweiAPI(object):
                     share_name=share_name)
             except Exception:
                 raise
+
+    def create_replica_snapshot(
+            self, context, host, replica_share_name,
+            active_snapshot_name, replica_snapshot_name):
+        new_host = utils.extract_host(host)
+        call_context = self.client.prepare(server=new_host, version='1.0')
+        return call_context.call(
+            context, 'create_replica_snapshot',
+            replica_share_name=replica_share_name,
+            active_snapshot_name=active_snapshot_name,
+            replica_snapshot_name=replica_snapshot_name,
+        )
+
+    def delete_replica_snapshot(
+            self, context, host, replica_share_name, replica_snapshot_name):
+        new_host = utils.extract_host(host)
+        call_context = self.client.prepare(server=new_host, version='1.0')
+        return call_context.call(
+            context, 'delete_replica_snapshot',
+            replica_share_name=replica_share_name,
+            replica_snapshot_name=replica_snapshot_name,
+        )

@@ -17,8 +17,10 @@ import base64
 import json
 import requests
 import six
+import threading
 import time
 
+from oslo_concurrency import lockutils
 from oslo_log import log
 
 from manila import exception
@@ -51,6 +53,8 @@ class RestHelper(object):
         self.nas_password = nas_password
         self.url = None
         self.session = None
+        self.semaphore = threading.Semaphore(30)
+        self.call_lock = lockutils.ReaderWriterLock()
 
         LOG.warning("Suppressing requests library SSL Warnings")
         requests.packages.urllib3.disable_warnings(
@@ -83,6 +87,7 @@ class RestHelper(object):
                       'data': data})
 
         func = getattr(self.session, method.lower())
+        self.semaphore.acquire()
 
         try:
             res = func(url, **kwargs)
@@ -92,6 +97,8 @@ class RestHelper(object):
                       {'url': url, 'err': six.text_type(exc)})
             return {"error": {"code": constants.ERROR_CONNECT_TO_SERVER,
                               "description": "Connect server error"}}
+        finally:
+            self.semaphore.release()
 
         try:
             res.raise_for_status()
@@ -132,7 +139,8 @@ class RestHelper(object):
                 "xx/sessions", 'POST', data, constants.LOGIN_SOCKET_TIMEOUT,
                 log_filter=True)
             if _error_code(result) != 0:
-                LOG.error("Login %s failed, try another.", item_url)
+                LOG.error("Login %s failed, try another. Result is %s",
+                          item_url, result)
                 continue
 
             LOG.info('Login %s success.', item_url)
@@ -158,14 +166,73 @@ class RestHelper(object):
             result = self.do_call(url, "DELETE")
             _assert_result(result, 'Logout session error.')
 
-    @utils.synchronized('huawei_manila')
+    def relogin(self, old_token):
+        """Relogin Huawei storage array
+
+        When batch apporation failed
+        """
+        old_url = self.url
+        if self.url is None:
+            try:
+                self.login()
+            except Exception as err:
+                LOG.error("Relogin failed. Error: %s.", err)
+                return False
+            LOG.info('Relogin: \n'
+                     'Replace URL: \n'
+                     'Old URL: %(old_url)s\n,'
+                     'New URL: %(new_url)s\n.',
+                     {'old_url': old_url,
+                      'new_url': self.url})
+        elif old_token == self.session.headers.get('iBaseToken'):
+            try:
+                self.logout()
+            except Exception as err:
+                LOG.warning('Logout failed. Error: %s.', err)
+
+            try:
+                self.login()
+            except Exception as err:
+                LOG.error("Relogin failed. Error: %s.", err)
+                return False
+            LOG.info('First logout then login: \n'
+                     'Replace URL: \n'
+                     'Old URL: %(old_url)s\n,'
+                     'New URL: %(new_url)s\n.',
+                     {'old_url': old_url,
+                      'new_url': self.url})
+        else:
+            LOG.info('Relogin has been successed by other thread.')
+        return True
+
     def call(self, url, method, data=None, **kwargs):
-        result = self.do_call(url, method, data, **kwargs)
+        with self.call_lock.read_lock():
+            if self.url:
+                old_token = self.session.headers.get('iBaseToken')
+                result = self.do_call(url, method, data, **kwargs)
+            else:
+                old_token = None
+                result = {"error": {
+                    "code": constants.ERROR_UNAUTHORIZED_TO_SERVER,
+                    "description": "unauthorized."}}
+
         if _error_code(result) in (constants.ERROR_CONNECT_TO_SERVER,
-                                   constants.ERROR_UNAUTHORIZED_TO_SERVER):
-            LOG.error("Can't open the recent url, relogin.")
-            self.login()
-            result = self.do_call(url, method, data, **kwargs)
+                                   constants.ERROR_UNAUTHORIZED_TO_SERVER,
+                                   constants.ERROR_BAD_STATUS_LINE):
+            with self.call_lock.write_lock():
+                relogin_result = self.relogin(old_token)
+            if relogin_result:
+                with self.call_lock.read_lock():
+                    result = self.do_call(url, method, data, **kwargs)
+                if _error_code(result) == constants.RELOGIN_ERROR_PASS:
+                    LOG.warning('This operation maybe successed first time')
+                    result['error']['code'] = 0
+                elif _error_code(result) == 0:
+                    LOG.info('Successed in the second time.')
+                else:
+                    LOG.info('Failed in the second time, Reason: %s', result)
+            else:
+                LOG.error('Relogin failed, no need to send again.')
         return result
 
     def create_filesystem(self, fs_param):
@@ -173,6 +240,10 @@ class RestHelper(object):
         result = self.call(url, 'POST', fs_param)
         _assert_result(result, 'Create filesystem %s error.', fs_param)
         return result['data']['ID']
+
+    @staticmethod
+    def _invalid_nas_protocol(share_proto):
+        return _('Invalid NAS protocol %s.') % share_proto
 
     def create_share(self, share_name, fs_id, share_proto, vstore_id=None):
         share_path = huawei_utils.share_path(share_name)
@@ -188,7 +259,7 @@ class RestHelper(object):
             url = "/CIFSHARE"
             data["NAME"] = huawei_utils.share_name(share_name)
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
         if vstore_id:
@@ -219,7 +290,7 @@ class RestHelper(object):
         elif share_proto == 'CIFS':
             url = "/CIFSHARE/%s" % share_id
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
         data = {'vstoreId': vstore_id} if vstore_id else None
@@ -247,8 +318,8 @@ class RestHelper(object):
         url = "/storagepool?filter=NAME::%s" % name
         result = self.call(url, "GET", log_filter=log_filter)
         _assert_result(result, "Get pool %s error.", name)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        for data in result.get("data", []):
+            return data
 
     def remove_access(self, access_id, share_proto, vstore_id=None):
         if share_proto == 'NFS':
@@ -256,7 +327,7 @@ class RestHelper(object):
         elif share_proto == 'CIFS':
             url = "/CIFS_SHARE_AUTH_CLIENT/%s" % access_id
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
         data = {'vstoreId': vstore_id} if vstore_id else None
@@ -274,13 +345,39 @@ class RestHelper(object):
             if access['NAME'] in (access_to, '@' + access_to):
                 return access
 
+    def get_share_access_by_id(self, share_id, share_proto, vstore_id):
+        accesses = self.get_all_share_access(share_id, share_proto, vstore_id)
+        access_info_list = []
+        for item in accesses:
+            access_to = item.get("NAME", "")
+            if "@" in access_to:
+                access_type = "user"
+            else:
+                access_type = "ip"
+
+            _access_level = item.get('PERMISSION') or item.get('ACCESSVAL')
+            if (_access_level and str(_access_level) in (
+                    constants.ACCESS_NFS_RW,
+                    constants.ACCESS_CIFS_FULLCONTROL)):
+                access_level = 'rw'
+            elif (_access_level and str(_access_level) in (
+                    constants.ACCESS_NFS_RO, constants.ACCESS_CIFS_RO)):
+                access_level = 'ro'
+            else:
+                access_level = ''
+
+            access_info_list.append({"access_level": access_level,
+                                     "access_to": access_to,
+                                     "access_type": access_type})
+        return access_info_list
+
     def _get_share_access_count(self, share_id, share_proto, vstore_id=None):
         if share_proto == 'NFS':
             url = "/NFS_SHARE_AUTH_CLIENT"
         elif share_proto == 'CIFS':
             url = "/CIFS_SHARE_AUTH_CLIENT"
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
         url += "/count?filter=PARENTID::%s" % share_id
@@ -291,17 +388,17 @@ class RestHelper(object):
         return int(result['data']['COUNT'])
 
     def _get_share_access_by_range(self, share_id, share_proto,
-                                   range, vstore_id=None):
+                                   query_range, vstore_id=None):
         if share_proto == 'NFS':
             url = "/NFS_SHARE_AUTH_CLIENT"
         elif share_proto == 'CIFS':
             url = "/CIFS_SHARE_AUTH_CLIENT"
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
         url += "?filter=PARENTID::%s" % share_id
-        url += "&range=[%s-%s]" % range
+        url += "&range=[%s-%s]" % query_range
         data = {'vstoreId': vstore_id} if vstore_id else None
         result = self.call(url, "GET", data)
         _assert_result(result, 'Get accesses of share %s error.', share_id)
@@ -330,7 +427,7 @@ class RestHelper(object):
             url = "/CIFS_SHARE_AUTH_CLIENT/" + access_id
             access = {"PERMISSION": access_level}
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
         if vstore_id:
@@ -348,7 +445,7 @@ class RestHelper(object):
             self._allow_cifs_access(
                 share_id, access_to, access_level, vstore_id)
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
     def _allow_nfs_access(self, share_id, access_to, access_level,
@@ -424,7 +521,7 @@ class RestHelper(object):
             cifs_share = huawei_utils.share_name(share_name)
             url = "/CIFSHARE?filter=NAME:%s&range=[0-100]" % cifs_share
         else:
-            msg = _('Invalid NAS protocol %s.') % share_proto
+            msg = self._invalid_nas_protocol(share_proto)
             raise exception.InvalidInput(reason=msg)
 
         data = {'vstoreId': vstore_id} if vstore_id else None
@@ -440,19 +537,23 @@ class RestHelper(object):
             url = "/CIFSHARE?filter=DESCRIPTION:%s&range=[0-100]" % share_name
             result = self.call(url, "GET", data)
 
-        if result.get('data'):
-            return result['data'][0]
+        for data in result.get('data', []):
+            return data
 
     def get_fs_info_by_name(self, name):
-        url = "/filesystem?filter=NAME::%s" % huawei_utils.share_name(name)
+        url = ("/filesystem?filter=NAME::%s&range=[0-100]" %
+               huawei_utils.share_name(name))
         result = self.call(url, "GET")
         _assert_result(result, 'Get filesystem by name %s error.', name)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        for data in result.get('data', []):
+            return data
 
     def get_fs_info_by_id(self, fs_id):
         url = "/filesystem/%s" % fs_id
         result = self.call(url, "GET")
+        if _error_code(result) == constants.FILESYSTEM_NOT_EXIST:
+            LOG.warning("Filesystem %s does not exist.", fs_id)
+            return
         _assert_result(result, "Get filesystem by id %s error.", fs_id)
         return result['data']
 
@@ -466,8 +567,8 @@ class RestHelper(object):
         url = "/cachepartition?filter=NAME::%s" % name
         result = self.call(url, "GET")
         _assert_result(result, 'Get partition by name %s error.', name)
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        for data in result.get('data', []):
+            return data
 
     def get_partition_info_by_id(self, partitionid):
         url = '/cachepartition/' + partitionid
@@ -505,8 +606,8 @@ class RestHelper(object):
         url = "/SMARTCACHEPARTITION?filter=NAME::%s" % name
         result = self.call(url, "GET")
         _assert_result(result, 'Get cache by name %s error.', name)
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        for data in result.get('data', []):
+            return data.get("ID")
 
     def get_cache_info_by_id(self, cacheid):
         url = "/SMARTCACHEPARTITION/" + cacheid
@@ -626,8 +727,8 @@ class RestHelper(object):
             url = "/LIF?filter=IPV6ADDR::%s" % ip
         result = self.call(url, 'GET')
         _assert_result(result, 'Get logical port by IP %s error.', ip)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        for data in result.get('data', []):
+            return data
 
     def create_logical_port(self, params):
         result = self.call("/LIF", 'POST', params)
@@ -753,9 +854,14 @@ class RestHelper(object):
         result = self.call('/REPLICATIONPAIR/switch', "PUT", data)
         _assert_result(result, 'Switch replication pair %s error.', pair_id)
 
-    def delete_replication_pair(self, pair_id):
-        url = "/REPLICATIONPAIR/%s" % pair_id
+    def delete_replication_pair(self, pair_id, is_force_delete=False):
+        url = ("/REPLICATIONPAIR/%(pair_id)s?ISLOCALDELETE=%(deleted)s" %
+               {"pair_id": pair_id,
+                "deleted": "true" if is_force_delete else "false"})
         result = self.call(url, "DELETE")
+        if _error_code(result) == constants.REPLICATION_CONNECTION_NOT_NORMAL:
+            self.delete_replication_pair(pair_id, is_force_delete=True)
+            return
         if _error_code(result) == constants.REPLICATION_PAIR_NOT_EXIST:
             LOG.warning('Replication pair %s to delete not exist.', pair_id)
             return
@@ -822,7 +928,7 @@ class RestHelper(object):
 
         for con in result.get('data', []):
             if con.get('LOCATION') == controller_name:
-                return con['ID']
+                return con.get("ID")
 
     def split_clone_fs(self, fs_id):
         data = {"ID": fs_id,
@@ -838,10 +944,11 @@ class RestHelper(object):
         return result['data']
 
     def get_hypermetro_pair_by_id(self, pair_id):
-        url = "/HyperMetroPair/%s" % pair_id
+        url = "/HyperMetroPair?filter=ID::%s" % pair_id
         result = self.call(url, "GET")
         _assert_result(result, 'Get HyperMetro pair %s error.', pair_id)
-        return result['data']
+        for data in result.get("data", []):
+            return data
 
     def suspend_hypermetro_pair(self, pair_id):
         params = {"ID": pair_id,
@@ -870,6 +977,14 @@ class RestHelper(object):
             if item.get("NAME") == domain_name:
                 return item.get("ID")
 
+    def get_hypermetro_domain_info(self, domain_name):
+        result = self.call("/FsHyperMetroDomain?RUNNINGSTATUS=0", "GET",
+                           log_filter=True)
+        _assert_result(result, "Get FSHyperMetro domains info error.")
+        for item in result.get("data", []):
+            if item.get("NAME") == domain_name:
+                return item
+
     def get_hypermetro_vstore_id(self, domain_name, local_vstore_name,
                                  remote_vstore_name):
         result = self.call("/vstore_pair?range=[0-100]", "GET",
@@ -887,3 +1002,18 @@ class RestHelper(object):
         result = self.call(url, 'GET', data=None, log_filter=True)
         _assert_result(result, "Get HyperMetro vstore_pair info by id error.")
         return result["data"]
+
+    def get_array_info(self):
+        url = "/system/"
+        result = self.call(url, 'GET', data=None, log_filter=True)
+        _assert_result(result, _('Get array info error.'))
+        return result.get('data', None)
+
+    def get_rollback_snapshot_info(self, share_id, snap_name):
+        url = ("/FSSNAPSHOT?PARENTID=%(share_id)s&filter=NAME::%(snap_name)s"
+               % {"share_id": share_id, "snap_name": snap_name})
+        result = self.call(url, "GET")
+        _assert_result(result, 'Get rollback snapshot by snapshot name %s '
+                               'error.', snap_name)
+        for data in result.get("data", []):
+            return data
