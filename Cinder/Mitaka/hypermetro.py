@@ -207,10 +207,14 @@ class HuaweiHyperMetro(object):
 
     def disconnect_volume_fc(self, volume, connector):
         """Delete map between a volume and a host for FC."""
-        wwns = connector['wwpns']
         lun_id, _ = huawei_utils.get_volume_lun_id(self.rmt_client, volume)
-        host_name = connector['host']
         lungroup_id = None
+        if connector is None or 'host' not in connector:
+            host_name, wwns = huawei_utils.get_fc_mapping_info(self.rmt_client,
+                                                               lun_id)
+        else:
+            host_name = connector['host']
+            wwns = connector['wwpns']
 
         LOG.info(_LI('terminate_connection_fc: volume: %(id)s, '
                      'wwpns: %(wwns)s, '

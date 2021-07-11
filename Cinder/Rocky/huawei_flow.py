@@ -868,6 +868,67 @@ class DeleteTempSnapshotTask(task.Task):
         self.client.delete_snapshot(snapshot_id)
 
 
+class RevertToSnapshotTask(task.Task):
+    def __init__(self, client, rollback_speed, *args, **kwargs):
+        super(RevertToSnapshotTask, self).__init__(*args, **kwargs)
+        self.client = client
+        self.rollback_speed = rollback_speed
+
+    def execute(self, snapshot_info, snapshot_id):
+        running_status = snapshot_info.get("RUNNINGSTATUS")
+        health_status = snapshot_info.get("HEALTHSTATUS")
+
+        if running_status not in (
+                constants.SNAPSHOT_RUNNING_STATUS_ACTIVATED,
+                constants.SNAPSHOT_RUNNING_STATUS_ROLLINGBACK):
+            err_msg = (_("The running status %(status)s of snapshot %(name)s.")
+                       % {"status": running_status, "name": snapshot_id})
+            LOG.error(err_msg)
+            raise exception.InvalidSnapshot(reason=err_msg)
+
+        if health_status not in (constants.SNAPSHOT_HEALTH_STATUS_NORMAL,):
+            err_msg = (_("The health status %(status)s of snapshot %(name)s.")
+                       % {"status": running_status, "name": snapshot_id})
+            LOG.error(err_msg)
+            raise exception.InvalidSnapshot(reason=err_msg)
+
+        if constants.SNAPSHOT_RUNNING_STATUS_ACTIVATED == snapshot_info.get(
+                'RUNNINGSTATUS'):
+            self.client.rollback_snapshot(snapshot_id, self.rollback_speed)
+
+    def revert(self, result, snapshot_id, **kwargs):
+        if isinstance(result, failure.Failure):
+            return
+        self.client.cancel_rollback_snapshot(snapshot_id)
+
+
+class WaitSnapshotRollbackDoneTask(task.Task):
+    def __init__(self, client, *args, **kwargs):
+        super(WaitSnapshotRollbackDoneTask, self).__init__(*args, **kwargs)
+        self.client = client
+
+    def execute(self, snapshot_id):
+        def _snapshot_rollback_finish():
+            snapshot_info = self.client.get_snapshot_info_by_id(snapshot_id)
+
+            if snapshot_info.get('HEALTHSTATUS') not in (
+                    constants.SNAPSHOT_HEALTH_STATUS_NORMAL,):
+                msg = _("The snapshot %s is abnormal.") % snapshot_id
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+
+            if (snapshot_info.get('ROLLBACKRATE') ==
+                    constants.SNAPSHOT_ROLLBACK_PROGRESS_FINISH or
+                    snapshot_info.get('ROLLBACKENDTIME') != '-1'):
+                LOG.info("Snapshot %s rollback successful.", snapshot_id)
+                return True
+            return False
+
+        huawei_utils.wait_for_condition(_snapshot_rollback_finish,
+                                        constants.DEFAULT_WAIT_INTERVAL,
+                                        constants.DEFAULT_WAIT_TIMEOUT)
+
+
 class ExtendVolumeTask(task.Task):
     default_provides = 'lun_info'
 
@@ -1532,7 +1593,12 @@ class GetLunMappingTask(task.Task):
         super(GetLunMappingTask, self).__init__(*args, **kwargs)
         self.client = client
 
-    def execute(self, connector):
+    def execute(self, connector, lun_id):
+        if connector is None or 'host' not in connector:
+            mappingview_id, lungroup_id, hostgroup_id, portgroup_id, host_id = (
+                huawei_utils.get_mapping_info(self.client, lun_id))
+            return (mappingview_id, lungroup_id, hostgroup_id, portgroup_id,
+                    host_id)
         host_name = connector['host']
         host_id = huawei_utils.get_host_id(self.client, host_name)
         if not host_id:
@@ -1561,10 +1627,11 @@ class GetLunMappingTask(task.Task):
 class ClearLunMappingTask(task.Task):
     default_provides = 'ini_tgt_map'
 
-    def __init__(self, client, fc_san=None, *args, **kwargs):
+    def __init__(self, client, configuration, fc_san=None, *args, **kwargs):
         super(ClearLunMappingTask, self).__init__(*args, **kwargs)
         self.client = client
         self.fc_san = fc_san
+        self.configuration = configuration
 
     def _get_obj_count_of_lungroup(self, lungroup_id):
         lun_count = self.client.get_lun_count_of_lungroup(lungroup_id)
@@ -1627,6 +1694,8 @@ class ClearLunMappingTask(task.Task):
         if obj_count > 0:
             LOG.info('Lungroup %(lg)s still has %(count)s members.',
                      {'lg': lungroup_id, 'count': obj_count})
+            return {}
+        if self.configuration.retain_storage_mapping:
             return {}
 
         ini_tgt_map = {}
@@ -2431,7 +2500,8 @@ def initialize_remote_iscsi_connection(hypermetro_id, connector,
     return engine.storage.fetch('mapping_info')
 
 
-def terminate_iscsi_connection(lun, lun_type, connector, client):
+def terminate_iscsi_connection(lun, lun_type, connector, client,
+                               configuration):
     store_spec = {'connector': connector,
                   'lun': lun,
                   'lun_type': lun_type}
@@ -2449,21 +2519,23 @@ def terminate_iscsi_connection(lun, lun_type, connector, client):
 
     work_flow.add(
         GetLunMappingTask(client),
-        ClearLunMappingTask(client),
+        ClearLunMappingTask(client, configuration),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
     engine.run()
 
 
-def terminate_remote_iscsi_connection(hypermetro_id, connector, client):
+def terminate_remote_iscsi_connection(hypermetro_id, connector, client,
+                                      configuration):
     store_spec = {'connector': connector}
     work_flow = linear_flow.Flow('terminate_remote_iscsi_connection')
 
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
         GetLunMappingTask(client),
-        ClearLunMappingTask(client, inject={'lun_type': constants.LUN_TYPE}),
+        ClearLunMappingTask(client, configuration,
+                            inject={'lun_type': constants.LUN_TYPE}),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -2526,7 +2598,8 @@ def initialize_remote_fc_connection(hypermetro_id, connector, fc_san, client,
     return engine.storage.fetch('mapping_info')
 
 
-def terminate_fc_connection(lun, lun_type, connector, fc_san, client):
+def terminate_fc_connection(lun, lun_type, connector, fc_san, client,
+                            configuration):
     store_spec = {'connector': connector,
                   'lun': lun,
                   'lun_type': lun_type}
@@ -2544,7 +2617,7 @@ def terminate_fc_connection(lun, lun_type, connector, fc_san, client):
 
     work_flow.add(
         GetLunMappingTask(client),
-        ClearLunMappingTask(client, fc_san),
+        ClearLunMappingTask(client, configuration, fc_san),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -2553,14 +2626,15 @@ def terminate_fc_connection(lun, lun_type, connector, fc_san, client):
     return engine.storage.fetch('ini_tgt_map')
 
 
-def terminate_remote_fc_connection(hypermetro_id, connector, fc_san, client):
+def terminate_remote_fc_connection(hypermetro_id, connector, fc_san, client,
+                                   configuration):
     store_spec = {'connector': connector}
     work_flow = linear_flow.Flow('terminate_remote_fc_connection')
 
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
         GetLunMappingTask(client),
-        ClearLunMappingTask(client, fc_san,
+        ClearLunMappingTask(client, configuration, fc_san,
                             inject={'lun_type': constants.LUN_TYPE}),
     )
 
@@ -2600,3 +2674,16 @@ def failback(volumes, local_cli, replication_rmt_cli, configuration):
 
     volumes_update = engine.storage.fetch('volumes_update')
     return volumes_update
+
+
+def revert_to_snapshot(snapshot, local_cli, rollback_speed):
+    store_spec = {'snapshot': snapshot}
+    work_flow = linear_flow.Flow('revert_to_snapshot')
+    work_flow.add(
+        CheckSnapshotExistTask(local_cli),
+        RevertToSnapshotTask(local_cli, rollback_speed),
+        WaitSnapshotRollbackDoneTask(local_cli),
+    )
+
+    engine = taskflow.engines.load(work_flow, store=store_spec)
+    engine.run()

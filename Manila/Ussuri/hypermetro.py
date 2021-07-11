@@ -26,8 +26,41 @@ class HyperPairManager(object):
     def __init__(self, helper, configuration):
         self.helper = helper
         self.configuration = configuration
+        self.is_dorado_v6 = huawei_utils.is_dorado_v6(self.helper)
+
+    def _get_storage_pool(self, params):
+        selected_pool = {}
+        thin_support = params["ALLOCTYPE"] == "1"
+        max_over_subscription_ratio = self.configuration.safe_get(
+            'max_over_subscription_ratio')
+        for pool_name in self.configuration.storage_pools:
+            pool_info = self.helper.get_pool_by_name(pool_name)
+            if not pool_info:
+                LOG.warning("The pool %s is not valid, please check on "
+                            "the storage.", pool_name)
+                continue
+
+            _free = float(pool_info['USERFREECAPACITY'])
+            _total = float(pool_info['USERTOTALCAPACITY'])
+            _provisioned = float(pool_info['TOTALFSCAPACITY'])
+
+            if thin_support:
+                _free = (max_over_subscription_ratio * _total - _provisioned)
+
+            if (_free >= float(params["CAPACITY"]) and
+                    _free > selected_pool.get("CAPACITY", 0)):
+                selected_pool.update({"pool_id": pool_info["ID"],
+                                      "CAPACITY": _free})
+
+        if not selected_pool:
+            msg = _("There is no valid pool to create FS %s" % params)
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        return selected_pool["pool_id"]
 
     def create_remote_filesystem(self, params):
+        pool_id = self._get_storage_pool(params)
+        params.update({"PARENTID": pool_id})
         fs_id = self.helper.create_filesystem(params)
         huawei_utils.wait_fs_online(
             self.helper, fs_id, self.configuration.wait_interval,
@@ -43,7 +76,7 @@ class HyperPairManager(object):
     def create_metro_pair(self, domain_name, local_fs_id,
                           remote_fs_id, vstore_pair_id):
         try:
-            domain_id = self._get_domain_id(domain_name)
+            domain_id = self.get_domain_id(domain_name)
             # Create a  HyperMetro Pair
             pair_params = {
                 "DOMAINID": domain_id,
@@ -57,16 +90,32 @@ class HyperPairManager(object):
             LOG.exception("Failed to create HyperMetro pair for share %s.",
                           local_fs_id)
             raise
-        self._sync_metro_pair(pair_info['ID'])
+
+        if not self.is_dorado_v6:
+            self._sync_metro_pair(pair_info['ID'])
         return pair_info
+
+    def get_domain_id(self, domain_name):
+        if self.is_dorado_v6:
+            return self._get_new_domain_id(domain_name)
+        else:
+            return self._get_domain_id(domain_name)
 
     def _get_domain_id(self, domain_name):
         domain_id = self.helper.get_hypermetro_domain_id(domain_name)
         if not domain_id:
             err_msg = _("HyperMetro domain cannot be found.")
             LOG.error(err_msg)
-            raise exception.VolumeBackendAPIException(data=err_msg)
+            raise exception.ShareBackendException(msg=err_msg)
         return domain_id
+
+    def _get_new_domain_id(self, domain_name):
+        fs_domain_info = self.helper.get_hypermetro_domain_info(domain_name)
+        if not fs_domain_info:
+            err_msg = _("HyperMetro domain %s cannot be found.") % domain_name
+            LOG.error(err_msg)
+            raise exception.ShareBackendException(msg=err_msg)
+        return fs_domain_info["ID"]
 
     def _sync_metro_pair(self, pair_id):
         try:
@@ -79,7 +128,8 @@ class HyperPairManager(object):
 
     def delete_metro_pair(self, metro_id):
         try:
-            self._suspend_metro_pair(metro_id)
+            if not self.is_dorado_v6:
+                self._suspend_metro_pair(metro_id)
             self.helper.delete_hypermetro_pair(metro_id)
         except Exception as err:
             LOG.exception('Failed to delete HyperMetro pair %(id)s. '
@@ -87,9 +137,19 @@ class HyperPairManager(object):
                           {'id': metro_id, 'err': err})
             raise
 
+        huawei_utils.wait_hypermetro_pair_delete(
+            self.helper, metro_id, self.configuration.wait_interval,
+            self.configuration.timeout)
+
     def _suspend_metro_pair(self, pair_id):
         try:
             metro_info = self._get_metro_pair_info(pair_id)
+            if not metro_info:
+                msg = (_("The hypermetro pair %(pair_id)s does not exist.") %
+                       {"pair_id": pair_id})
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+
             if metro_info["RUNNINGSTATUS"] in (
                     constants.METRO_RUNNING_STATUS_NORMAL,
                     constants.METRO_RUNNING_STATUS_SYNCING,

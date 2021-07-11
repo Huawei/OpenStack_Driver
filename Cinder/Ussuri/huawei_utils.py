@@ -589,3 +589,26 @@ def remove_lun_from_lungroup(client, lun_id, force_delete_volume):
         elif len(lun_group_ids) == 1:
             client.remove_lun_from_lungroup(lun_group_ids[0], lun_id,
                                             constants.LUN_TYPE)
+
+
+def get_mapping_info(client, lun_id):
+    mappingview_id, lungroup_id, hostgroup_id, portgroup_id, host_id = (
+        None, None, None, None, None)
+    lungroup_ids = client.get_lungroup_ids_by_lun_id(lun_id)
+    if len(lungroup_ids) == 1:
+        lungroup_id = lungroup_ids[0]
+        mapping_infos = client.get_mappingview_by_lungroup_id(lungroup_id)
+        if len(mapping_infos) == 1:
+            mapping_info = mapping_infos[0]
+            mappingview_id = mapping_info.get('ID')
+            hostgroup_id = mapping_info.get('hostGroupId')
+            portgroup_id = mapping_info.get('portGroupId')
+            host_ids = client.get_host_by_hostgroup_id(hostgroup_id)
+            if len(host_ids) == 1:
+                host_id = host_ids[0]
+    elif len(lungroup_ids) < 1:
+        LOG.warning('lun %s is not added to the lungroup', lun_id)
+    else:
+        LOG.warning('lun %s is is added to multiple lungroups', lun_id)
+
+    return mappingview_id, lungroup_id, hostgroup_id, portgroup_id, host_id

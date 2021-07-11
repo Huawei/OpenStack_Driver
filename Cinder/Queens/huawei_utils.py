@@ -267,3 +267,64 @@ def remove_lun_from_lungroup(client, lun_id, force_delete_volume):
         elif len(lun_group_ids) == 1:
             client.remove_lun_from_lungroup(lun_group_ids[0], lun_id,
                                             constants.LUN_TYPE)
+
+
+def get_mapping_info(client, lun_id):
+    host_name = None
+    host_id = None
+    lungroup_ids = client.get_lungroupids_by_lunid(lun_id)
+    if len(lungroup_ids) == 1:
+        lungroup_id = lungroup_ids[0]
+        mapping_infos = client.get_mappingview_by_lungroup_id(lungroup_id)
+        if len(mapping_infos) == 1:
+            mapping_info = mapping_infos[0]
+            hostgroup_id = mapping_info.get('hostGroupId')
+            hosts = client.get_host_by_hostgroup_id(hostgroup_id)
+            if len(hosts) == 1:
+                host_name = hosts[0]['NAME']
+                host_id = hosts[0]['ID']
+    elif len(lungroup_ids) < 1:
+        LOG.warning('lun %s is not added to the lungroup', lun_id)
+    else:
+        LOG.warning('lun %s is is added to multiple lungroups', lun_id)
+
+    return host_name, host_id
+
+
+def get_iscsi_mapping_info(client, lun_id):
+    host_name, host_id = get_mapping_info(client, lun_id)
+    iscsi_initiator = None
+    initiators = client.get_host_iscsi_initiators(host_id)
+    if len(initiators) == 1:
+        iscsi_initiator = initiators[0]
+
+    return host_name, iscsi_initiator
+
+
+def get_fc_mapping_info(client, lun_id):
+    host_name, host_id = get_mapping_info(client, lun_id)
+    initiators = client.get_host_fc_initiators(host_id)
+
+    return host_name, initiators
+
+
+def is_snapshot_rollback_available(client, snapshot_id):
+    snapshot_info = client.get_snapshot_info(snapshot_id)
+    running_status = snapshot_info.get("RUNNINGSTATUS")
+    health_status = snapshot_info.get("HEALTHSTATUS")
+    if running_status not in (
+            constants.SNAPSHOT_RUNNING_STATUS_ACTIVATED,
+            constants.SNAPSHOT_RUNNING_STATUS_ROLLINGBACK):
+        err_msg = (_("The running status %(status)s of snapshot %(name)s.")
+                   % {"status": running_status, "name": snapshot_id})
+        LOG.error(err_msg)
+        raise exception.InvalidSnapshot(reason=err_msg)
+    if health_status not in (constants.SNAPSHOT_HEALTH_STATUS_NORMAL, ):
+        err_msg = (_("The health status %(status)s of snapshot %(name)s.")
+                   % {"status": running_status, "name": snapshot_id})
+        LOG.error(err_msg)
+        raise exception.InvalidSnapshot(reason=err_msg)
+    if constants.SNAPSHOT_RUNNING_STATUS_ACTIVATED == snapshot_info.get(
+            'RUNNINGSTATUS'):
+        return True
+    return False
