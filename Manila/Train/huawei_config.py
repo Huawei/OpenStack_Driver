@@ -271,13 +271,14 @@ class HuaweiConfig(object):
             return []
         metro_configs = []
         for metro_info in metro_infos:
-            metro_config = {}
-            metro_config['metro_domain'] = metro_info['metro_domain']
-            metro_config['local_vStore_name'] = metro_info['local_vStore_name']
-            metro_config['remote_vStore_name'] = \
-                metro_info['remote_vStore_name']
-            metro_config['remote_backend'] = metro_info['remote_backend']
-            metro_config['metro_logic_ip'] = metro_info['metro_logic_ip']
+            metro_config = {
+                'metro_domain': metro_info['metro_domain'],
+                'local_vStore_name': metro_info['local_vStore_name'],
+                'remote_vStore_name': metro_info['remote_vStore_name'],
+                'remote_backend': metro_info['remote_backend'],
+                'metro_logic_ip': [
+                    i.strip() for i in metro_info['metro_logic_ip'].split(";")
+                    if i.strip()]}
             metro_configs.append(metro_config)
 
         return metro_configs

@@ -316,6 +316,17 @@ class Snapshot(CommonObject):
                 metadata = json.loads(item['ASSOCIATEMETADATA'])
                 return metadata['HostLUNID']
 
+    def rollback_snapshot(self, snapshot_id, speed):
+        data = {'ID': snapshot_id,
+                'ROLLBACKSPEED': speed}
+        result = self.put('/rollback', data=data)
+        _assert_result(result, 'Rollback snapshot %s error.', snapshot_id)
+
+    def cancel_rollback_snapshot(self, snapshot_id):
+        data = {'ID': snapshot_id}
+        result = self.put('/cancelrollback', data=data)
+        _assert_result(result, 'Cancel rollback snapshot %s error.', snapshot_id)
+
 
 class LunCopy(CommonObject):
     _obj_url = '/LUNCOPY'
@@ -402,6 +413,12 @@ class Host(CommonObject):
             return
         _assert_result(result, 'Remove host %s from host group %s error.',
                        host_id, hostgroup_id)
+
+    def get_host_by_hostgroup_id(self, hostgroup_id):
+        result = self.get("/associate?ASSOCIATEOBJTYPE=14&"
+                          "ASSOCIATEOBJID=%(id)s", id=hostgroup_id)
+        _assert_result(result, 'Get host by hostgroup %s error.', hostgroup_id)
+        return [host.get('ID') for host in result.get("data", [])]
 
 
 class PortGroup(CommonObject):
@@ -726,6 +743,13 @@ class MappingView(CommonObject):
         _assert_result(result, 'Get mappingviews by portgroup %s error.',
                        portgroup_id)
         return [view['ID'] for view in result.get("data", [])]
+
+    def get_mappingview_by_lungroup_id(self, lungroup_id):
+        result = self.get('/associate?ASSOCIATEOBJTYPE=256&'
+                          'ASSOCIATEOBJID=%(id)s', id=lungroup_id)
+        _assert_result(result, 'Get mappingviews by lungroup %s error.',
+                       lungroup_id)
+        return result.get("data", [])
 
 
 class FCInitiator(CommonObject):

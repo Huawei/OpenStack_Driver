@@ -65,6 +65,10 @@ huawei_opts = [
     cfg.BoolOpt('libvirt_iscsi_use_ultrapath',
                 default=False,
                 help='use ultrapath connection of the iSCSI volume'),
+    cfg.BoolOpt('retain_storage_mapping',
+                default=False,
+                help='Whether to retain the storage mapping when the last '
+                     'volume on the host is unmapped'),
 ]
 
 CONF = cfg.CONF
@@ -2613,7 +2617,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.0"
+    VERSION = "2.3.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiISCSIDriver, self).__init__(*args, **kwargs)
@@ -2805,10 +2809,13 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
 
         lun_id, lun_type = self.get_lun_id_and_type(
             volume, constants.VOLUME_NOT_EXISTS_WARN, local)
-
-        initiator_name = connector['initiator']
-        host_name = connector['host']
         lungroup_id = None
+        if connector is None or 'host' not in connector:
+            host_name, initiator_name = huawei_utils.get_iscsi_mapping_info(
+                client, lun_id)
+        else:
+            initiator_name = connector.get('initiator')
+            host_name = connector.get('host')
 
         LOG.info(_LI(
             'terminate_connection: initiator name: %(ini)s, '
@@ -2840,7 +2847,8 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
                                 "Lungroup id: %(lungroup_id)s."),
                             {"lun_id": lun_id,
                              "lungroup_id": lungroup_id})
-
+        if self.configuration.retain_storage_mapping:
+            return
         # Remove portgroup from mapping view if no lun left in lungroup.
         if lungroup_id:
             left_lunnum = client.get_obj_count_from_lungroup(lungroup_id)
@@ -2895,7 +2903,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.0"
+    VERSION = "2.3.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiFCDriver, self).__init__(*args, **kwargs)
@@ -3066,10 +3074,14 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         lun_id, lun_type = self.get_lun_id_and_type(
             volume, constants.VOLUME_NOT_EXISTS_WARN)
 
-        conn_wwpns = huawei_utils.convert_connector_wwns(connector['wwpns'])
-        wwns = conn_wwpns
-
-        host_name = connector['host']
+        if connector is None or 'host' not in connector:
+            host_name, wwns = huawei_utils.get_fc_mapping_info(self.client,
+                                                               lun_id)
+        else:
+            host_name = connector.get('host')
+            conn_wwpns = huawei_utils.convert_connector_wwns(
+                connector.get('wwpns'))
+            wwns = conn_wwpns
         left_lunnum = -1
         lungroup_id = None
         view_id = None
@@ -3102,7 +3114,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
             LOG.warning(_LW("Can't find lun on the array."))
         if lungroup_id:
             left_lunnum = self.client.get_obj_count_from_lungroup(lungroup_id)
-        if int(left_lunnum) > 0:
+        if int(left_lunnum) > 0 or self.configuration.retain_storage_mapping:
             fc_info = {'driver_volume_type': 'fibre_channel',
                        'data': {}}
         else:

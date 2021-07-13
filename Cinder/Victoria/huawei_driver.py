@@ -92,8 +92,13 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
         LOG.info('Initialize iscsi connection successfully: %s.', conn)
         return conn
 
-    @coordination.synchronized('huawei-mapping-{connector[host]}')
     def terminate_connection(self, volume, connector, **kwargs):
+        host = connector['host'] if 'host' in connector else ""
+
+        return self._terminate_connection_locked(host, volume, connector)
+
+    @coordination.synchronized('huawei-mapping-{host}')
+    def _terminate_connection_locked(self, host, volume, connector):
         LOG.info('Terminate iscsi connection for volume %(id)s, '
                  'connector info %(conn)s.',
                  {'id': volume.id, 'conn': connector})
@@ -105,10 +110,12 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
             hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
             if hypermetro:
                 huawei_flow.terminate_remote_iscsi_connection(
-                    hypermetro['ID'], connector, self.hypermetro_rmt_cli)
+                    hypermetro['ID'], connector, self.hypermetro_rmt_cli,
+                    self.configuration)
 
         huawei_flow.terminate_iscsi_connection(
-            volume, constants.LUN_TYPE, connector, self.local_cli)
+            volume, constants.LUN_TYPE, connector, self.local_cli,
+            self.configuration)
         LOG.info('Terminate iscsi connection successfully.')
 
     @coordination.synchronized('huawei-mapping-{connector[host]}')
@@ -126,13 +133,20 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
         LOG.info('Initialize iscsi connection successfully: %s.', conn)
         return conn
 
-    @coordination.synchronized('huawei-mapping-{connector[host]}')
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
+        host = connector['host'] if 'host' in connector else ""
+
+        return self._terminate_connection_snapshot_locked(host, snapshot,
+                                                          connector)
+
+    @coordination.synchronized('huawei-mapping-{host}')
+    def _terminate_connection_snapshot_locked(self, host, snapshot, connector):
         LOG.info('Terminate iscsi connection for snapshot %(id)s, '
                  'connector info %(conn)s.',
                  {'id': snapshot.id, 'conn': connector})
         huawei_flow.terminate_iscsi_connection(
-            snapshot, constants.SNAPSHOT_TYPE, connector, self.local_cli)
+            snapshot, constants.SNAPSHOT_TYPE, connector, self.local_cli,
+            self.configuration)
         LOG.info('Terminate iscsi connection successfully.')
 
 
@@ -199,8 +213,13 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         zm_utils.add_fc_zone(conn)
         return conn
 
-    @coordination.synchronized('huawei-mapping-{connector[host]}')
     def terminate_connection(self, volume, connector, **kwargs):
+        host = connector['host'] if 'host' in connector else ""
+
+        return self._terminate_connection_locked(host, volume, connector)
+
+    @coordination.synchronized('huawei-mapping-{host}')
+    def _terminate_connection_locked(self, host, volume, connector):
         LOG.info('Terminate FC connection for volume %(id)s, '
                  'connector info %(conn)s.',
                  {'id': volume.id, 'conn': connector})
@@ -213,10 +232,11 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
             if hypermetro:
                 rmt_ini_tgt_map = huawei_flow.terminate_remote_fc_connection(
                     hypermetro['ID'], connector, self.fc_san,
-                    self.hypermetro_rmt_cli)
+                    self.hypermetro_rmt_cli, self.configuration)
 
         loc_ini_tgt_map = huawei_flow.terminate_fc_connection(
-            volume, constants.LUN_TYPE, connector, self.fc_san, self.local_cli)
+            volume, constants.LUN_TYPE, connector, self.fc_san, self.local_cli,
+            self.configuration)
         if metadata.get('hypermetro'):
             self._merge_ini_tgt_map(loc_ini_tgt_map, rmt_ini_tgt_map)
 
@@ -243,14 +263,20 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         zm_utils.add_fc_zone(conn)
         return conn
 
-    @coordination.synchronized('huawei-mapping-{connector[host]}')
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
+        host = connector['host'] if 'host' in connector else ""
+
+        return self._terminate_connection_snapshot_locked(host, snapshot,
+                                                          connector)
+
+    @coordination.synchronized('huawei-mapping-{host}')
+    def _terminate_connection_snapshot_locked(self, host, snapshot, connector):
         LOG.info('Terminate FC connection for snapshot %(id)s, '
                  'connector info %(conn)s.',
                  {'id': snapshot.id, 'conn': connector})
         ini_tgt_map = huawei_flow.terminate_fc_connection(
             snapshot, constants.SNAPSHOT_TYPE, connector, self.fc_san,
-            self.local_cli)
+            self.local_cli, self.configuration)
 
         conn = {'driver_volume_type': 'fibre_channel',
                 'data': {'initiator_target_map': ini_tgt_map},

@@ -75,6 +75,7 @@ class HuaweiConf(object):
             self._lun_timeout,
             self._get_minimum_fc_initiator,
             self._hyper_enforce_multipath,
+            self._rollback_speed,
         )
 
         for f in attr_funcs:
@@ -545,3 +546,21 @@ class HuaweiConf(object):
                 raise exception.InvalidInput(reason=msg)
         setattr(self.conf, 'min_fc_ini_online',
                 minimum_fc_initiator)
+
+    def _rollback_speed(self, xml_root):
+        text = xml_root.findtext('LUN/SnapshotRollbackSpeed')
+        if text and text.strip() not in constants.SNAPSHOT_ROLLBACK_SPEED_TYPES:
+            msg = (_("Invalid SnapshotRollbackSpeed '%(text)s', "
+                     "SnapshotRollbackSpeed must "
+                     "be between %(low)s and %(high)s.")
+                   % {"text": text,
+                      "low": constants.SNAPSHOT_ROLLBACK_SPEED_LOW,
+                      "high": constants.SNAPSHOT_ROLLBACK_SPEED_HIGHEST})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if not text:
+            speed = constants.SNAPSHOT_ROLLBACK_SPEED_HIGH
+        else:
+            speed = text.strip()
+        setattr(self.conf, 'rollback_speed', int(speed))

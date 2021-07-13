@@ -75,7 +75,8 @@ class SmartQos(object):
     def __init__(self, helper):
         self.helper = helper
 
-    def _check_qos_consistency(self, policy, qos):
+    @staticmethod
+    def _check_qos_consistency(policy, qos):
         check_keys = set(constants.QOS_KEYS) & set(qos.keys())
         policy_keys = set(constants.QOS_KEYS) & set(policy.keys())
 
@@ -97,7 +98,7 @@ class SmartQos(object):
         qos_id = self.helper.create_qos(qos, fs_id)
         try:
             self.helper.activate_deactivate_qos(qos_id, True)
-        except exception.VolumeBackendAPIException:
+        except exception.ShareBackendException:
             self.remove(qos_id, fs_id)
             raise
 

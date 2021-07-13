@@ -63,6 +63,10 @@ huawei_opts = [
     cfg.BoolOpt('libvirt_iscsi_use_ultrapath',
                 default=False,
                 help='use ultrapath connection of the iSCSI volume'),
+    cfg.BoolOpt('retain_storage_mapping',
+                default=False,
+                help='Whether to retain the storage mapping when the last '
+                     'volume on the host is unmapped'),
 ]
 
 CONF = cfg.CONF
@@ -335,7 +339,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 scope = key_split[0].lower()
                 key = key_split[1].lower()
 
-            if (not scope or scope == 'capabilities'
+            if ((not scope or scope == 'capabilities')
                     and key in opts_capability):
                 words = value.split()
                 if words and len(words) == 2 and words[0] in (
@@ -2598,6 +2602,48 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
         return same_host_id
 
+    def _rollback_snapshot(self, snapshot_id):
+
+        def _snapshot_rollback_finish():
+            snapshot_info = self.client.get_snapshot_info(snapshot_id)
+            if not snapshot_info:
+                msg = (_("Failed to get rollback info with snapshot %s.")
+                       % snapshot_id)
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            if snapshot_info.get('HEALTHSTATUS') not in (
+                    constants.SNAPSHOT_HEALTH_STATUS_NORMAL,):
+                msg = _("The snapshot %s is abnormal.") % snapshot_id
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            if (snapshot_info.get('ROLLBACKRATE') ==
+                    constants.SNAPSHOT_ROLLBACK_PROGRESS_FINISH or
+                    snapshot_info.get('ROLLBACKENDTIME') != '-1'):
+                LOG.info("Snapshot %s rollback successful.", snapshot_id)
+                return True
+            return False
+
+        if huawei_utils.is_snapshot_rollback_available(self.client,
+                                                       snapshot_id):
+            self.client.rollback_snapshot(snapshot_id,
+                                          self.configuration.rollback_speed)
+        try:
+            huawei_utils.wait_for_condition(_snapshot_rollback_finish,
+                                            constants.DEFAULT_WAIT_INTERVAL,
+                                            constants.DEFAULT_WAIT_TIMEOUT)
+        except exception.VolumeBackendAPIException:
+            self.client.cancel_rollback_snapshot(snapshot_id)
+            raise
+
+    def revert_to_snapshot(self, context, volume, snapshot):
+        snapshot_id = self._check_snapshot_exist_on_array(
+            snapshot, constants.SNAPSHOT_NOT_EXISTS_WARN)
+        if not snapshot_id:
+            msg = _("Snapshot %s does not exist.") % snapshot.id
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+        self._rollback_snapshot(snapshot_id)
+
 
 class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
     """ISCSI driver for Huawei storage arrays.
@@ -2627,7 +2673,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.0"
+    VERSION = "2.3.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiISCSIDriver, self).__init__(*args, **kwargs)
@@ -2798,8 +2844,13 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
 
         return {'driver_volume_type': 'iscsi', 'data': properties}
 
-    @coordination.synchronized('huawei-mapping-{connector[host]}')
     def terminate_connection(self, volume, connector, **kwargs):
+        host = connector['host'] if 'host' in connector else ""
+
+        return self._terminate_connection_locked(host, volume, connector)
+
+    @coordination.synchronized('huawei-mapping-{host}')
+    def _terminate_connection_locked(self, host, volume, connector):
         """Delete map between a volume and a host."""
         attachments = volume.volume_attachment
         if volume.multiattach and len(attachments) > 1 and sum(
@@ -2827,9 +2878,13 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         lun_id, lun_type = self.get_lun_id_and_type(
             volume, constants.VOLUME_NOT_EXISTS_WARN, local)
 
-        initiator_name = connector['initiator']
-        host_name = connector['host']
         lungroup_id = None
+        if connector is None or 'host' not in connector:
+            host_name, initiator_name = huawei_utils.get_iscsi_mapping_info(
+                client, lun_id)
+        else:
+            initiator_name = connector.get('initiator')
+            host_name = connector.get('host')
 
         LOG.info(
             'terminate_connection: initiator name: %(ini)s, '
@@ -2861,7 +2916,8 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
                             "Lungroup id: %(lungroup_id)s.",
                             {"lun_id": lun_id,
                              "lungroup_id": lungroup_id})
-
+        if self.configuration.retain_storage_mapping:
+            return
         # Remove portgroup from mapping view if no lun left in lungroup.
         if lungroup_id:
             left_lunnum = client.get_obj_count_from_lungroup(lungroup_id)
@@ -2916,7 +2972,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.2.0"
+    VERSION = "2.3.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiFCDriver, self).__init__(*args, **kwargs)
@@ -3081,8 +3137,8 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         return fc_info
 
     @fczm_utils.remove_fc_zone
-    @coordination.synchronized('huawei-mapping-{connector[host]}')
-    def terminate_connection(self, volume, connector, **kwargs):
+    @coordination.synchronized('huawei-mapping-{host}')
+    def _terminate_connection_locked(self, host, volume, connector):
         """Delete map between a volume and a host."""
         attachments = volume.volume_attachment
         if volume.multiattach and len(attachments) > 1 and sum(
@@ -3094,10 +3150,14 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         lun_id, lun_type = self.get_lun_id_and_type(
             volume, constants.VOLUME_NOT_EXISTS_WARN)
 
-        conn_wwpns = huawei_utils.convert_connector_wwns(connector['wwpns'])
-        wwns = conn_wwpns
-
-        host_name = connector['host']
+        if connector is None or 'host' not in connector:
+            host_name, wwns = huawei_utils.get_fc_mapping_info(self.client,
+                                                               lun_id)
+        else:
+            host_name = connector.get('host')
+            conn_wwpns = huawei_utils.convert_connector_wwns(
+                connector.get('wwpns'))
+            wwns = conn_wwpns
         left_lunnum = -1
         lungroup_id = None
         view_id = None
@@ -3130,7 +3190,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
             LOG.warning("Can't find lun on the array.")
         if lungroup_id:
             left_lunnum = self.client.get_obj_count_from_lungroup(lungroup_id)
-        if int(left_lunnum) > 0:
+        if int(left_lunnum) > 0 or self.configuration.retain_storage_mapping:
             fc_info = {'driver_volume_type': 'fibre_channel',
                        'data': {}}
         else:
@@ -3181,6 +3241,11 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                  fc_info)
 
         return fc_info
+
+    def terminate_connection(self, volume, connector, **kwargs):
+        host = connector['host'] if 'host' in connector else ""
+
+        return self._terminate_connection_locked(host, volume, connector)
 
     def _delete_zone_and_remove_fc_initiators(self, wwns, host_id):
         # Get tgt_port_wwns and init_targ_map to remove zone.

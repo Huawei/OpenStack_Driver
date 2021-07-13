@@ -44,6 +44,10 @@ huawei_opts = [
                 help='To represent a hypermetro target device, which takes '
                      'standard dict config form: hypermetro_device = '
                      'key1:value1,key2:value2...'),
+    cfg.BoolOpt('retain_storage_mapping',
+                default=False,
+                help='Whether to retain the storage mapping when the last '
+                     'volume on the host is unmapped'),
 ]
 
 CONF = cfg.CONF
@@ -51,7 +55,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.2.0"
+    VERSION = "2.3.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -789,3 +793,7 @@ class HuaweiBaseDriver(object):
             LOG.info("Volume is multi-attach and attached to the same host"
                      " multiple times")
             return
+
+    def revert_to_snapshot(self, context, volume, snapshot):
+        huawei_flow.revert_to_snapshot(snapshot, self.local_cli,
+                                       self.configuration.rollback_speed)

@@ -28,12 +28,12 @@ from manila.share import share_types
 LOG = log.getLogger(__name__)
 
 
-def get_share_extra_specs_params(type_id):
+def get_share_extra_specs_params(type_id, is_dorado=False):
     specs = {}
     if type_id:
         specs = share_types.get_share_type_extra_specs(type_id)
 
-    opts = _get_opts_from_specs(specs)
+    opts = _get_opts_from_specs(specs, is_dorado)
     _get_smartprovisioning_opts(opts)
     _check_smartcache_opts(opts)
     _check_smartpartition_opts(opts)
@@ -92,13 +92,14 @@ def _get_string_param(k, v):
     return v
 
 
-def _get_opts_from_specs(specs):
+def _get_opts_from_specs(specs, is_dorado):
+    default_support = True if is_dorado else False
     opts_capability = {
-        'capabilities:dedupe': (_get_bool_param, False),
-        'capabilities:compression': (_get_bool_param, False),
+        'capabilities:dedupe': (_get_bool_param, default_support),
+        'capabilities:compression': (_get_bool_param, default_support),
         'capabilities:huawei_smartcache': (_get_bool_param, False),
         'capabilities:huawei_smartpartition': (_get_bool_param, False),
-        'capabilities:thin_provisioning': (_get_bool_param, None),
+        'capabilities:thin_provisioning': (_get_bool_param, default_support),
         'capabilities:qos': (_get_bool_param, False),
         'capabilities:hypermetro': (_get_bool_param, False),
         'huawei_smartcache:cachename': (_get_string_param, None),
@@ -111,6 +112,7 @@ def _get_opts_from_specs(specs):
         'qos:minbandwidth': (_get_string_param, None),
         'qos:maxbandwidth': (_get_string_param, None),
         'qos:latency': (_get_string_param, None),
+        'filesystem:mode': (_get_string_param, None),
     }
 
     opts = {}
@@ -209,6 +211,14 @@ def wait_fs_online(helper, fs_id, wait_interval, timeout):
     wait_for_condition(_wait_fs_online, wait_interval, timeout)
 
 
+def wait_hypermetro_pair_delete(helper, pair_id, wait_interval, timeout):
+    def _wait_hypermetro_pair_delete():
+        pair_info = helper.get_hypermetro_pair_by_id(pair_id)
+        return pair_info is None
+
+    wait_for_condition(_wait_hypermetro_pair_delete, wait_interval, timeout)
+
+
 def share_name(name):
     return name.replace('-', '_')
 
@@ -231,23 +241,23 @@ def share_path(name):
 
 def get_share_by_location(export_location, share_proto):
     share_ip = None
-    share_name = None
+    _share_name = None
 
     if share_proto == 'NFS':
         export_location_split = export_location.split(':/')
         if len(export_location_split) == 2:
             share_ip = export_location_split[0]
-            share_name = export_location_split[1]
+            _share_name = export_location_split[1]
     elif share_proto == 'CIFS':
         export_location_split = export_location.split('\\')
         if len(export_location_split) == 4:
             share_ip = export_location_split[2]
-            share_name = export_location_split[3]
+            _share_name = export_location_split[3]
     else:
         msg = _('Invalid NAS protocol %s.') % share_proto
         raise exception.InvalidInput(reason=msg)
 
-    return share_ip, share_name
+    return share_ip, _share_name
 
 
 def get_access_info(access):
@@ -277,3 +287,10 @@ def get_hypermetro_vstore_id(helper, domain_name, local_vstore, remote_vstore):
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
     return vstore_pair_id
+
+
+def is_dorado_v6(client):
+    array_info = client.get_array_info()
+    version_info = array_info['PRODUCTVERSION']
+    if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
+        return True

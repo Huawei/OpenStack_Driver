@@ -2901,3 +2901,19 @@ class RestClient(object):
             return
         self._assert_rest_result(result, 'Delete ClonePair %s error.'
                                  % pair_id)
+
+    def get_host_by_hostgroup_id(self, hostgroup_id):
+        url = ("/host/associate?ASSOCIATEOBJTYPE=14&ASSOCIATEOBJID=%s"
+               % hostgroup_id)
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, 'Get host by hostgroup %s error.'
+                                 % hostgroup_id)
+        return result.get("data", [])
+
+    def get_mappingview_by_lungroup_id(self, lungroup_id):
+        url = ('/mappingview/associate?ASSOCIATEOBJTYPE=256&ASSOCIATEOBJID=%s'
+               % lungroup_id)
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, 'Get mappingviews by lungroup %s'
+                                         ' error.' % lungroup_id)
+        return result.get("data", [])
