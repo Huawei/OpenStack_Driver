@@ -340,7 +340,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 scope = key_split[0].lower()
                 key = key_split[1].lower()
 
-            if (not scope or scope == 'capabilities'
+            if ((not scope or scope == 'capabilities')
                     and key in opts_capability):
                 words = value.split()
                 if words and len(words) == 2 and words[0] in (
@@ -2617,7 +2617,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.3.RC1"
+    VERSION = "2.3.RC2"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiISCSIDriver, self).__init__(*args, **kwargs)
@@ -2696,10 +2696,12 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         initiator_name = connector['initiator']
         LOG.info(_LI(
             'initiator name: %(initiator_name)s, '
-            'LUN ID: %(lun_id)s, lun type: %(lun_type)s.'),
+            'LUN ID: %(lun_id)s, lun type: %(lun_type)s, '
+            'connector: %(connector)s.'),
             {'initiator_name': initiator_name,
              'lun_id': lun_id,
-             'lun_type': lun_type})
+             'lun_type': lun_type,
+             'connector': connector})
 
         (iscsi_iqns,
          target_ips,
@@ -2713,7 +2715,8 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
 
         # Create hostgroup if not exist.
         host_id = client.add_host_with_check(connector['host'],
-                                             self.is_dorado_v6)
+                                             self.is_dorado_v6,
+                                             initiator_name)
         try:
             client.ensure_initiator_added(initiator_name, host_id,
                                           connector['host'])
@@ -2819,10 +2822,12 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
 
         LOG.info(_LI(
             'terminate_connection: initiator name: %(ini)s, '
-            'LUN ID: %(lunid)s, lun type: %(lun_type)s.'),
+            'LUN ID: %(lunid)s, lun type: %(lun_type)s, '
+            'connector: %(connector)s.'),
             {'ini': initiator_name,
              'lunid': lun_id,
-             'lun_type': lun_type})
+             'lun_type': lun_type,
+             'connector': connector})
 
         portgroup_id = None
         view_id = None
@@ -2903,7 +2908,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.3.RC1"
+    VERSION = "2.3.RC2"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiFCDriver, self).__init__(*args, **kwargs)
@@ -2930,14 +2935,17 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         wwns = conn_wwpns
         LOG.info(_LI(
             'initialize_connection, initiator: %(wwpns)s,'
-            ' LUN ID: %(lun_id)s, lun type: %(lun_type)s.'),
+            ' LUN ID: %(lun_id)s, lun type: %(lun_type)s,'
+            ' connector: %(connector)s.'),
             {'wwpns': wwns,
              'lun_id': lun_id,
-             'lun_type': lun_type})
+             'lun_type': lun_type,
+             'connector': connector})
 
         portg_id = None
         host_id = self.client.add_host_with_check(connector['host'],
-                                                  self.is_dorado_v6)
+                                                  self.is_dorado_v6,
+                                                  wwns)
 
         if not self.fcsan:
             self.fcsan = fczm_utils.create_lookup_service()
@@ -3086,8 +3094,10 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         lungroup_id = None
         view_id = None
         LOG.info(_LI('terminate_connection: wwpns: %(wwns)s, '
-                     'LUN ID: %(lun_id)s, lun type: %(lun_type)s.'),
-                 {'wwns': wwns, 'lun_id': lun_id, 'lun_type': lun_type})
+                     'LUN ID: %(lun_id)s, lun type: %(lun_type)s, '
+                     'connector: %(connector)s.'),
+                 {'wwns': wwns, 'lun_id': lun_id, 'lun_type': lun_type,
+                  'connector': connector})
 
         host_id = huawei_utils.get_host_id(self.client, host_name)
         if host_id:

@@ -1875,7 +1875,7 @@ class GetFCConnectionTask(task.Task):
                         "MinFCIniOnline in the XML file.") % invalids
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
-            initiators = (set(host_initiators) | set(frees)) & wwns
+            initiators = (set(host_initiators) | set(frees)) & set(wwns)
 
         if len(initiators) < self.configuration.min_fc_ini_online:
             msg = (("The number of online fc initiator %(wwns)s less than"

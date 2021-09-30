@@ -137,7 +137,8 @@ class HuaweiHyperMetro(object):
 
         # Create hostgroup if not exist.
         host_id = self.rmt_client.add_host_with_check(original_host_name,
-                                                      self.is_dorado_v6)
+                                                      self.is_dorado_v6,
+                                                      wwns)
 
         online_wwns_in_host = (
             self.rmt_client.get_host_online_fc_initiators(host_id))

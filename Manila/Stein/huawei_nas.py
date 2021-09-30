@@ -783,7 +783,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         data = {
             'share_backend_name': backend_name or 'HUAWEI_NAS_Driver',
             'vendor_name': 'Huawei',
-            'driver_version': '2.2.RC3',
+            'driver_version': '2.3.RC2',
             'storage_protocol': 'NFS_CIFS',
             'snapshot_support': (self.feature_supports['HyperSnap']
                                  and self.configuration.snapshot_support),

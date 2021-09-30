@@ -783,7 +783,8 @@ class RestClient(object):
     def get_host_lun_id(self, host_id, lun_id, lun_type=constants.LUN_TYPE):
         cmd_type = 'lun' if lun_type == constants.LUN_TYPE else 'snapshot'
         url = ("/%s/associate?TYPE=%s&ASSOCIATEOBJTYPE=21"
-               "&ASSOCIATEOBJID=%s" % (cmd_type, lun_type, host_id))
+               "&ASSOCIATEOBJID=%s&selectFields=ID,ASSOCIATEMETADATA"
+               % (cmd_type, lun_type, host_id))
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Find host lun id error.'))
 
@@ -810,13 +811,14 @@ class RestClient(object):
         if 'data' in result and result['data']:
             return result['data'][0]['ID']
 
-    def add_host_with_check(self, host_name, is_dorado_v6):
+    def add_host_with_check(self, host_name, is_dorado_v6, initiator):
         self.is_dorado_v6 = is_dorado_v6
         host_id = huawei_utils.get_host_id(self, host_name)
         new_alua_info = {}
         if self.is_dorado_v6:
             info = self.iscsi_info or self.fc_info
-            new_alua_info = self._find_new_alua_info(info, host_name)
+            new_alua_info = self._find_new_alua_info(
+                info, host_name, initiator)
         if host_id:
             LOG.info(
                 'add_host_with_check. '
@@ -1041,29 +1043,34 @@ class RestClient(object):
             chapinfo = tmp_chap_info
         return chapinfo
 
+    @staticmethod
+    def _find_name_info(config, initiator_name):
+        for ini in config:
+            if (ini.get('Name') == initiator_name or
+                    (isinstance(initiator_name, list) and
+                     ini.get('Name') in initiator_name)):
+                return ini
+
+    @staticmethod
+    def _find_hostname_info(config, host_name):
+        for info in config:
+            if info.get('HostName') and (info.get('HostName') == '*' or
+                                         re.search(info.get('HostName'),
+                                                   host_name)):
+                return info
+
+    def _find_name_or_hostname_info(self, config, initiator_name, host_name):
+        find_info = self._find_name_info(config, initiator_name)
+        if not find_info:
+            find_info = self._find_hostname_info(config, host_name)
+
+        return find_info
+
     def _find_alua_info(self, config, initiator_name, host_name):
         """Find ALUA info from xml."""
         alua_info = {'ALUA': '0'}
-        find_initiator_flag = False
-        find_info = None
-        for ini in config:
-            if ini.get('Name') == initiator_name:
-                find_initiator_flag = True
-                find_info = ini
-                break
-
-        tmp_find_info = None
-        if not find_initiator_flag:
-            for info in config:
-                if info.get('HostName'):
-                    if info.get('HostName') == '*':
-                        tmp_find_info = info
-                    elif re.search(info.get('HostName'), host_name):
-                        find_info = info
-                        break
-
-        if find_info is None and tmp_find_info:
-            find_info = tmp_find_info
+        find_info = self._find_name_or_hostname_info(
+            config, initiator_name, host_name)
 
         if find_info:
             if 'ACCESSMODE' in find_info and self.is_dorado_v6:
@@ -1084,18 +1091,11 @@ class RestClient(object):
 
         return alua_info
 
-    def _find_new_alua_info(self, config, host_name):
+    def _find_new_alua_info(self, config, host_name, initiator):
         """Find new ALUA info from xml."""
         alua_info = {'accessMode': '0'}
-
-        find_info = None
-        for info in config:
-            if info.get('HostName'):
-                if info.get('HostName') == '*':
-                    find_info = info
-                elif re.search(info.get('HostName'), host_name):
-                    find_info = info
-                    break
+        find_info = self._find_name_or_hostname_info(
+            config, initiator, host_name)
 
         if (find_info and find_info.get('ACCESSMODE') and
                 find_info.get('HYPERMETROPATHOPTIMIZED')):
