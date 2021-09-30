@@ -1,4 +1,4 @@
-# 2.3.RC1
+# 2.3.RC2
 ## Mappings between Driver and OpenStack versions
 
 | OpenStack |Mitaka|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|
