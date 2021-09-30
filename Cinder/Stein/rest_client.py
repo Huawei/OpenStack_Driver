@@ -199,7 +199,8 @@ class Lun(CommonObject):
 
     def get_lun_host_lun_id(self, host_id, lun_id):
         result = self.get(
-            "/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%(id)s", id=host_id)
+            "/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%(id)s"
+            "&selectFields=ID,ASSOCIATEMETADATA", id=host_id)
         _assert_result(result, 'Get lun info related to host %s error.',
                        host_id)
 
