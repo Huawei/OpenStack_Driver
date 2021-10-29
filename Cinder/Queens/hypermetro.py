@@ -132,7 +132,7 @@ class HuaweiHyperMetro(object):
             raise exception.VolumeBackendAPIException(data=msg)
 
         original_host_name = connector['host']
-
+        lun_info = self.rmt_client.get_lun_info(lun_id)
         # Create hostgroup if not exist.
         host_id = self.rmt_client.add_host_with_check(original_host_name,
                                                       self.is_dorado_v6,
@@ -180,7 +180,7 @@ class HuaweiHyperMetro(object):
 
         # Add host into hostgroup.
         hostgroup_id = self.rmt_client.add_host_to_hostgroup(host_id)
-        map_info = self.rmt_client.do_mapping(lun_id, hostgroup_id, host_id,
+        map_info = self.rmt_client.do_mapping(lun_info, hostgroup_id, host_id,
                                               hypermetro_lun=True)
         if not map_info:
             msg = _('Map info is None due to array version '
@@ -188,7 +188,7 @@ class HuaweiHyperMetro(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        host_lun_id = self.rmt_client.get_host_lun_id(host_id, lun_id)
+        host_lun_id = self.rmt_client.get_host_lun_id(host_id, lun_info)
 
         # Return FC properties.
         fc_info = {'driver_volume_type': 'fibre_channel',

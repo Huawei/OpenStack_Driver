@@ -2786,10 +2786,10 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         hypermetro_lun = metadata.get('hypermetro')
 
         # Mapping lungroup and hostgroup to view.
-        map_info = client.do_mapping(lun_id, hostgroup_id, host_id,
+        map_info = client.do_mapping(lun_info, hostgroup_id, host_id,
                                      portgroup_id, lun_type, hypermetro_lun)
 
-        hostlun_id = client.get_host_lun_id(host_id, lun_id, lun_type)
+        hostlun_id = client.get_host_lun_id(host_id, lun_info, lun_type)
 
         LOG.info("initialize_connection, host lun id is: %s.",
                  hostlun_id)
@@ -3093,10 +3093,10 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         LOG.info("initialize_connection, metadata is: %s.", metadata)
         hypermetro_lun = metadata.get('hypermetro')
 
-        map_info = self.client.do_mapping(lun_id, hostgroup_id,
+        map_info = self.client.do_mapping(lun_info, hostgroup_id,
                                           host_id, portg_id,
                                           lun_type, hypermetro_lun)
-        host_lun_id = self.client.get_host_lun_id(host_id, lun_id,
+        host_lun_id = self.client.get_host_lun_id(host_id, lun_info,
                                                   lun_type)
 
         # Return FC properties.

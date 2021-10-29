@@ -197,15 +197,17 @@ class Lun(CommonObject):
         if result.get('data'):
             return result['data'][0]
 
-    def get_lun_host_lun_id(self, host_id, lun_id):
+    def get_lun_host_lun_id(self, host_id, lun_info):
         result = self.get(
             "/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%(id)s"
-            "&selectFields=ID,ASSOCIATEMETADATA", id=host_id)
+            "&filter=NAME::%(name)s"
+            "&selectFields=ID,NAME,ASSOCIATEMETADATA,WWN",
+            id=host_id, name=lun_info['NAME'])
         _assert_result(result, 'Get lun info related to host %s error.',
                        host_id)
 
         for item in result.get('data', []):
-            if lun_id == item['ID']:
+            if lun_info['ID'] == item['ID']:
                 metadata = json.loads(item['ASSOCIATEMETADATA'])
                 return metadata['HostLUNID']
 
