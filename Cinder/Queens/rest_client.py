@@ -595,9 +595,10 @@ class RestClient(object):
             return True
         return False
 
-    def do_mapping(self, lun_id, hostgroup_id, host_id, portgroup_id=None,
+    def do_mapping(self, lun_info, hostgroup_id, host_id, portgroup_id=None,
                    lun_type=constants.LUN_TYPE, hypermetro_lun=False):
         """Add hostgroup and lungroup to mapping view."""
+        lun_id = lun_info['ID']
         lungroup_name = constants.LUNGROUP_PREFIX + host_id
         mapping_view_name = constants.MAPPING_VIEW_PREFIX + host_id
         lungroup_id = self._find_lungroup(lungroup_name)
@@ -616,7 +617,7 @@ class RestClient(object):
             if lungroup_id is None:
                 lungroup_id = self._create_lungroup(lungroup_name)
             is_associated = self._is_lun_associated_to_lungroup(lungroup_id,
-                                                                lun_id,
+                                                                lun_info,
                                                                 lun_type)
             if not is_associated:
                 self.associate_lun_to_lungroup(lungroup_id, lun_id, lun_type)
@@ -780,18 +781,18 @@ class RestClient(object):
             return True
         return False
 
-    def get_host_lun_id(self, host_id, lun_id, lun_type=constants.LUN_TYPE):
+    def get_host_lun_id(self, host_id, lun_info, lun_type=constants.LUN_TYPE):
         cmd_type = 'lun' if lun_type == constants.LUN_TYPE else 'snapshot'
-        url = ("/%s/associate?TYPE=%s&ASSOCIATEOBJTYPE=21"
-               "&ASSOCIATEOBJID=%s&selectFields=ID,ASSOCIATEMETADATA"
-               % (cmd_type, lun_type, host_id))
+        url = ("/%s/associate?TYPE=%s&ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%s"
+               "&filter=NAME::%s&selectFields=ID,NAME,ASSOCIATEMETADATA,WWN"
+               % (cmd_type, lun_type, host_id, lun_info['NAME']))
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Find host lun id error.'))
 
         host_lun_id = 1
         if 'data' in result:
             for item in result['data']:
-                if lun_id == item['ID']:
+                if lun_info['ID'] == item['ID']:
                     associate_data = item['ASSOCIATEMETADATA']
                     try:
                         hostassoinfo = json.loads(associate_data)
@@ -890,18 +891,18 @@ class RestClient(object):
 
         return False
 
-    def _is_lun_associated_to_lungroup(self, lungroup_id, lun_id,
+    def _is_lun_associated_to_lungroup(self, lungroup_id, lun_info,
                                        lun_type=constants.LUN_TYPE):
         """Check whether the lun is associated to the lungroup."""
         cmd_type = 'lun' if lun_type == constants.LUN_TYPE else 'snapshot'
-        url = ("/%s/associate?TYPE=%s&"
-               "ASSOCIATEOBJTYPE=256&ASSOCIATEOBJID=%s"
-               % (cmd_type, lun_type, lungroup_id))
+        url = ("/%s/associate?TYPE=%s&ASSOCIATEOBJTYPE=256&ASSOCIATEOBJID=%s"
+               "&filter=NAME::%s&selectFields=ID,NAME,ASSOCIATEMETADATA,WWN"
+               % (cmd_type, lun_type, lungroup_id, lun_info['NAME']))
 
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Check lungroup associate error.'))
 
-        if self._get_id_from_result(result, lun_id, 'ID'):
+        if self._get_id_from_result(result, lun_info['ID'], 'ID'):
             return True
 
         return False

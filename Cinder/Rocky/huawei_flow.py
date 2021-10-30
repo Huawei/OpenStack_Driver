@@ -1507,7 +1507,7 @@ class CreateMappingViewTask(task.Task):
         return hostlun_id
 
     def execute(self, lun_id, lun_type, host_id, hostgroup_id, lungroup_id,
-                portgroup_id=None):
+                lun_info, portgroup_id=None):
         mappingview_name = constants.MAPPING_VIEW_PREFIX + host_id
         mappingview_id = self.client.create_mappingview(mappingview_name)
         self.client.associate_hostgroup_to_mappingview(
@@ -1520,7 +1520,7 @@ class CreateMappingViewTask(task.Task):
 
         if lun_type == constants.LUN_TYPE:
             hostlun_id = self._get_hostlun_id(
-                self.client.get_lun_host_lun_id, host_id, lun_id)
+                self.client.get_lun_host_lun_id, host_id, lun_info)
         else:
             hostlun_id = self._get_hostlun_id(
                 self.client.get_snapshot_host_lun_id, host_id, lun_id)
