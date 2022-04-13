@@ -211,6 +211,22 @@ class Lun(CommonObject):
                 metadata = json.loads(item['ASSOCIATEMETADATA'])
                 return metadata['HostLUNID']
 
+    def is_host_associate_inband_lun(self, host_id):
+        result = self.get("/associate?ASSOCIATEOBJTYPE=21"
+                          "&ASSOCIATEOBJID=%(id)s",
+                          id=host_id)
+        _assert_result(result, 'Get host %s associate to lun error.',
+                       host_id)
+        associate_data = result.get('data')
+        if not associate_data:
+            return False
+
+        for lun_info in associate_data:
+            if lun_info.get("SUBTYPE") == constants.INBAND_LUN_TYPE:
+                return True
+
+        return False
+
 
 class StoragePool(CommonObject):
     _obj_url = '/storagepool'
@@ -1401,19 +1417,28 @@ def rest_operation_wrapper(func):
 
 class RestClient(object):
     def __init__(self, address, user, password, vstore=None, ssl_verify=None,
-                 cert_path=None):
+                 cert_path=None, in_band_or_not=None, storage_sn=None):
         self.san_address = address
         self.san_user = user
         self.san_password = password
         self.vstore_name = vstore
         self.ssl_verify = ssl_verify
         self.cert_path = cert_path
+        self.in_band_or_not = in_band_or_not
+        self.storage_sn = storage_sn
 
         self._login_url = None
         self._login_device_id = None
         self._session_lock = lockutils.ReaderWriterLock()
         self._session = None
         self._init_object_methods()
+
+        if self.in_band_or_not:
+            if not self.storage_sn:
+                msg = _("please check 'InBandOrNot' and 'Storagesn' "
+                        "they are invaid.")
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
 
         if not self.ssl_verify and hasattr(requests, 'packages'):
             LOG.warning("Suppressing requests library SSL Warnings")
@@ -1480,11 +1505,18 @@ class RestClient(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-    def _loop_login(self):
+    def _init_http_head(self):
         self._session = requests.Session()
-        self._session.headers.update({
+        session_headers = {
             "Connection": "keep-alive",
-            "Content-Type": "application/json; charset=utf-8"})
+            "Content-Type": "application/json; charset=utf-8"}
+        if self.in_band_or_not:
+            session_headers["IBA-Target-Array"] = self.storage_sn
+        self._session.headers.update(session_headers)
+        LOG.debug('Update session heard: %s.', self._session.headers)
+
+    def _loop_login(self):
+        self._init_http_head()
         self._session.verify = False
         if self.ssl_verify:
             self._session.verify = self.cert_path

@@ -41,18 +41,20 @@ LOG = logging.getLogger(__name__)
 class LunOptsCheckTask(task.Task):
     default_provides = 'opts'
 
-    def __init__(self, client, feature_support, new_opts=None,
+    def __init__(self, client, feature_support, configuration, new_opts=None,
                  *args, **kwargs):
         super(LunOptsCheckTask, self).__init__(*args, **kwargs)
         self.client = client
         self.feature_support = feature_support
+        self.configuration = configuration
         self.new_opts = new_opts
 
     def execute(self, volume):
         if self.new_opts:
             opts = self.new_opts
         else:
-            opts = huawei_utils.get_volume_params(volume)
+            is_dorado_v6 = self.configuration.is_dorado_v6
+            opts = huawei_utils.get_volume_params(volume, is_dorado_v6)
 
         if opts['hypermetro'] and opts['replication_enabled']:
             msg = _("Hypermetro and replication cannot be "
@@ -174,9 +176,9 @@ class WaitLunOnlineTask(task.Task):
 class AddQoSTask(task.Task):
     default_provides = 'qos_id'
 
-    def __init__(self, client, *args, **kwargs):
+    def __init__(self, client, configuration, *args, **kwargs):
         super(AddQoSTask, self).__init__(*args, **kwargs)
-        self.smartqos = smartx.SmartQos(client)
+        self.smartqos = smartx.SmartQos(client, configuration.is_dorado_v6)
 
     def execute(self, lun_id, opts):
         if opts.get('qos'):
@@ -1710,7 +1712,7 @@ class ClearLunMappingTask(task.Task):
             self._delete_hostgroup(mappingview_id, hostgroup_id, host_id)
         if mappingview_id:
             self.client.delete_mapping_view(mappingview_id)
-        if host_id:
+        if host_id and not self.client.is_host_associate_inband_lun(host_id):
             self._delete_host(host_id)
 
         return ini_tgt_map
@@ -2078,10 +2080,10 @@ def create_volume(volume, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
 
     work_flow = linear_flow.Flow('create_volume')
     work_flow.add(
-        LunOptsCheckTask(local_cli, feature_support),
+        LunOptsCheckTask(local_cli, feature_support, configuration),
         CreateLunTask(local_cli, configuration, feature_support),
         WaitLunOnlineTask(local_cli),
-        AddQoSTask(local_cli),
+        AddQoSTask(local_cli, configuration),
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
         CreateHyperMetroTask(
@@ -2127,12 +2129,12 @@ def delete_volume(volume, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
     engine.run()
 
 
-def migrate_volume(volume, host, local_cli, feature_support):
+def migrate_volume(volume, host, local_cli, feature_support, configuration):
     store_spec = {'volume': volume}
 
     work_flow = linear_flow.Flow('migrate_volume')
     work_flow.add(
-        LunOptsCheckTask(local_cli, feature_support),
+        LunOptsCheckTask(local_cli, feature_support, configuration),
         CheckLunExistTask(local_cli),
         CreateMigratedLunTask(local_cli, host, feature_support),
         WaitLunOnlineTask(local_cli, rebind={'lun_id': 'tgt_lun_id'}),
@@ -2153,7 +2155,7 @@ def create_volume_from_snapshot(
     metadata = huawei_utils.get_volume_metadata(volume)
     work_flow = linear_flow.Flow('create_volume_from_snapshot')
     work_flow.add(
-        LunOptsCheckTask(local_cli, feature_support),
+        LunOptsCheckTask(local_cli, feature_support, configuration),
         CheckSnapshotExistTask(local_cli, inject={'snapshot': snapshot}))
 
     if (strutils.bool_from_string(metadata.get('fastclone', False)) or
@@ -2183,7 +2185,7 @@ def create_volume_from_snapshot(
     work_flow.add(
         ExtendVolumeTask(local_cli, inject={
             "new_size": int(volume.size) * constants.CAPACITY_UNIT}),
-        AddQoSTask(local_cli),
+        AddQoSTask(local_cli, configuration),
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
         CreateHyperMetroTask(
@@ -2212,7 +2214,7 @@ def create_volume_from_volume(
     metadata = huawei_utils.get_volume_metadata(volume)
     work_flow = linear_flow.Flow('create_volume_from_volume')
     work_flow.add(
-        LunOptsCheckTask(local_cli, feature_support),
+        LunOptsCheckTask(local_cli, feature_support, configuration),
         CheckLunExistTask(local_cli, provides=('src_lun_info', 'src_id'),
                           inject={'volume': src_volume}),
     )
@@ -2248,7 +2250,7 @@ def create_volume_from_volume(
     work_flow.add(
         ExtendVolumeTask(local_cli, inject={
             "new_size": int(volume.size) * constants.CAPACITY_UNIT}),
-        AddQoSTask(local_cli),
+        AddQoSTask(local_cli, configuration),
         AddCacheTask(local_cli),
         AddPartitionTask(local_cli),
         CreateHyperMetroTask(
@@ -2322,7 +2324,7 @@ def retype(volume, new_opts, local_cli, hypermetro_rmt_cli,
 
     work_flow = linear_flow.Flow('retype_volume')
     work_flow.add(
-        LunOptsCheckTask(local_cli, feature_support, new_opts),
+        LunOptsCheckTask(local_cli, feature_support, configuration, new_opts),
         CheckLunExistTask(local_cli),
         UpdateLunTask(local_cli),
         UpdateQoSTask(local_cli),
@@ -2352,7 +2354,7 @@ def retype_by_migrate(volume, new_opts, host, local_cli, hypermetro_rmt_cli,
 
     work_flow = linear_flow.Flow('retype_volume_by_migrate')
     work_flow.add(
-        LunOptsCheckTask(local_cli, feature_support, new_opts),
+        LunOptsCheckTask(local_cli, feature_support, configuration, new_opts),
         CheckLunExistTask(local_cli),
         CreateMigratedLunTask(local_cli, host, feature_support),
         WaitLunOnlineTask(local_cli, rebind={'lun_id': 'tgt_lun_id'}),
@@ -2383,7 +2385,7 @@ def manage_existing(volume, existing_ref, local_cli, hypermetro_rmt_cli,
 
     work_flow = linear_flow.Flow('manage_volume')
     work_flow.add(
-        LunOptsCheckTask(local_cli, feature_support),
+        LunOptsCheckTask(local_cli, feature_support, configuration),
         ManageVolumePreCheckTask(
             local_cli, volume, existing_ref, configuration),
         ManageLunTask(local_cli),

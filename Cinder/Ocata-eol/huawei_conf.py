@@ -92,7 +92,10 @@ class HuaweiConf(object):
                           self._lun_copy_mode,
                           self._hyper_pair_sync_speed,
                           self._replication_pair_sync_speed,
-                          self._get_local_minimum_fc_initiator,)
+                          self._get_local_minimum_fc_initiator,
+                          self._get_local_in_band_or_not,
+                          self._get_local_storage_sn,
+                          self._rollback_speed,)
 
         tree = ET.parse(self.conf.cinder_huawei_conf_file)
         xml_root = tree.getroot()
@@ -464,6 +467,10 @@ class HuaweiConf(object):
             dev_config['metro_sync_completed'] = (
                 dev['metro_sync_completed']
                 if 'metro_sync_completed' in dev else "True")
+            dev_config['in_band_or_not'] = (
+                dev['in_band_or_not'].lower() == 'true'
+                if 'in_band_or_not' in dev else False)
+            dev_config['storage_sn'] = dev.get('storage_sn')
             devs_config.append(dev_config)
 
         return devs_config
@@ -490,6 +497,10 @@ class HuaweiConf(object):
                 dev['iscsi_default_target_ip'].split(';')
                 if 'iscsi_default_target_ip' in dev
                 else [])
+            dev_config['in_band_or_not'] = (
+                dev['in_band_or_not'].lower() == 'true'
+                if 'in_band_or_not' in dev else False)
+            dev_config['storage_sn'] = dev.get('storage_sn')
             devs_config.append(dev_config)
 
         return devs_config
@@ -505,6 +516,8 @@ class HuaweiConf(object):
             'iscsi_info': self.conf.iscsi_info,
             'fc_info': self.conf.fc_info,
             'iscsi_default_target_ip': self.conf.iscsi_default_target_ip,
+            'in_band_or_not': self.conf.in_band_or_not,
+            'storage_sn': self.conf.storage_sn,
         }
         return dev_config
 
@@ -591,3 +604,40 @@ class HuaweiConf(object):
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
         setattr(self.conf, 'min_fc_ini_online', minimum_fc_initiator)
+
+    def _get_local_in_band_or_not(self, xml_root):
+        in_band_or_not = False
+        text = xml_root.findtext('Storage/InBandOrNot')
+        if text:
+            if text.lower() in ('true', 'false'):
+                in_band_or_not = text.lower() == 'true'
+            else:
+                msg = _("InBandOrNot configured error.")
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+
+        setattr(self.conf, 'in_band_or_not', in_band_or_not)
+
+    def _get_local_storage_sn(self, xml_root):
+        text = xml_root.findtext('Storage/Storagesn')
+        storage_sn = text.strip() if text else None
+
+        setattr(self.conf, 'storage_sn', storage_sn)
+
+    def _rollback_speed(self, xml_root):
+        text = xml_root.findtext('LUN/SnapshotRollbackSpeed')
+        if text and text.strip() not in constants.SNAPSHOT_ROLLBACK_SPEED_TYPES:
+            msg = (_("Invalid SnapshotRollbackSpeed '%(text)s', "
+                     "SnapshotRollbackSpeed must "
+                     "be between %(low)s and %(high)s.")
+                   % {"text": text,
+                      "low": constants.SNAPSHOT_ROLLBACK_SPEED_LOW,
+                      "high": constants.SNAPSHOT_ROLLBACK_SPEED_HIGHEST})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if not text:
+            speed = constants.SNAPSHOT_ROLLBACK_SPEED_HIGH
+        else:
+            speed = text.strip()
+        setattr(self.conf, 'rollback_speed', int(speed))

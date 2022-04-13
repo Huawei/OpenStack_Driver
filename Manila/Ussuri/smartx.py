@@ -92,10 +92,10 @@ class SmartQos(object):
 
         return True
 
-    def add(self, qos, fs_id):
+    def add(self, qos, fs_id, vstore_id):
         self._change_lun_priority(qos, fs_id)
 
-        qos_id = self.helper.create_qos(qos, fs_id)
+        qos_id = self.helper.create_qos(qos, fs_id, vstore_id)
         try:
             self.helper.activate_deactivate_qos(qos_id, True)
         except exception.ShareBackendException:
