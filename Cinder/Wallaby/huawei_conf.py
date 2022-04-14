@@ -76,6 +76,8 @@ class HuaweiConf(object):
             self._get_minimum_fc_initiator,
             self._hyper_enforce_multipath,
             self._rollback_speed,
+            self._get_local_in_band_or_not,
+            self._get_local_storage_sn,
         )
 
         for f in attr_funcs:
@@ -161,9 +163,12 @@ class HuaweiConf(object):
 
     def _set_extra_constants_by_product(self, product):
         extra_constants = {}
-        if product == 'Dorado':
+        if product in constants.DORADO_V6_AND_V6_PRODUCT:
             extra_constants['QOS_SPEC_KEYS'] = (
-                'maxIOPS', 'maxBandWidth', 'IOType')
+                'maxIOPS', 'minIOPS',
+                'maxBandWidth', 'minBandWidth',
+                'burstIOPS', 'burstBandWidth', 'burstTime',
+                'IOType')
             extra_constants['QOS_IOTYPES'] = ('2',)
             extra_constants['SUPPORT_LUN_TYPES'] = ('Thin',)
             extra_constants['DEFAULT_LUN_TYPE'] = 'Thin'
@@ -394,7 +399,10 @@ class HuaweiConf(object):
                     dev, 'fc_info'),
                 'sync_speed': self.conf.hyper_sync_speed,
                 'metro_sync_completed': dev['metro_sync_completed']
-                if 'metro_sync_completed' in dev else "True"
+                if 'metro_sync_completed' in dev else "True",
+                'in_band_or_not': dev['in_band_or_not'].lower() == 'true'
+                if 'in_band_or_not' in dev else False,
+                'storage_sn': dev.get('storage_sn')
             }
 
         setattr(self.conf, 'hypermetro', config)
@@ -417,6 +425,9 @@ class HuaweiConf(object):
                 'fc_info': self._parse_remote_initiator_info(
                     dev, 'fc_info'),
                 'sync_speed': self.conf.replica_sync_speed,
+                'in_band_or_not': dev['in_band_or_not'].lower() == 'true'
+                if 'in_band_or_not' in dev else False,
+                'storage_sn': dev.get('storage_sn')
             }
 
         setattr(self.conf, 'replication', config)
@@ -564,3 +575,22 @@ class HuaweiConf(object):
         else:
             speed = text.strip()
         setattr(self.conf, 'rollback_speed', int(speed))
+
+    def _get_local_in_band_or_not(self, xml_root):
+        in_band_or_not = False
+        text = xml_root.findtext('Storage/InBandOrNot')
+        if text:
+            if text.lower() in ('true', 'false'):
+                in_band_or_not = text.lower() == 'true'
+            else:
+                msg = _("InBandOrNot configured error.")
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+
+        setattr(self.conf, 'in_band_or_not', in_band_or_not)
+
+    def _get_local_storage_sn(self, xml_root):
+        text = xml_root.findtext('Storage/Storagesn')
+        storagen_sn = text.strip() if text else None
+
+        setattr(self.conf, 'storage_sn', storagen_sn)

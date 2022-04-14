@@ -633,6 +633,7 @@ class V3StorageConnection(driver.HuaweiBase):
             "mount_src":
                 tempfile.mkdtemp(prefix=constants.TMP_PATH_DST_PREFIX),
             "id": snapshot['share_id'],
+            "share_type_id": share.get("share_type_id"),
         }
 
         old_share_paths = self._get_location_path(old_share_name,

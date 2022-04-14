@@ -86,12 +86,12 @@ def _get_volume_type(volume):
         return volume_types.get_volume_type(None, volume.volume_type_id)
 
 
-def get_volume_params(volume):
+def get_volume_params(volume, is_dorado_v6=False):
     volume_type = _get_volume_type(volume)
-    return get_volume_type_params(volume_type)
+    return get_volume_type_params(volume_type, is_dorado_v6)
 
 
-def get_volume_type_params(volume_type):
+def get_volume_type_params(volume_type, is_dorado_v6=False):
     specs = {}
     if isinstance(volume_type, dict) and volume_type.get('extra_specs'):
         specs = volume_type['extra_specs']
@@ -103,10 +103,12 @@ def get_volume_type_params(volume_type):
     vol_params['qos'] = None
 
     if isinstance(volume_type, dict) and volume_type.get('qos_specs_id'):
-        vol_params['qos'] = _get_qos_specs(volume_type['qos_specs_id'])
+        vol_params['qos'] = _get_qos_specs(volume_type['qos_specs_id'],
+                                           is_dorado_v6)
     elif isinstance(volume_type, objects.VolumeType
                     ) and volume_type.qos_specs_id:
-        vol_params['qos'] = _get_qos_specs(volume_type.qos_specs_id)
+        vol_params['qos'] = _get_qos_specs(volume_type.qos_specs_id,
+                                           is_dorado_v6)
 
     LOG.info('volume opts %s.', vol_params)
     return vol_params
@@ -205,7 +207,7 @@ def _get_opts_from_specs(specs):
     return opts
 
 
-def _get_qos_specs(qos_specs_id):
+def _get_qos_specs(qos_specs_id, is_dorado_v6):
     ctxt = context.get_admin_context()
     specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
     if specs is None:
@@ -243,6 +245,9 @@ def _get_qos_specs(qos_specs_id):
                 'qos spec, got policy: %s.') % qos
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
+
+    if is_dorado_v6:
+        return qos
 
     qos_keys = set(qos.keys())
     if (qos_keys & set(constants.UPPER_LIMIT_KEYS) and

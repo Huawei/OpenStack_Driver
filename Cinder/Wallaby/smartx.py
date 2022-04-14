@@ -26,8 +26,9 @@ LOG = logging.getLogger(__name__)
 
 
 class SmartQos(object):
-    def __init__(self, client):
+    def __init__(self, client, is_dorado_v6=False):
         self.client = client
+        self.is_dorado_v6 = is_dorado_v6
 
     def _check_qos_consistency(self, policy, qos):
         for key in [k.upper() for k in constants.QOS_SPEC_KEYS]:
@@ -44,7 +45,8 @@ class SmartQos(object):
 
     @utils.synchronized('huawei_qos', external=True)
     def add(self, qos, lun_id):
-        self._change_lun_priority(qos, lun_id)
+        if not self.is_dorado_v6:
+            self._change_lun_priority(qos, lun_id)
         qos_id = self.client.create_qos(qos, lun_id)
         try:
             self.client.activate_deactivate_qos(qos_id, True)

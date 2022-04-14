@@ -128,7 +128,7 @@ METRO_RUNNING_STATUSES = (
     METRO_RUNNING_STATUS_TO_BE_SYNC) = (
     '1', '23', '35', '41', '93', '94', '100')
 
-VALID_PRODUCTS = ('V3', 'V5', 'Dorado')
+VALID_PRODUCTS = ('V3', 'V5', 'Dorado', 'V6')
 
 AVAILABLE_FEATURE_STATUS = (1, 2)
 VALID_NETWORK_TYPE = ('flat', 'vlan', 'vxlan', None)

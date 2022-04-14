@@ -73,6 +73,17 @@ class RestClient(object):
         self.url = None
         self.ssl_cert_verify = self.configuration.ssl_cert_verify
         self.ssl_cert_path = self.configuration.ssl_cert_path
+        self.in_band_or_not = kwargs.get('in_band_or_not',
+                                         self.configuration.in_band_or_not)
+        self.storage_sn = kwargs.get('storage_sn',
+                                     self.configuration.storage_sn)
+
+        if self.in_band_or_not:
+            if not self.storage_sn:
+                msg = _("please check 'InBandOrNot' and 'Storagesn' "
+                        "they are invaid.")
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
 
         if not self.ssl_cert_verify and hasattr(requests, 'packages'):
             LOG.warning("Suppressing requests library SSL Warnings")
@@ -84,9 +95,12 @@ class RestClient(object):
     def init_http_head(self):
         self.url = None
         self.session = requests.Session()
-        self.session.headers.update({
+        session_headers = {
             "Connection": "keep-alive",
-            "Content-Type": "application/json"})
+            "Content-Type": "application/json"}
+        if self.in_band_or_not:
+            session_headers["IBA-Target-Array"] = self.storage_sn
+        self.session.headers.update(session_headers)
         self.session.verify = False
 
         if self.ssl_cert_verify:
@@ -2780,3 +2794,34 @@ class RestClient(object):
             return
         self._assert_rest_result(result, 'Delete ClonePair %s error.'
                                  % pair_id)
+
+    def is_host_associate_inband_lun(self, host_id):
+        url = ("/lun/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%s"
+               % host_id)
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, _('Find host associate lun error.'))
+        associate_data = result.get('data')
+        if not associate_data:
+            return False
+
+        for lun_info in associate_data:
+            if lun_info.get("SUBTYPE") == constants.INBAND_LUN_TYPE:
+                return True
+
+        return False
+
+    def rollback_snapshot(self, snapshot_id, speed):
+        url = '/snapshot/rollback'
+        data = {'ID': snapshot_id,
+                'ROLLBACKSPEED': speed}
+        result = self.call(url, data, "PUT")
+        self._assert_rest_result(result, 'Rollback snapshot %s error.'
+                                 % snapshot_id)
+
+    def cancel_rollback_snapshot(self, snapshot_id):
+        url = '/snapshot/cancelrollback'
+        data = {'ID': snapshot_id}
+        result = self.call(url, data, "PUT")
+        self._assert_rest_result(result, 'Cancel rollback snapshot %s error.'
+                                 % snapshot_id)
+
