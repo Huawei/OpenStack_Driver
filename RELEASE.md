@@ -1,11 +1,12 @@
 # 2.3.4
 ## Mappings between Driver and OpenStack versions
 
-| OpenStack |Mitaka|Stein|Train|Ussuri|Victoria|Wallaby|Xena|
-|---|---|---|---|---|---|---|---|
-|Cinder Driver|√|√|√|√|√|√|√|
-|Manila Driver|x|√|√|√|√|√|√|
+| OpenStack |Mitaka|Newton|Stein|Train|Ussuri|Victoria|Wallaby|Xena|
+|---|---|---|---|---|---|---|---|---|
+|Cinder Driver|√|\*|√|√|√|√|√|√|
+|Manila Driver|x|x|√|√|√|√|√|√|
 
+We have tested OpenStack Newton with OceanStor Dorado V6 6.1.3
 ## Version mappings among Cinder Driver, Huawei storage, and OpenStack
 | OpenStack |Huawei Storage|
 |---|---|
