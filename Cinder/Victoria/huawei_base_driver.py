@@ -55,7 +55,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.3.RC3"
+    VERSION = "2.3.RC4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -84,7 +84,9 @@ class HuaweiBaseDriver(object):
             self.configuration.san_password,
             self.configuration.vstore_name,
             self.configuration.ssl_cert_verify,
-            self.configuration.ssl_cert_path)
+            self.configuration.ssl_cert_path,
+            self.configuration.in_band_or_not,
+            self.configuration.storage_sn)
         self.local_cli.login()
         self.configuration.is_dorado_v6 = huawei_utils.is_support_clone_pair(
             self.local_cli)
@@ -98,6 +100,8 @@ class HuaweiBaseDriver(object):
                 self.configuration.hypermetro['san_user'],
                 self.configuration.hypermetro['san_password'],
                 self.configuration.hypermetro['vstore_name'],
+                self.configuration.hypermetro['in_band_or_not'],
+                self.configuration.hypermetro['storage_sn'],
             )
             self.hypermetro_rmt_cli.login()
 
@@ -107,6 +111,8 @@ class HuaweiBaseDriver(object):
                 self.configuration.replication['san_user'],
                 self.configuration.replication['san_password'],
                 self.configuration.replication['vstore_name'],
+                self.configuration.hypermetro['in_band_or_not'],
+                self.configuration.hypermetro['storage_sn'],
             )
             self.replication_rmt_cli.login()
 
@@ -186,6 +192,25 @@ class HuaweiBaseDriver(object):
     def _get_smarttier(self, disk_type):
         return disk_type is not None and disk_type == 'mix'
 
+    def _get_pool_stats(self, pool_name, pool):
+        pool_info = self.local_cli.get_pool_by_name(pool_name)
+        if not pool_info:
+            return pool
+        total_capacity, free_capacity, provisioned_capacity = (
+            self._get_capacity(pool_info))
+        disk_type = self._get_disk_type(pool_info)
+        tier_support = self._get_smarttier(disk_type)
+
+        pool['total_capacity_gb'] = total_capacity
+        pool['free_capacity_gb'] = free_capacity
+        pool['smarttier'] = (self.support_capability['SmartTier'] and
+                             tier_support)
+        pool['provisioned_capacity_gb'] = provisioned_capacity
+        if disk_type:
+            pool['disk_type'] = disk_type
+
+        return pool
+
     def _update_pool_stats(self):
         pools = []
         for pool_name in self.configuration.storage_pools:
@@ -220,26 +245,12 @@ class HuaweiBaseDriver(object):
                 'huawei_application_type': False,
             }
 
-            if self.configuration.san_product == "Dorado":
+            if (self.configuration.san_product == "Dorado" or
+                    self.configuration.san_product == "V6"):
                 pool['thick_provisioning_support'] = False
                 pool['huawei_application_type'] = True
 
-            pool_info = self.local_cli.get_pool_by_name(pool_name)
-            if pool_info:
-                total_capacity, free_capacity, provisioned_capacity = (
-                    self._get_capacity(pool_info))
-                disk_type = self._get_disk_type(pool_info)
-                tier_support = self._get_smarttier(disk_type)
-
-                pool['total_capacity_gb'] = total_capacity
-                pool['free_capacity_gb'] = free_capacity
-                pool['smarttier'] = (self.support_capability['SmartTier'] and
-                                     tier_support)
-                if provisioned_capacity is not None:
-                    pool['provisioned_capacity_gb'] = provisioned_capacity
-                if disk_type:
-                    pool['disk_type'] = disk_type
-
+            pool = self._get_pool_stats(pool_name, pool)
             pools.append(pool)
 
         return pools
@@ -340,7 +351,8 @@ class HuaweiBaseDriver(object):
     def migrate_volume(self, ctxt, volume, host):
         try:
             huawei_flow.migrate_volume(volume, host, self.local_cli,
-                                       self.support_capability)
+                                       self.support_capability,
+                                       self.configuration)
         except Exception:
             LOG.exception('Migrate volume %s by backend failed.', volume.id)
             return False, {}

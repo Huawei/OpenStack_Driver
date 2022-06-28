@@ -537,6 +537,11 @@ class RestHelper(object):
             url = "/CIFSHARE?filter=DESCRIPTION:%s&range=[0-100]" % share_name
             result = self.call(url, "GET", data)
 
+        if share_proto == 'CIFS' and result.get('data'):
+            for data in result.get('data'):
+                if data.get('NAME') == cifs_share:
+                    return data
+
         for data in result.get('data', []):
             return data
 
@@ -648,7 +653,7 @@ class RestHelper(object):
         _assert_result(result, 'Associate FS %s to Qos %s error.',
                        new_fs_list, qos_id)
 
-    def create_qos(self, qos, fs_id):
+    def create_qos(self, qos, fs_id, vstore_id):
         localtime = time.strftime('%Y%m%d%H%M%S', time.localtime())
         qos_name = constants.QOS_NAME_PREFIX + fs_id + '_' + localtime
         data = {"NAME": qos_name,
@@ -658,6 +663,7 @@ class RestHelper(object):
                 "SCHEDULESTARTTIME": "1410969600",
                 "STARTTIME": "00:00",
                 "DURATION": "86400",
+                "vstoreId": vstore_id,
                 }
         data.update(qos)
         result = self.call("/ioclass", 'POST', data)
@@ -963,7 +969,7 @@ class RestHelper(object):
         _assert_result(result, 'Sync HyperMetro pair %s error.', pair_id)
 
     def delete_hypermetro_pair(self, pair_id):
-        url = "/HyperMetroPair/%s" % pair_id
+        url = "/HyperMetroPair/%s?isOnlineDeleting=0" % pair_id
         result = self.call(url, "DELETE")
         if _error_code(result) == constants.ERROR_HYPERMETRO_NOT_EXIST:
             LOG.warning('Hypermetro pair %s to delete not exist.', pair_id)

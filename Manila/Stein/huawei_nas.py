@@ -188,10 +188,10 @@ class HuaweiNasDriver(driver.ShareDriver):
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
 
-    def _add_smartx(self, opts, fs_id):
+    def _add_smartx(self, opts, fs_id, vstore_id):
         try:
             if opts['qos']:
-                self.smart_qos.add(opts['qos'], fs_id)
+                self.smart_qos.add(opts['qos'], fs_id, vstore_id)
             if opts['huawei_smartpartition']:
                 self.smart_partition.add(opts['partitionname'], fs_id)
             if opts['huawei_smartcache']:
@@ -318,7 +318,8 @@ class HuaweiNasDriver(driver.ShareDriver):
                 self.configuration.timeout)
             fs_info = self._split_clone_fs(context, share, fs_id)
 
-        self._add_smartx(opts, fs_id)
+        vstore_id = fs_info.get('vstoreId')
+        self._add_smartx(opts, fs_id, vstore_id)
         self._add_hypermetro(context, opts, params, remote_vstore_id, fs_info)
         return fs_id
 
@@ -749,6 +750,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                     capacity.get('PROVISIONEDCAPACITY', 0.0),
                 'allocated_capacity_gb': capacity.get('CONSUMEDCAPACITY', 0.0),
                 'reserved_percentage': 0,
+                'reserved_snapshot_percentage': 0,
                 'qos': [self.feature_supports['SmartQoS'], False],
                 'huawei_smartcache':
                     [self.feature_supports['SmartCache'], False],
@@ -783,7 +785,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         data = {
             'share_backend_name': backend_name or 'HUAWEI_NAS_Driver',
             'vendor_name': 'Huawei',
-            'driver_version': '2.3.RC2',
+            'driver_version': '2.3.RC4',
             'storage_protocol': 'NFS_CIFS',
             'snapshot_support': (self.feature_supports['HyperSnap']
                                  and self.configuration.snapshot_support),

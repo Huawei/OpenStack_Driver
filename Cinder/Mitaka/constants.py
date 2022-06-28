@@ -139,11 +139,12 @@ SNAPSHOT_NOT_EXISTS_RAISE = 'raise'
 LUN_TYPE_MAP = {'Thick': THICK_LUNTYPE,
                 'Thin': THIN_LUNTYPE}
 
-VALID_PRODUCT = ['T', 'TV2', 'V3', 'V5', '18000', 'Dorado']
+VALID_PRODUCT = ['T', 'TV2', 'V3', 'V5', '18000', 'Dorado', 'V6']
 VALID_PROTOCOL = ['FC', 'iSCSI']
 VALID_WRITE_TYPE = ['1', '2']
 VOLUME_NOT_EXISTS_WARN = 'warning'
 VOLUME_NOT_EXISTS_RAISE = 'raise'
+DORADO_V6_AND_V6_PRODUCT = ('Dorado', 'V6')
 
 LUN_COPY_SPEED_TYPES = (
     LUN_COPY_SPEED_LOW,
