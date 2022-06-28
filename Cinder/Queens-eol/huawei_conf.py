@@ -162,7 +162,7 @@ class HuaweiConf(object):
 
     def _set_extra_constants_by_product(self, product):
         extra_constants = {}
-        if product == 'Dorado':
+        if product in constants.DORADO_V6_AND_V6_PRODUCT:
             extra_constants['QOS_SPEC_KEYS'] = (
                 'maxIOPS', 'maxBandWidth', 'IOType')
             extra_constants['QOS_IOTYPES'] = ('2',)
