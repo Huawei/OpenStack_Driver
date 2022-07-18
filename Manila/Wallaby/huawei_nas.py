@@ -547,10 +547,8 @@ class HuaweiNasDriver(driver.ShareDriver):
     def update_replica_filesystem(self, replica_fs_id, params):
         self.helper.update_filesystem(replica_fs_id, params)
 
-    def _update_filesystem(self, fs_info, params):
-        fs_id = fs_info.get('ID')
-        if (not self.is_dorado_v6 and
-                json.loads(fs_info.get('HYPERMETROPAIRIDS'))):
+    def _check_and_get_hypermetro_pair(self, fs_info):
+        if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
             metro_id = self._get_metro_id_from_fs_info(fs_info)
             metro_info = self.helper.get_hypermetro_pair_by_id(metro_id)
             if not metro_info:
@@ -558,18 +556,35 @@ class HuaweiNasDriver(driver.ShareDriver):
                        {"metro_id": metro_id})
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
+            return metro_info
+        return {}
 
-            remote_fs_id = self._get_remote_fs_id(fs_id, metro_info)
-            try:
-                context = manila_context.get_admin_context()
-                self.rpc_client.update_filesystem(context, self.remote_backend,
-                                                  remote_fs_id, params)
-            except Exception as err:
-                msg = (_("Failed to update remote filesystem %(fs_id)s. "
-                         "Reason: %(err)s") %
-                       {"fs_id": remote_fs_id, "err": err})
-                LOG.error(msg)
-                raise exception.InvalidInput(reason=msg)
+    def _is_dorado_v6_hypermetro_filesystem_not_active(self, fs_info):
+        return (self.is_dorado_v6
+                and bool(self._check_and_get_hypermetro_pair(fs_info))
+                and not self._check_is_active_client())
+
+    def _update_hypermetro_remote_filesystem(self, fs_info, params):
+        fs_id = fs_info.get('ID')
+        metro_info = self._check_and_get_hypermetro_pair(fs_info)
+
+        remote_fs_id = self._get_remote_fs_id(fs_id, metro_info)
+        try:
+            context = manila_context.get_admin_context()
+            self.rpc_client.update_filesystem(context, self.remote_backend,
+                                              remote_fs_id, params)
+        except Exception as err:
+            msg = (_("Failed to update remote filesystem %(fs_id)s. "
+                     "Reason: %(err)s") %
+                   {"fs_id": remote_fs_id, "err": err})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+    def _update_filesystem(self, fs_info, params):
+        fs_id = fs_info.get('ID')
+        if (not self.is_dorado_v6 and
+                json.loads(fs_info.get('HYPERMETROPAIRIDS'))):
+            self._update_hypermetro_remote_filesystem(fs_info, params)
 
         if json.loads(fs_info.get('REMOTEREPLICATIONIDS')):
             replica_id = self._get_replica_id_from_fs_info(fs_info)
@@ -591,6 +606,11 @@ class HuaweiNasDriver(driver.ShareDriver):
                        {"fs_id": pair_info["REMOTERESID"], "err": err})
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
+
+        if (self.is_dorado_v6 and json.loads(fs_info.get('HYPERMETROPAIRIDS'))
+                and not self._check_is_active_client()):
+            self._update_hypermetro_remote_filesystem(fs_info, params)
+            return
 
         self.helper.update_filesystem(fs_id, params)
 
@@ -646,16 +666,49 @@ class HuaweiNasDriver(driver.ShareDriver):
         params = {"CAPACITY": size}
         self._update_filesystem(fs_info, params)
 
+    def rpc_create_hypermetro_snapshot(self, context,
+                                       share_name, snapshot_name):
+        fs_info = self._get_fs_info_by_name(share_name)
+        return self.helper.create_snapshot(fs_info['ID'], snapshot_name)
+
     def create_snapshot(self, context, snapshot, share_server=None):
         fs_info = self._get_fs_info_by_name(snapshot['share_name'])
-        snapshot_id = self.helper.create_snapshot(fs_info['ID'],
-                                                  snapshot['name'])
+        if self._is_dorado_v6_hypermetro_filesystem_not_active(fs_info):
+            snapshot_id = self.rpc_client.create_hypermetro_snapshot(
+                context, snapshot['share_name'], snapshot['name'],
+                self.remote_backend)
+        else:
+            snapshot_id = self.helper.create_snapshot(fs_info['ID'],
+                                                      snapshot['name'])
         LOG.info("Create snapshot %(snapshot)s from share %(share)s "
                  "successfully.", {"snapshot": snapshot["id"],
                                    "share": snapshot['share_name']})
         return {'provider_location': snapshot_id}
 
+    def rpc_delete_hypermetro_snapshot(self, context, share_name,
+                                       snapshot_name):
+        fs_info = self._get_fs_info_by_name(share_name)
+        snapshot_id = huawei_utils.snapshot_id(fs_info['ID'],
+                                               snapshot_name)
+        self.helper.delete_snapshot(snapshot_id)
+
     def delete_snapshot(self, context, snapshot, share_server=None):
+        fs_info = self._get_fs_info_by_name(snapshot['share_name'],
+                                            raise_exception=False)
+        if not fs_info:
+            LOG.error("The filestsyetm %s is not exist, return success.",
+                      snapshot['share_name'])
+            return
+
+        if self._is_dorado_v6_hypermetro_filesystem_not_active(fs_info):
+            self.rpc_client.delete_hypermetro_snapshot(context,
+                                                       snapshot['share_name'],
+                                                       snapshot['name'],
+                                                       self.remote_backend)
+            LOG.info("Delete snapshot %(snapshot)s successfully.",
+                     {"snapshot": snapshot["id"]})
+            return
+
         provider_location = snapshot.get('provider_location')
         if provider_location and '@' in provider_location:
             snapshot_id = provider_location
@@ -785,7 +838,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         data = {
             'share_backend_name': backend_name or 'HUAWEI_NAS_Driver',
             'vendor_name': 'Huawei',
-            'driver_version': '2.3.RC4',
+            'driver_version': '2.5.RC1',
             'storage_protocol': 'NFS_CIFS',
             'snapshot_support': (self.feature_supports['HyperSnap']
                                  and self.configuration.snapshot_support),
@@ -852,9 +905,19 @@ class HuaweiNasDriver(driver.ShareDriver):
                  {'access': access, 'share': share['name']})
         return access
 
+    def rpc_create_share_from_hypermetro_snapshot(self, context, share,
+                                                  snapshot, share_server):
+        return self.create_share_from_snapshot(
+            context, share, snapshot, share_server)
+
     def create_share_from_snapshot(self, context, share,
                                    snapshot, share_server=None,
                                    parent_share=None):
+        share_fs_info = self._get_fs_info_by_name(snapshot['share_name'])
+        if self._is_dorado_v6_hypermetro_filesystem_not_active(share_fs_info):
+            return self.rpc_client.create_share_from_hypermetro_snapshot(
+                context, share, snapshot, share_server, self.remote_backend)
+
         share_fs_info = self._get_fs_info_by_name(snapshot['share_name'])
         share_fs_id = share_fs_info['ID']
         snapshot_id = huawei_utils.snapshot_id(share_fs_id, snapshot['name'])
@@ -1910,9 +1973,19 @@ class HuaweiNasDriver(driver.ShareDriver):
                 constants.SNAPSHOT_ROLLBACK_TIMEOUT)
         LOG.info("Snapshot %s rollback successful.", snapshot_name)
 
+    def rpc_revert_to_hypermetro_snapshot(self, context, share_name,
+                                          snapshot_name):
+        self._revert_to_snapshot(share_name, snapshot_name)
+
     def revert_to_snapshot(self, context, snapshot, share_access_rules,
                            snapshot_access_rules, share_server=None):
-        self._revert_to_snapshot(snapshot['share_name'], snapshot['name'])
+        fs_info = self._get_fs_info_by_name(snapshot['share_name'])
+        if self._is_dorado_v6_hypermetro_filesystem_not_active(fs_info):
+            self.rpc_client.revert_to_hypermetro_snapshot(
+                context, snapshot['share_name'], snapshot['name'],
+                self.remote_backend)
+        else:
+            self._revert_to_snapshot(snapshot['share_name'], snapshot['name'])
 
     def rpc_update_snapshot(self, replica_share_name,
                             active_snapshot_name, replica_snapshot_name):

@@ -89,6 +89,12 @@ class HuaweiHyperMetro(object):
         """Delete hypermetro."""
         lun_name = huawei_utils.encode_name(volume.id)
         hypermetro = self.client.get_hypermetro_by_lun_name(lun_name)
+
+        # Judge whether this volume has experienced data migration or not
+        if not hypermetro:
+            lun_name = huawei_utils.encode_name(volume.name_id)
+            hypermetro = self.client.get_hypermetro_by_lun_name(lun_name)
+
         if not hypermetro:
             return
 

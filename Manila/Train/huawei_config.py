@@ -18,7 +18,7 @@ import os
 
 from oslo_log import log as logging
 from oslo_utils import strutils
-from xml.etree import ElementTree as ET
+from defusedxml import ElementTree as ET
 
 from manila import exception
 from manila.i18n import _
@@ -82,7 +82,7 @@ class HuaweiConfig(object):
             need_encode = True
 
         if need_encode:
-            tree.write(self.config.manila_huawei_conf_file, 'UTF-8')
+            tree.write(self.config.manila_huawei_conf_file, encoding='UTF-8')
 
     def _nas_address(self, xml_root):
         text = xml_root.findtext('Storage/RestURL')

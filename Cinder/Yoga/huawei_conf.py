@@ -21,12 +21,12 @@ and set every property into Configuration object as an attribute.
 """
 
 import base64
-from defusedxml import ElementTree as ET
 import os
 import re
-import six
 
+from lxml import etree as ET
 from oslo_log import log as logging
+import six
 
 from cinder import exception
 from cinder.i18n import _
@@ -46,7 +46,8 @@ class HuaweiConf(object):
             return
 
         self.last_modify_time = file_time
-        tree = ET.parse(self.conf.cinder_huawei_conf_file)
+        tree = ET.parse(self.conf.cinder_huawei_conf_file, 
+                        ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         self._encode_authentication(tree, xml_root)
 
@@ -105,7 +106,7 @@ class HuaweiConf(object):
             need_encode = True
 
         if need_encode:
-            tree.write(self.conf.cinder_huawei_conf_file, 'UTF-8')
+            tree.write(self.conf.cinder_huawei_conf_file, encoding='UTF-8')
 
     def _san_address(self, xml_root):
         text = xml_root.findtext('Storage/RestURL')

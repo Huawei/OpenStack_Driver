@@ -514,10 +514,10 @@ def get_volume_model_update(volume, **kwargs):
     return model_update
 
 
-def get_group_type_params(group):
+def get_group_type_params(group, is_dorado_v6=False):
     opts = []
     for volume_type in group.volume_types:
-        opt = get_volume_type_params(volume_type)
+        opt = get_volume_type_params(volume_type, is_dorado_v6)
         opts.append(opt)
     return opts
 
