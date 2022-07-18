@@ -230,6 +230,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 pool['smarttier'] = False
                 pool['thick_provisioning_support'] = False
                 pool['huawei_application_type'] = True
+            elif self.configuration.san_product == "V6":
+                pool['smarttier'] = True
+                pool['thick_provisioning_support'] = False
+                pool['huawei_application_type'] = True
 
             pool['smarttier'] = (feature_status.get('SmartTier') in
                                  constants.AVAILABLE_FEATURE_STATUS and
@@ -932,6 +936,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 src_lun_name = str(uuid.uuid4())
                 src_lun_name = huawei_utils.encode_name(src_lun_name)
                 self.client.rename_lun(src_id, src_lun_name)
+            if new_metadata.get('hypermetro'):
+                new_rmt_lun_id, rmt_lun_wwn = huawei_utils.get_volume_lun_id(
+                    self.rmt_client, new_volume)
+                self.rmt_client.rename_lun(new_rmt_lun_id, original_name, description=volume.name)
             self.client.rename_lun(new_lun_id,
                                    original_name,
                                    description=description)

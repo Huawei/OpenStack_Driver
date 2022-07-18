@@ -22,10 +22,10 @@ and set every property into Configuration object as an attribute.
 
 import base64
 import re
-import six
-from xml.etree import ElementTree as ET
 
 from oslo_log import log as logging
+from lxml import etree as ET
+import six
 
 from cinder import exception
 from cinder.i18n import _
@@ -41,7 +41,8 @@ class HuaweiConf(object):
 
     def _encode_authentication(self):
         need_encode = False
-        tree = ET.parse(self.conf.cinder_huawei_conf_file)
+        tree = ET.parse(self.conf.cinder_huawei_conf_file,
+                        ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
@@ -64,7 +65,7 @@ class HuaweiConf(object):
                           '600',
                           self.conf.cinder_huawei_conf_file,
                           run_as_root=True)
-            tree.write(self.conf.cinder_huawei_conf_file, 'UTF-8')
+            tree.write(self.conf.cinder_huawei_conf_file, encoding='UTF-8')
 
     def update_config_value(self):
         self._encode_authentication()
@@ -95,7 +96,8 @@ class HuaweiConf(object):
                           self._get_local_minimum_fc_initiator,
                           self._hyper_enforce_multipath)
 
-        tree = ET.parse(self.conf.cinder_huawei_conf_file)
+        tree = ET.parse(self.conf.cinder_huawei_conf_file,
+                        ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         for f in set_attr_funcs:
             f(xml_root)

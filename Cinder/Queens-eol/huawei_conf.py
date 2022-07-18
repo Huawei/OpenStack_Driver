@@ -22,10 +22,10 @@ and set every property into Configuration object as an attribute.
 
 import base64
 import re
-import six
-from xml.etree import ElementTree as ET
 
+from lxml import etree as ET
 from oslo_log import log as logging
+import six
 
 from cinder import exception
 from cinder.i18n import _
@@ -41,7 +41,8 @@ class HuaweiConf(object):
 
     def _encode_authentication(self):
         need_encode = False
-        tree = ET.parse(self.conf.cinder_huawei_conf_file)
+        tree = ET.parse(self.conf.cinder_huawei_conf_file,
+                        ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
@@ -64,7 +65,7 @@ class HuaweiConf(object):
                           '600',
                           self.conf.cinder_huawei_conf_file,
                           run_as_root=True)
-            tree.write(self.conf.cinder_huawei_conf_file, 'UTF-8')
+            tree.write(self.conf.cinder_huawei_conf_file, encoding='UTF-8')
 
     def update_config_value(self):
         self._encode_authentication()
@@ -96,7 +97,8 @@ class HuaweiConf(object):
                           self._hyper_enforce_multipath,
                           self._rollback_speed)
 
-        tree = ET.parse(self.conf.cinder_huawei_conf_file)
+        tree = ET.parse(self.conf.cinder_huawei_conf_file,
+                        ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         for f in set_attr_funcs:
             f(xml_root)
@@ -162,7 +164,7 @@ class HuaweiConf(object):
 
     def _set_extra_constants_by_product(self, product):
         extra_constants = {}
-        if product == 'Dorado':
+        if product in constants.DORADO_V6_AND_V6_PRODUCT:
             extra_constants['QOS_SPEC_KEYS'] = (
                 'maxIOPS', 'maxBandWidth', 'IOType')
             extra_constants['QOS_IOTYPES'] = ('2',)

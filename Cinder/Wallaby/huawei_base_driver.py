@@ -55,7 +55,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.3.RC4"
+    VERSION = "2.5.RC1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -450,7 +450,8 @@ class HuaweiBaseDriver(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        new_opts = huawei_utils.get_volume_type_params(new_type)
+        new_opts = huawei_utils.get_volume_type_params(
+            new_type, self.configuration.is_dorado_v6)
         if new_opts['compression'] is None:
             new_opts['compression'] = (self.configuration.san_product
                                        == "Dorado")
@@ -580,7 +581,8 @@ class HuaweiBaseDriver(object):
         return model_update, volumes_model_update
 
     def delete_group(self, context, group, volumes):
-        opts = huawei_utils.get_group_type_params(group)
+        opts = huawei_utils.get_group_type_params(
+            group, self.configuration.is_dorado_v6)
 
         hypermetro_group = any(opt for opt in opts if opt.get('hypermetro'))
         if hypermetro_group:
@@ -614,7 +616,8 @@ class HuaweiBaseDriver(object):
 
     def update_group(self, context, group,
                      add_volumes=None, remove_volumes=None):
-        opts = huawei_utils.get_group_type_params(group)
+        opts = huawei_utils.get_group_type_params(
+            group, self.configuration.is_dorado_v6)
 
         hypermetro_group = any(opt for opt in opts if opt.get('hypermetro'))
         if hypermetro_group:

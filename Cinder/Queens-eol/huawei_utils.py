@@ -192,6 +192,15 @@ def get_volume_lun_id(client, volume):
         volume_name = old_encode_name(volume.id)
         lun_id = client.get_lun_id_by_name(volume_name)
 
+    # Judge whether this volume has experienced data migration or not
+    if not lun_id:
+        volume_name = encode_name(volume.name_id)
+        lun_id = client.get_lun_id_by_name(volume_name)
+
+    if not lun_id:
+        volume_name = old_encode_name(volume.name_id)
+        lun_id = client.get_lun_id_by_name(volume_name)
+
     if not lun_id:
         lun_id = metadata.get('huawei_lun_id')
 

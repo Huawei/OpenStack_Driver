@@ -2430,7 +2430,7 @@ def manage_existing_snapshot(snapshot, existing_ref, local_cli):
 
 def create_group(group, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
                  configuration, feature_support):
-    opts = huawei_utils.get_group_type_params(group)
+    opts = huawei_utils.get_group_type_params(group, configuration.is_dorado_v6)
     store_spec = {'group': group,
                   'opts': opts}
 
