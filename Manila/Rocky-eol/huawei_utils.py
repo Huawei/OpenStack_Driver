@@ -95,7 +95,7 @@ def _get_string_param(k, v):
 def _get_opts_from_specs(specs, is_dorado):
     default_support = True if is_dorado else False
     opts_capability = {
-        'capabilities:dedupe': (_get_bool_param, default_support),
+        'capabilities:dedupe': (_get_bool_param, False),
         'capabilities:compression': (_get_bool_param, default_support),
         'capabilities:huawei_smartcache': (_get_bool_param, False),
         'capabilities:huawei_smartpartition': (_get_bool_param, False),

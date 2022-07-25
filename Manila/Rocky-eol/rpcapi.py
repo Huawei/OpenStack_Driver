@@ -12,11 +12,13 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import time
 
 import oslo_messaging as messaging
 
 from manila import rpc
 from manila.share import utils
+from manila.share.drivers.huawei import constants
 
 
 class HuaweiAPI(object):
@@ -34,6 +36,19 @@ class HuaweiAPI(object):
         target = messaging.Target(topic=self.topic,
                                   version=self.BASE_RPC_API_VERSION)
         self.client = rpc.get_client(target, version_cap='1.0')
+
+    @staticmethod
+    def _retry_rpc_call(call_times, interval, call_context_call, context,
+                        rpc_fun_name, **kwargs):
+        while call_times:
+            try:
+                return call_context_call(context, rpc_fun_name, **kwargs)
+            except Exception:
+                call_times -= 1
+                if not call_times:
+                    raise
+                time.sleep(interval)
+                continue
 
     def create_replica_pair(
             self, context, host, local_share_info, remote_device_wwn,
@@ -217,3 +232,44 @@ class HuaweiAPI(object):
             replica_share_name=replica_share_name,
             replica_snapshot_name=replica_snapshot_name,
         )
+
+    def create_hypermetro_snapshot(self, context, share_name, snapshot_name,
+                                   host):
+        call_context = self.client.prepare(server=host, version='1.0')
+        return self._retry_rpc_call(constants.RPC_CALL_TIMES,
+                                    constants.RPC_CALL_INTERVAL,
+                                    call_context.call, context,
+                                    "create_hypermetro_snapshot",
+                                    share_name=share_name,
+                                    snapshot_name=snapshot_name)
+
+    def delete_hypermetro_snapshot(self, context, share_name, snapshot_name,
+                                   host):
+        call_context = self.client.prepare(server=host, version='1.0')
+        return self._retry_rpc_call(constants.RPC_CALL_TIMES,
+                                    constants.RPC_CALL_INTERVAL,
+                                    call_context.call, context,
+                                    "delete_hypermetro_snapshot",
+                                    share_name=share_name,
+                                    snapshot_name=snapshot_name)
+
+    def revert_to_hypermetro_snapshot(self, context, share_name, snapshot_name,
+                                      host):
+        call_context = self.client.prepare(server=host, version='1.0')
+        return self._retry_rpc_call(constants.RPC_CALL_TIMES,
+                                    constants.RPC_CALL_INTERVAL,
+                                    call_context.call, context,
+                                    "revert_to_hypermetro_snapshot",
+                                    share_name=share_name,
+                                    snapshot_name=snapshot_name)
+
+    def create_share_from_hypermetro_snapshot(self, context, share,
+                                              snapshot, share_server, host):
+        call_context = self.client.prepare(server=host, version='1.0')
+        return self._retry_rpc_call(constants.RPC_CALL_TIMES,
+                                    constants.RPC_CALL_INTERVAL,
+                                    call_context.call, context,
+                                    "create_share_from_hypermetro_snapshot",
+                                    share=share,
+                                    snapshot=snapshot,
+                                    share_server=share_server)
