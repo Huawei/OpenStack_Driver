@@ -472,8 +472,6 @@ class ReplicaCommonDriver(object):
         self.wait_second_access(replica_id, constants.REPLICA_SECOND_RW)
 
     def sync(self, replica_id, wait_complete=False):
-        self.protect_second(replica_id)
-
         expect_status = (constants.REPLICA_RUNNING_STATUS_NORMAL,
                          constants.REPLICA_RUNNING_STATUS_SYNC,
                          constants.REPLICA_RUNNING_STATUS_INITIAL_SYNC)

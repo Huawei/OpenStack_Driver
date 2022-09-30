@@ -293,8 +293,28 @@ class RestClient(object):
             result = self.do_call(url, None, "DELETE")
             self._assert_rest_result(result, _('Logout session error.'))
 
+    def _get_info_by_range(self, func, params=None):
+        range_start = 0
+        info_list = []
+        while True:
+            range_end = range_start + constants.MAX_QUERY_COUNT
+            info = func(range_start, range_end, params)
+            info_list += info
+            if len(info) < constants.MAX_QUERY_COUNT:
+                break
+
+            range_start += constants.MAX_QUERY_COUNT
+        return info_list
+
     def _assert_rest_result(self, result, err_str):
         if result['error']['code'] != 0:
+            msg = (_('%(err)s\nresult: %(res)s.') % {'err': err_str,
+                                                     'res': result})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+    def _assert_initiator_exist(self, result, err_str):
+        if result['error']['code'] != constants.INITIATOR_NOT_EXIST:
             msg = (_('%(err)s\nresult: %(res)s.') % {'err': err_str,
                                                      'res': result})
             LOG.error(msg)
@@ -432,6 +452,12 @@ class RestClient(object):
             for item in result['data']:
                 if name == item.get(key):
                     return item['ID']
+
+    def _get_result_id(self, result):
+        if result.get('data'):
+            for item in result['data']:
+                return item['ID']
+        return None
 
     def get_lun_id_by_name(self, name):
         if not name:
@@ -660,15 +686,6 @@ class RestClient(object):
 
         return map_info
 
-    def check_iscsi_initiators_exist_in_host(self, host_id):
-        url = "/iscsi_initiator?range=[0-1023]&PARENTID=%s" % host_id
-        result = self.call(url, None, "GET")
-        self._assert_rest_result(result, 'Get host initiators info failed.')
-        if "data" in result:
-            return True
-
-        return False
-
     def ensure_initiator_added(self, initiator_name, host_id, host_name):
         added = self._initiator_is_added_to_array(initiator_name)
         if not added:
@@ -685,19 +702,19 @@ class RestClient(object):
 
     def find_hostgroup(self, groupname):
         """Get the given hostgroup id."""
-        url = "/hostgroup?range=[0-8191]"
+        url = "/hostgroup?filter=NAME::%s" % groupname
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get hostgroup information error.'))
 
-        return self._get_id_from_result(result, groupname, 'NAME')
+        return self._get_result_id(result)
 
     def _find_lungroup(self, lungroup_name):
         """Get the given hostgroup id."""
-        url = "/lungroup?range=[0-8191]"
+        url = "/lungroup?filter=NAME::%s" % lungroup_name
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get lungroup information error.'))
 
-        return self._get_id_from_result(result, lungroup_name, 'NAME')
+        return self._get_result_id(result)
 
     def create_hostgroup_with_check(self, hostgroup_name):
         """Check if host exists on the array, or create it."""
@@ -949,47 +966,56 @@ class RestClient(object):
 
     def _initiator_is_added_to_array(self, ininame):
         """Check whether the initiator is already added on the array."""
-        url = "/iscsi_initiator?range=[0-1023]"
+        url = "/iscsi_initiator/%s" % ininame
         result = self.call(url, None, "GET")
-        self._assert_rest_result(result,
-                                 _('Check initiator added to array error.'))
+        err_str = _('Check initiator added to array error.')
 
-        if self._get_id_from_result(result, ininame, 'ID'):
+        if result['error']['code'] != 0:
+            self._assert_initiator_exist(result, err_str)
+            return False
+
+        if result.get('data'):
             return True
         return False
 
     def is_initiator_associated_to_host(self, ininame, host_id):
         """Check whether the initiator is associated to the host."""
-        url = "/iscsi_initiator?range=[0-1023]"
+        url = "/iscsi_initiator/%s" % ininame
         result = self.call(url, None, "GET")
-        self._assert_rest_result(
-            result, _('Check initiator associated to host error.'))
+        err_str = _('Check initiator associated to host error.')
 
-        for item in result.get('data'):
-            if item['ID'] == ininame:
-                if item['ISFREE'] == "true":
-                    return False
-                if item['PARENTID'] == host_id:
-                    return True
-                else:
-                    msg = (_("Initiator %(ini)s has been added to host "
-                             "%(host)s.") % {"ini": ininame,
-                                             "host": item['PARENTNAME']})
-                    LOG.error(msg)
-                    raise exception.VolumeBackendAPIException(data=msg)
+        if result['error']['code'] != 0:
+            self._assert_initiator_exist(result, err_str)
+            return True
+
+        if result.get('data'):
+            item = result.get('data')
+            if item['ISFREE'] == "true":
+                return False
+            if item['PARENTID'] == host_id:
+                return True
+            else:
+                msg = (_("Initiator %(ini)s has been added to host "
+                         "%(host)s.") % {"ini": ininame,
+                                         "host": item['PARENTNAME']})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
         return True
 
     def is_initiator_used_chap(self, ininame):
         """Check whether the initiator is associated to the host."""
-        url = "/iscsi_initiator?range=[0-256]"
+        url = "/iscsi_initiator/%s" % ininame
         result = self.call(url, None, "GET")
-        self._assert_rest_result(result,
-                                 'Check initiator associated to host error.')
+        err_str = _('Check initiator associated to host error.')
 
-        if "data" in result:
-            for item in result['data']:
-                if item['ID'] == ininame and item['USECHAP'] == "true":
-                    return True
+        if result['error']['code'] != 0:
+            self._assert_initiator_exist(result, err_str)
+            return False
+
+        if result.get('data'):
+            item = result.get('data')
+            if item['USECHAP'] == "true":
+                return True
         return False
 
     def _add_initiator_to_array(self, initiator_name):
@@ -1383,22 +1409,25 @@ class RestClient(object):
 
         return (tgt_port_wwns, init_targ_map)
 
+    def _get_free_wwns(self, start, end, params):
+        url = ("/fc_initiator?ISFREE=true&range=[%(start)s-%(end)s]"
+               % {"start": six.text_type(start), "end": six.text_type(end)})
+        result = self.call(url, None, "GET")
+        msg = _('Get connected free FC wwn error.')
+        self._assert_rest_result(result, msg)
+        return result.get('data', [])
+
     def get_online_free_wwns(self):
         """Get online free WWNs.
 
         If no new ports connected, return an empty list.
         """
-        url = "/fc_initiator?ISFREE=true&range=[0-65535]"
-        result = self.call(url, None, "GET")
-
-        msg = _('Get connected free FC wwn error.')
-        self._assert_rest_result(result, msg)
+        wwns_list = self._get_info_by_range(self._get_free_wwns)
 
         wwns = []
-        if 'data' in result:
-            for item in result['data']:
-                if item['RUNNINGSTATUS'] == constants.FC_INIT_ONLINE:
-                    wwns.append(item['ID'])
+        for item in wwns_list:
+            if item['RUNNINGSTATUS'] == constants.FC_INIT_ONLINE:
+                wwns.append(item['ID'])
 
         return wwns
 
@@ -1434,6 +1463,25 @@ class RestClient(object):
                     fc_wwpns.append(item['TARGET_PORT_WWN'])
 
         return fc_wwpns
+
+    def get_fc_init_info(self, wwn):
+        """Get wwn info by wwn_id and judge is error need to be raised"""
+        url = "/fc_initiator/" + wwn
+        result = self.call(url, None, "GET")
+        error_code = result['error']['code']
+
+        if error_code != 0:
+            if error_code not in (constants.FC_INITIATOR_NOT_EXIST,
+                                  constants.ERROR_PARAMETER_ERROR):
+                msg = (_('Get fc initiator %(initiator)s on array error. '
+                         'result: %(res)s.') % {'initiator': wwn,
+                                                'res': result})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            else:
+                return {}
+
+        return result.get('data', {})
 
     def update_volume_stats(self):
         data = {}
@@ -1880,11 +1928,19 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-    def get_lun_migration_task(self):
-        url = '/LUN_MIGRATION?range=[0-256]'
+    def _get_lun_migration_task(self, start, end, params):
+        url = ("/LUN_MIGRATION?range=[%(start)s-%(end)s]"
+               % {"start": six.text_type(start), "end": six.text_type(end)})
         result = self.call(url, None, "GET")
-        self._assert_rest_result(result, _('Get lun migration task error.'))
-        return result
+        msg = _('Get migration task error.')
+        self._assert_rest_result(result, msg)
+
+        return result.get('data', [])
+
+    def get_lun_migration_task(self):
+        lun_migration_task = self._get_info_by_range(self._get_lun_migration_task)
+
+        return lun_migration_task
 
     def delete_lun_migration(self, src_id, dst_id):
         url = '/LUN_MIGRATION/' + src_id
@@ -2081,19 +2137,6 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-    def is_fc_initiator_associated_to_host(self, ininame):
-        """Check whether the initiator is associated to the host."""
-        url = '/fc_initiator?range=[0-65535]'
-        result = self.call(url, None, "GET")
-        self._assert_rest_result(result,
-                                 'Check initiator associated to host error.')
-
-        if "data" in result:
-            for item in result['data']:
-                if item['ID'] == ininame and item['ISFREE'] != "true":
-                    return True
-        return False
-
     def remove_fc_from_host(self, initiator):
         url = '/fc_initiator/remove_fc_from_host'
         data = {"TYPE": '223',
@@ -2102,7 +2145,7 @@ class RestClient(object):
         self._assert_rest_result(result, _('Remove fc from host error.'))
 
     def check_fc_initiators_exist_in_host(self, host_id):
-        url = "/fc_initiator?range=[0-65535]&PARENTID=%s" % host_id
+        url = "/fc_initiator?range=[0-1]&PARENTID=%s" % host_id
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get host initiators info failed.'))
         if 'data' in result:
@@ -2114,15 +2157,12 @@ class RestClient(object):
         """Check whether the fc initiator is already added on the array."""
         url = "/fc_initiator/" + ininame
         result = self.call(url, None, "GET")
-        error_code = result['error']['code']
-        if error_code != 0:
-            if error_code == constants.FC_INITIATOR_NOT_EXIST:
-                return False
-            msg = (_('Get fc initiator %(initiator)s on array error. '
-                     'result: %(res)s.') % {'initiator': ininame,
-                                            'res': result})
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
+        err_str = _('Get fc initiator %s on array error.' % ininame)
+
+        if result['error']['code'] != 0:
+            self._assert_initiator_exist(result, err_str)
+            return False
+
         return True
 
     def _add_fc_initiator_to_array(self, ininame):
@@ -2393,16 +2433,22 @@ class RestClient(object):
         msg = _('Delete hypermetro from metrogroup error.')
         self._assert_rest_result(result, msg)
 
-    def get_hypermetro_pairs(self):
-        url = "/HyperMetroPair?range=[0-4095]"
+    def _get_hypermetro_pairs(self, start, end, params):
+        url = ("/HyperMetroPair?range=[%(start)s-%(end)s]"
+               % {"start": six.text_type(start), "end": six.text_type(end)})
         result = self.call(url, None, "GET")
         msg = _('Get HyperMetroPair error.')
         self._assert_rest_result(result, msg)
-
         return result.get('data', [])
 
-    def get_split_mirrors(self):
-        url = "/splitmirror?range=[0-8191]"
+    def get_hypermetro_pairs(self):
+        metro_pairs_list = self._get_info_by_range(self._get_hypermetro_pairs)
+
+        return metro_pairs_list
+
+    def _get_split_mirrors(self, start, end, params):
+        url = ("/splitmirror?range=[%(start)s-%(end)s]"
+               % {"start": six.text_type(start), "end": six.text_type(end)})
         result = self.call(url, None, "GET")
         if result['error']['code'] == constants.NO_SPLITMIRROR_LICENSE:
             msg = _('License is unavailable.')
@@ -2411,6 +2457,11 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
 
         return result.get('data', [])
+
+    def get_split_mirrors(self):
+        split_mirrors = self._get_info_by_range(self._get_split_mirrors)
+
+        return split_mirrors
 
     def get_target_luns(self, id):
         url = ("/SPLITMIRRORTARGETLUN/targetLUN?TYPE=228&PARENTID=%s&"
@@ -2424,8 +2475,9 @@ class RestClient(object):
             target_luns.append(item.get('ID'))
         return target_luns
 
-    def get_migration_task(self):
-        url = "/LUN_MIGRATION?range=[0-256]"
+    def _get_migration_task(self, start, end, params):
+        url = ("/LUN_MIGRATION?range=[%(start)s-%(end)s]"
+               % {"start": six.text_type(start), "end": six.text_type(end)})
         result = self.call(url, None, "GET")
         if result['error']['code'] == constants.NO_MIGRATION_LICENSE:
             msg = _('License is unavailable.')
@@ -2434,6 +2486,11 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
 
         return result.get('data', [])
+
+    def get_migration_task(self):
+        migration_tasks = self._get_info_by_range(self._get_migration_task)
+
+        return migration_tasks
 
     def get_portgs_by_portid(self, port_id):
         portgs = []

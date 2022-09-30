@@ -1864,25 +1864,44 @@ class GetFCConnectionTask(task.Task):
 
         return ini_tgt_map, list(selected_ports) + used_ports
 
+    def _get_divided_wwns(self, wwns, host_id):
+        invalid_wwns, effective_wwns = [], []
+        for wwn in wwns:
+            wwn_info = self.client.get_fc_init_info(wwn)
+            if not wwn_info:
+                LOG.info("%s is not found in device, ignore it.", wwn)
+                continue
+
+            if wwn_info.get('RUNNINGSTATUS') == constants.FC_INIT_ONLINE:
+                if wwn_info.get('ISFREE') == 'true':
+                    effective_wwns.append(wwn)
+                    continue
+
+                if wwn_info.get('PARENTTYPE') == constants.PARENT_TYPE_HOST \
+                        and wwn_info.get('PARENTID') == host_id:
+                    effective_wwns.append(wwn)
+                    continue
+
+            invalid_wwns.append(wwn)
+
+        return invalid_wwns, effective_wwns
+
     def _get_fc_link(self, wwns, host_id):
-        totals, frees = self.client.get_fc_initiators()
-        host_initiators = self.client.get_host_fc_initiators(host_id)
-        initiators = set(wwns) & set(totals)
-        invalids = initiators - set(host_initiators) - set(frees)
-        if invalids:
+        invalid_wwns, effective_wwns = self._get_divided_wwns(wwns, host_id)
+
+        if invalid_wwns:
             if (self.configuration.min_fc_ini_online ==
                     constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE):
                 msg = _("There are invalid initiators %s. If you want to "
                         "continue to attach volume to host, configure "
-                        "MinFCIniOnline in the XML file.") % invalids
+                        "MinFCIniOnline in the XML file.") % invalid_wwns
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
-            initiators = (set(host_initiators) | set(frees)) & set(wwns)
 
-        if len(initiators) < self.configuration.min_fc_ini_online:
+        if len(effective_wwns) < self.configuration.min_fc_ini_online:
             msg = (("The number of online fc initiator %(wwns)s less than"
                     " the set number: %(set)s.")
-                   % {"wwns": initiators,
+                   % {"wwns": effective_wwns,
                       "set": self.configuration.min_fc_ini_online})
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
@@ -1890,7 +1909,7 @@ class GetFCConnectionTask(task.Task):
         ini_tgt_map = {}
         tgt_port_wwns = set()
 
-        for ini in initiators:
+        for ini in effective_wwns:
             tgts = self.client.get_fc_target_wwpns(ini)
             ini_tgt_map[ini] = tgts
             tgt_port_wwns.update(tgts)
@@ -1935,11 +1954,11 @@ class AddFCInitiatorTask(task.Task):
 
         return alua_info
 
-    def execute(self, host_id, ini_tgt_map):
+    def execute(self, host_id, ini_tgt_map, connector):
         for ini in ini_tgt_map:
             self.client.add_fc_initiator(ini)
 
-            config_info = huawei_utils.find_config_info(self.fc_info,
+            config_info = huawei_utils.find_config_info(self.fc_info, connector,
                                                         initiator=ini)
             alua_info = self._get_alua_info(config_info)
             self.client.associate_fc_initiator_to_host(host_id, ini, alua_info)
