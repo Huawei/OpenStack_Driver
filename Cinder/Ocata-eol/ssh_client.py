@@ -21,14 +21,14 @@ The common classes provide the drivers command line operation using SSH.
 
 import base64
 import re
-import six
 import socket
 import threading
 import time
-from xml.etree import ElementTree as ET
 
+from lxml import etree as ET
 from oslo_log import log as logging
 from oslo_utils import excutils
+import six
 
 from cinder import context
 from cinder import exception
@@ -159,7 +159,7 @@ class TseriesClient(object):
     def parse_xml_file(self, xml_file_path):
         """Get root of xml file."""
         try:
-            tree = ET.parse(xml_file_path)
+            tree = ET.parse(xml_file_path, ET.XMLParser(resolve_entities=False))
             root = tree.getroot()
             return root
         except IOError as err:
@@ -286,7 +286,7 @@ class TseriesClient(object):
         """Get login IP, username and password from config file."""
         logininfo = {}
         filename = self.configuration.cinder_huawei_conf_file
-        tree = ET.parse(filename)
+        tree = ET.parse(filename, ET.XMLParser(resolve_entities=False))
         root = tree.getroot()
         logininfo['ControllerIP0'] = (
             root.findtext('Storage/ControllerIP0').strip())
@@ -313,7 +313,7 @@ class TseriesClient(object):
         if need_encode:
             self._change_file_mode(filename)
             try:
-                tree.write(filename, 'UTF-8')
+                tree.write(filename, encoding='UTF-8')
             except Exception as err:
                 LOG.info(_LI('_get_login_info: %s'), err)
 

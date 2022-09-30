@@ -40,7 +40,7 @@ class HuaweiConfig(object):
 
         self.last_modify_time = file_time
 
-        tree = ET.parse(self.config.manila_huawei_conf_file, 
+        tree = ET.parse(self.config.manila_huawei_conf_file,
                         ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         self._encode_authentication(tree, xml_root)

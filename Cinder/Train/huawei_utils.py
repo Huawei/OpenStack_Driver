@@ -542,10 +542,13 @@ def _set_config_info(ini, find_info, tmp_find_info):
 
 
 def find_config_info(config_info, connector=None, initiator=None):
-    if connector:
+    if initiator:
+        ini = config_info['initiators'].get(initiator)
+        connector = {} if not connector else connector
+    elif connector:
         ini = config_info['initiators'].get(connector['initiator'])
     else:
-        ini = config_info['initiators'].get(initiator)
+        return {}
 
     find_info = None
     tmp_find_info = None
@@ -555,7 +558,7 @@ def find_config_info(config_info, connector=None, initiator=None):
             if ini_info.get('HostName'):
                 if ini_info.get('HostName') == '*':
                     tmp_find_info = ini_info
-                elif re.search(ini_info.get('HostName'), connector['host']):
+                elif re.search(ini_info.get('HostName'), connector.get('host', '')):
                     find_info = ini_info
                     break
 

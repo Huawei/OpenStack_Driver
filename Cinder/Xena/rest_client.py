@@ -806,6 +806,23 @@ class FCInitiator(CommonObject):
             range_start += constants.GET_PATCH_NUM
         return totals, frees
 
+    def get_fc_init_info(self, wwn):
+        """Get wwn info by wwn_id and judge is error need to be raised"""
+        result = self.get("/%(wwn)s", wwn=wwn)
+
+        if _error_code(result) != 0:
+            if _error_code(result) not in (constants.FC_INITIATOR_NOT_EXIST,
+                                           constants.ERROR_PARAMETER_ERROR):
+                msg = (_('Get fc initiator %(initiator)s on array error. '
+                         'result: %(res)s.') % {'initiator': wwn,
+                                                'res': result})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            else:
+                return {}
+
+        return result.get('data', {})
+
     def add_fc_initiator(self, initiator):
         data = {'ID': initiator}
         result = self.post(data=data)

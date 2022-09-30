@@ -841,10 +841,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
     def _is_lun_migration_complete(self, src_id, dst_id):
         result = self.client.get_lun_migration_task()
         found_migration_task = False
-        if 'data' not in result:
+        if not result:
             return False
 
-        for item in result['data']:
+        for item in result:
             if (src_id == item['PARENTID'] and dst_id == item['TARGETLUNID']):
                 found_migration_task = True
                 if constants.MIGRATION_COMPLETE == item['RUNNINGSTATUS']:
@@ -868,11 +868,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             LOG.error(_LE("Get LUN migration error."))
             return False
 
-        if 'data' in result:
-            for item in result['data']:
-                if (src_id == item['PARENTID']
-                        and dst_id == item['TARGETLUNID']):
-                    return True
+        for item in result:
+            if (src_id == item['PARENTID']
+                    and dst_id == item['TARGETLUNID']):
+                return True
         return False
 
     def _migrate_lun(self, src_id, dst_id):
@@ -1043,7 +1042,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             if k in lun_info:
                 lun_params[k] = lun_info[k]
 
-        for item in lun_params:
+        for item in list(lun_params.keys()):
             if lun_params.get(item) == '--':
                 lun_params.pop(item, None)
 
@@ -2971,17 +2970,27 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         data['vendor_name'] = 'Huawei'
         return data
 
-    def _check_fc_links(self, wwns, online_wwns_in_host, online_free_wwns,
-                        host_id):
-        wwns_final = []
+    def _check_fc_links(self, wwns, host_id):
+        effective_wwns = []
         for wwn in wwns:
-            if wwn in online_wwns_in_host or wwn in online_free_wwns:
-                wwns_final.append(wwn)
+            wwn_info = self.client.get_fc_init_info(wwn)
+            if not wwn_info:
+                LOG.info("%s is not found in device, ignore it.", wwn)
                 continue
+
+            if wwn_info.get('RUNNINGSTATUS') == constants.FC_INIT_ONLINE:
+                if wwn_info.get('ISFREE') == 'true':
+                    effective_wwns.append(wwn)
+                    continue
+
+                if wwn_info.get('PARENTTYPE') == constants.PARENT_TYPE_HOST \
+                        and wwn_info.get('PARENTID') == host_id:
+                    effective_wwns.append(wwn)
+                    continue
 
             msg = (("Can't add FC initiator %(wwn)s to host "
                     "%(host)s, please check if this initiator has"
-                    " been added to other host or isn't present "
+                    " been added to other host or isn't online "
                     "on array.")
                    % {"wwn": wwn, "host": host_id})
             LOG.warning(msg)
@@ -3004,19 +3013,13 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
-        return wwns_final
+        return effective_wwns
 
     def _initialize_connection_get_map_not_fc_switch(self,
                                                      host_id, wwns, connector):
-        online_wwns_in_host = (
-            self.client.get_host_online_fc_initiators(host_id))
-        online_free_wwns = self.client.get_online_free_wwns()
-        fc_initiators_on_array = self.client.get_fc_initiator_on_array()
-        wwns = [i for i in wwns if i in fc_initiators_on_array]
+        wwns = self._check_fc_links(wwns, host_id)
         LOG.info(_LI("initialize_connection, "
-                     "online initiators on the array: %s."), wwns)
-        wwns = self._check_fc_links(wwns, online_wwns_in_host,
-                                    online_free_wwns, host_id)
+                     "effective initiators on the array: %s."), wwns)
 
         if len(wwns) < self.configuration.min_fc_ini_online:
             msg = (("The number of online fc initiator %(wwns)s less than"
