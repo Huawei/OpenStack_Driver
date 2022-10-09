@@ -1,1 +1,1 @@
-"""Version: 2.5.RC1"""
+"""Version: 2.5.RC2"""
