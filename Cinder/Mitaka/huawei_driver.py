@@ -216,12 +216,12 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             'consistencygroup_support': True,
             'multiattach': True,
             'huawei_controller': True,
-            'dedup': [huawei_utils.check_feature_available(
+            'dedup': [str(huawei_utils.check_feature_available(
                 feature_status, constants.DEDUP_FEATURES
-            ) or self.is_dorado_v6, False],
-            'compression': [huawei_utils.check_feature_available(
+            ) or self.is_dorado_v6).lower(), 'false'],
+            'compression': [str(huawei_utils.check_feature_available(
                 feature_status, constants.COMPRESSION_FEATURES
-            ) or self.is_dorado_v6, False],
+            ) or self.is_dorado_v6).lower(), 'false'],
             'huawei_application_type': False,
         }
 
@@ -386,12 +386,12 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
         if opts.get('dedup'):
             params['ENABLESMARTDEDUP'] = opts['dedup']
-        elif True not in self.support_func['dedup']:
+        elif 'true' not in self.support_func['dedup']:
             params['ENABLESMARTDEDUP'] = False
 
         if opts.get('compression'):
             params['ENABLECOMPRESSION'] = opts['compression']
-        elif True not in self.support_func['compression']:
+        elif 'true' not in self.support_func['compression']:
             params['ENABLECOMPRESSION'] = False
 
         if opts.get('application_type'):
