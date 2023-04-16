@@ -55,7 +55,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.5.RC1"
+    VERSION = "2.5.RC4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -111,8 +111,8 @@ class HuaweiBaseDriver(object):
                 self.configuration.replication['san_user'],
                 self.configuration.replication['san_password'],
                 self.configuration.replication['vstore_name'],
-                self.configuration.hypermetro['in_band_or_not'],
-                self.configuration.hypermetro['storage_sn'],
+                self.configuration.replication['in_band_or_not'],
+                self.configuration.replication['storage_sn'],
             )
             self.replication_rmt_cli.login()
 
@@ -359,27 +359,51 @@ class HuaweiBaseDriver(object):
 
         return True, {}
 
+    def _change_lun_name(self, lun_id, rmt_lun_id, new_name, description=None):
+        if rmt_lun_id:
+            self.hypermetro_rmt_cli.rename_lun(rmt_lun_id, new_name, description)
+        self.local_cli.rename_lun(lun_id, new_name, description)
+
+    def _get_lun_id(self, volume, metadata, new_metadata):
+        """
+        same storage situation, if new_volume is not
+        hypermetro, we don't need to change remote lun name
+        """
+        rmt_lun_id = None
+        if metadata.get('hypermetro') and new_metadata.get('hypermetro'):
+            rmt_lun_info = huawei_utils.get_lun_info(
+                self.hypermetro_rmt_cli, volume)
+            rmt_lun_id = rmt_lun_info.get('ID')
+        lun_info = huawei_utils.get_lun_info(
+            self.local_cli, volume)
+        return lun_info.get('ID'), rmt_lun_id
+
     def update_migrated_volume(self, ctxt, volume, new_volume,
                                original_volume_status):
-        new_name = huawei_utils.encode_name(volume.id)
+        original_name = huawei_utils.encode_name(volume.id)
+        new_name = huawei_utils.encode_name(new_volume.id)
         org_metadata = huawei_utils.get_volume_private_data(volume)
         new_metadata = huawei_utils.get_volume_private_data(new_volume)
+        new_lun_id, new_rmt_lun_id = self._get_lun_id(new_volume, new_metadata, new_metadata)
 
         try:
             if org_metadata.get('huawei_sn') == new_metadata.get('huawei_sn'):
-                self.local_cli.rename_lun(org_metadata['huawei_lun_id'],
-                                          new_name[:-4] + '-org')
-            self.local_cli.rename_lun(new_metadata['huawei_lun_id'],
-                                      new_name, description=volume.name)
+                lun_id, rmt_lun_id = self._get_lun_id(volume, org_metadata, new_metadata)
+                src_lun_name = new_name[:-4] + '-org'
+                self._change_lun_name(lun_id, rmt_lun_id, src_lun_name)
+                self._change_lun_name(new_lun_id, new_rmt_lun_id, original_name, volume.name)
+                self._change_lun_name(lun_id, rmt_lun_id, new_name)
+            else:
+                self._change_lun_name(new_lun_id, new_rmt_lun_id, original_name, volume.name)
         except Exception:
             LOG.exception('Unable to rename lun %(id)s to %(name)s.',
                           {'id': new_metadata['huawei_lun_id'],
-                           'name': new_name})
+                           'name': original_name})
             name_id = new_volume.name_id
         else:
             LOG.info("Successfully rename lun %(id)s to %(name)s.",
                      {'id': new_metadata['huawei_lun_id'],
-                      'name': new_name})
+                      'name': original_name})
             name_id = None
 
         return {'_name_id': name_id,

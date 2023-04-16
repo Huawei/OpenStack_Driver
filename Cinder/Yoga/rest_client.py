@@ -227,6 +227,17 @@ class Lun(CommonObject):
 
         return False
 
+    def is_lun_associated_to_lungroup(self, lungroup_id, lun_info):
+        url = ("/associate?&ASSOCIATEOBJTYPE=256&ASSOCIATEOBJID=%s"
+               "&filter=NAME::%s&selectFields=ID,NAME,ASSOCIATEMETADATA,WWN"
+               % (lungroup_id, lun_info['NAME']))
+        result = self.get(url)
+        _assert_result(result, 'Check lungroup associate error.')
+        for item in result.get('data', []):
+            if item.get('ID') == lun_info.get('ID'):
+                return True
+        return False
+
 
 class StoragePool(CommonObject):
     _obj_url = '/storagepool'
@@ -533,10 +544,13 @@ class HostGroup(CommonObject):
 class LunGroup(CommonObject):
     _obj_url = '/lungroup'
 
-    def associate_lun_to_lungroup(self, lungroup_id, obj_id, obj_type):
+    def associate_lun_to_lungroup(self, lungroup_id, obj_id, obj_type,
+                                  is_dorado_v6=False, is_associated_host=False):
         data = {"ID": lungroup_id,
                 "ASSOCIATEOBJTYPE": obj_type,
                 "ASSOCIATEOBJID": obj_id}
+        if all((is_dorado_v6, is_associated_host)):
+            data['startHostLunId'] = 1
         result = self.post('/associate', data=data)
         if _error_code(result) in (constants.OBJECT_ID_NOT_UNIQUE,
                                    constants.LUN_ALREADY_IN_LUNGROUP):
@@ -634,7 +648,8 @@ class IscsiInitiator(CommonObject):
                     "CHAPNAME": chap_info['CHAPNAME'],
                     "CHAPPASSWORD": chap_info['CHAPPASSWORD']}
         else:
-            data = {"USECHAP": "false"}
+            data = {"USECHAP": "false",
+                    "MULTIPATHTYPE": "0"}
 
         result = self.put('/%(ini)s', data=data, ini=initiator)
         _assert_result(result, 'Update initiator %s chap error.', initiator)
@@ -1402,9 +1417,8 @@ def rest_operation_wrapper(func):
                 else:
                     r.raise_for_status()
                     result = r.json()
-                    if (_error_code(result) in
-                            (constants.ERROR_CONNECT_TO_SERVER,
-                             constants.ERROR_UNAUTHORIZED_TO_SERVER)):
+                    if _error_code(result) in constants.RELOGIN_ERROR_CODE:
+                        LOG.error("Can't open the recent url, relogin.")
                         need_relogin = True
             else:
                 need_relogin = True

@@ -56,11 +56,7 @@ class LunOptsCheckTask(task.Task):
             is_dorado_v6 = self.configuration.is_dorado_v6
             opts = huawei_utils.get_volume_params(volume, is_dorado_v6)
 
-        if opts['hypermetro'] and opts['replication_enabled']:
-            msg = _("Hypermetro and replication cannot be "
-                    "specified at the same time.")
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
+        huawei_utils.check_volume_type_valid(opts)
 
         feature_pairs = (
             ('qos', 'SmartQoS'),
@@ -245,8 +241,16 @@ class CreateHyperMetroTask(task.Task):
 
     def execute(self, volume, lun_id, lun_info, opts):
         metadata = huawei_utils.get_volume_private_data(volume)
+        hypermetro_id = None
 
-        if opts.get('hypermetro') and not metadata.get('hypermetro'):
+        if not opts.get('hypermetro'):
+            return hypermetro_id
+
+        if metadata.get('hypermetro'):
+            hypermetro = huawei_utils.get_hypermetro(self.loc_client, volume)
+            hypermetro_id = hypermetro.get('ID') if hypermetro else None
+
+        if not hypermetro_id:
             lun_keys = ('CAPACITY', 'ALLOCTYPE', 'PREFETCHPOLICY',
                         'PREFETCHVALUE', 'WRITEPOLICY', 'DATATRANSFERPOLICY')
             lun_params = {k: lun_info[k] for k in lun_keys if k in lun_info}
@@ -268,11 +272,6 @@ class CreateHyperMetroTask(task.Task):
 
             hypermetro_id = self.hypermetro.create_hypermetro(
                 lun_id, lun_params, self.sync)
-        elif not opts.get('hypermetro') and metadata.get('hypermetro'):
-            hypermetro_id = None
-        else:
-            hypermetro = huawei_utils.get_hypermetro(self.loc_client, volume)
-            hypermetro_id = hypermetro['ID'] if hypermetro else None
 
         return hypermetro_id
 
@@ -370,6 +369,32 @@ class CheckLunExistTask(task.Task):
             raise exception.VolumeBackendAPIException(data=msg)
 
         return lun_info, lun_info['ID']
+
+
+class CheckLunIsInUse(task.Task):
+    def __init__(self, *args, **kwargs):
+        super(CheckLunIsInUse, self).__init__(*args, **kwargs)
+
+    def execute(self, opts, volume, lun_info):
+        """
+        opts: come from LunOptsCheckTask
+        lun_info: come from CheckLunExistTask
+        """
+        add_hypermetro = False
+        delete_hypermetro = False
+        metadata = huawei_utils.get_volume_private_data(volume)
+        in_use_lun = lun_info.get('EXPOSEDTOINITIATOR') == 'true'
+        if opts.get('hypermetro'):
+            if not metadata.get('hypermetro'):
+                add_hypermetro = True
+        else:
+            if not metadata.get('hypermetro'):
+                delete_hypermetro = True
+
+        if (add_hypermetro or delete_hypermetro) and in_use_lun:
+            msg = _("Cann't add hypermetro to the volume in use.")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
 
 class GetLunIDTask(task.Task):
@@ -1244,6 +1269,18 @@ class ManageSnapshotTask(task.Task):
             self.client.activate_snapshot(snapshot_info['ID'])
 
 
+class GroupOptsCheckTask(task.Task):
+    default_provides = 'opts'
+
+    def __init__(self, *args, **kwargs):
+        super(GroupOptsCheckTask, self).__init__(*args, **kwargs)
+
+    def execute(self, opts):
+        for opt in opts:
+            huawei_utils.check_volume_type_valid(opt)
+        return opts
+
+
 class CreateHyperMetroGroupTask(task.Task):
     def __init__(self, local_cli, remote_cli, config, feature_support,
                  *args, **kwargs):
@@ -1471,14 +1508,19 @@ class CreateHostGroupTask(task.Task):
 class CreateLunGroupTask(task.Task):
     default_provides = 'lungroup_id'
 
-    def __init__(self, client, *args, **kwargs):
+    def __init__(self, client, configuration, *args, **kwargs):
         super(CreateLunGroupTask, self).__init__(*args, **kwargs)
         self.client = client
+        self.configuration = configuration
 
     def execute(self, host_id, lun_id, lun_type):
         lungroup_name = constants.LUNGROUP_PREFIX + host_id
         lungroup_id = self.client.create_lungroup(lungroup_name)
-        self.client.associate_lun_to_lungroup(lungroup_id, lun_id, lun_type)
+        mapping_view = self.client.get_mappingview_by_lungroup_id(lungroup_id)
+        is_associated_host = True if mapping_view else False
+        self.client.associate_lun_to_lungroup(
+            lungroup_id, lun_id, lun_type,
+            self.configuration.is_dorado_v6, is_associated_host)
         return lungroup_id
 
     def revert(self, result, lun_id, lun_type, **kwargs):
@@ -1706,6 +1748,9 @@ class ClearLunMappingTask(task.Task):
 
         if mappingview_id and portgroup_id:
             self._delete_portgroup(mappingview_id, portgroup_id)
+        if mappingview_id and not self.fc_san:
+            self.client.update_iscsi_initiator_chap(
+                connector.get('initiator'), chap_info=None)
         if mappingview_id and lungroup_id:
             self._delete_lungroup(mappingview_id, lungroup_id)
         if mappingview_id and hostgroup_id:
@@ -2345,6 +2390,7 @@ def retype(volume, new_opts, local_cli, hypermetro_rmt_cli,
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support, configuration, new_opts),
         CheckLunExistTask(local_cli),
+        CheckLunIsInUse(),
         UpdateLunTask(local_cli),
         UpdateQoSTask(local_cli),
         UpdateCacheTask(local_cli),
@@ -2375,6 +2421,7 @@ def retype_by_migrate(volume, new_opts, host, local_cli, hypermetro_rmt_cli,
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support, configuration, new_opts),
         CheckLunExistTask(local_cli),
+        CheckLunIsInUse(),
         CreateMigratedLunTask(local_cli, host, feature_support),
         WaitLunOnlineTask(local_cli, rebind={'lun_id': 'tgt_lun_id'}),
         CreateMigrateTask(local_cli, rebind={'src_lun_id': 'lun_id'}),
@@ -2455,6 +2502,7 @@ def create_group(group, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
 
     work_flow = linear_flow.Flow('create_group')
     work_flow.add(
+        GroupOptsCheckTask(),
         CreateHyperMetroGroupTask(
             local_cli, hypermetro_rmt_cli, configuration,
             feature_support),
@@ -2487,7 +2535,7 @@ def initialize_iscsi_connection(lun, lun_type, connector, client,
         GetISCSIConnectionTask(client, configuration.iscsi_info),
         AddISCSIInitiatorTask(client, configuration.iscsi_info, configuration),
         CreateHostGroupTask(client),
-        CreateLunGroupTask(client),
+        CreateLunGroupTask(client, configuration),
         CreateMappingViewTask(client),
         GetISCSIPropertiesTask(),
     )
@@ -2511,7 +2559,7 @@ def initialize_remote_iscsi_connection(hypermetro_id, connector,
         AddISCSIInitiatorTask(client, configuration.hypermetro['iscsi_info'],
                               configuration),
         CreateHostGroupTask(client),
-        CreateLunGroupTask(client),
+        CreateLunGroupTask(client, configuration),
         CreateMappingViewTask(client),
         GetISCSIPropertiesTask(client),
     )
@@ -2583,7 +2631,7 @@ def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
         GetFCConnectionTask(client, fc_san, configuration),
         AddFCInitiatorTask(client, configuration.fc_info, configuration),
         CreateHostGroupTask(client),
-        CreateLunGroupTask(client),
+        CreateLunGroupTask(client, configuration),
         CreateFCPortGroupTask(client, fc_san),
         CreateMappingViewTask(client),
         GetFCPropertiesTask(),
@@ -2608,7 +2656,7 @@ def initialize_remote_fc_connection(hypermetro_id, connector, fc_san, client,
         AddFCInitiatorTask(client, configuration.hypermetro['fc_info'],
                            configuration),
         CreateHostGroupTask(client),
-        CreateLunGroupTask(client),
+        CreateLunGroupTask(client, configuration),
         CreateFCPortGroupTask(client, fc_san),
         CreateMappingViewTask(client),
         GetFCPropertiesTask(),

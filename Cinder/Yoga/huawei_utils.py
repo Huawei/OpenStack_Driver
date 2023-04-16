@@ -16,11 +16,11 @@
 import hashlib
 import json
 import re
-import retrying
-import six
 
 from oslo_log import log as logging
 from oslo_utils import strutils
+import tenacity as retry_module
+import six
 
 from cinder import context
 from cinder import exception
@@ -69,14 +69,25 @@ def wait_for_condition(func, interval, timeout):
     def _retry_on_result(result):
         return not result
 
-    def _retry_on_exception(result):
+    def _retry_on_exception():
         return False
 
-    r = retrying.Retrying(retry_on_result=_retry_on_result,
-                          retry_on_exception=_retry_on_exception,
-                          wait_fixed=interval * 1000,
-                          stop_max_delay=timeout * 1000)
-    r.call(func)
+    def _retry_use_retrying():
+        ret = retry_module.Retrying(retry_on_result=_retry_on_result,
+                                    retry_on_exception=_retry_on_exception,
+                                    wait_fixed=interval * 1000,
+                                    stop_max_delay=timeout * 1000)
+        ret.call(func)
+
+    def _retry_use_tenacity():
+        ret = retry_module.Retrying(
+            wait=retry_module.wait_fixed(interval),
+            retry=retry_module.retry_if_result(_retry_on_result),
+            stop=retry_module.stop_after_delay(timeout)
+        )
+        ret(func)
+
+    _retry_use_tenacity()
 
 
 def _get_volume_type(volume):
@@ -439,6 +450,15 @@ def get_lun_info(client, volume):
                      lun_info.get('WWN') != metadata['huawei_lun_wwn']):
         lun_info = None
 
+    # Judge whether this volume has experienced data migration or not
+    if not lun_info:
+        volume_name = encode_name(volume.name_id)
+        lun_info = client.get_lun_info_by_name(volume_name)
+
+    if not lun_info:
+        volume_name = old_encode_name(volume.name_id)
+        lun_info = client.get_lun_info_by_name(volume_name)
+
     return lun_info
 
 
@@ -490,7 +510,9 @@ def get_volume_model_update(volume, **kwargs):
 
     if kwargs.get('hypermetro_id'):
         private_data['hypermetro'] = True
-    elif 'hypermetro_id' in private_data:
+    else:
+        private_data['hypermetro'] = False
+    if 'hypermetro_id' in private_data:
         private_data.pop('hypermetro_id')
         private_data['hypermetro'] = False
 
@@ -620,3 +642,11 @@ def get_mapping_info(client, lun_id):
         LOG.warning('lun %s is is added to multiple lungroups', lun_id)
 
     return mappingview_id, lungroup_id, hostgroup_id, portgroup_id, host_id
+
+
+def check_volume_type_valid(opt):
+    if opt.get('hypermetro') and opt.get('replication_enabled'):
+        msg = _("Hypermetro and replication cannot be "
+                "specified at the same volume_type.")
+        LOG.error(msg)
+        raise exception.VolumeBackendAPIException(data=msg)

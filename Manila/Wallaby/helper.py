@@ -15,6 +15,8 @@
 
 import base64
 import json
+
+import netaddr
 import requests
 import six
 import threading
@@ -22,12 +24,12 @@ import time
 
 from oslo_concurrency import lockutils
 from oslo_log import log
+from oslo_serialization import jsonutils
 
 from manila import exception
 from manila.i18n import _
 from manila.share.drivers.huawei import constants
 from manila.share.drivers.huawei import huawei_utils
-from manila import utils
 
 LOG = log.getLogger(__name__)
 
@@ -216,9 +218,9 @@ class RestHelper(object):
                     "code": constants.ERROR_UNAUTHORIZED_TO_SERVER,
                     "description": "unauthorized."}}
 
-        if _error_code(result) in (constants.ERROR_CONNECT_TO_SERVER,
-                                   constants.ERROR_UNAUTHORIZED_TO_SERVER,
-                                   constants.ERROR_BAD_STATUS_LINE):
+        if _error_code(result) in constants.RELOGIN_ERROR_CODE:
+            LOG.error(("Can't open the recent url, relogin. "
+                       "the error code is %s."), _error_code(result))
             with self.call_lock.write_lock():
                 relogin_result = self.relogin(old_token)
             if relogin_result:
@@ -341,9 +343,19 @@ class RestHelper(object):
             access_to = '*'
 
         accesses = self.get_all_share_access(share_id, share_proto, vstore_id)
+        # Check whether the IP address is standardized.
         for access in accesses:
-            if access['NAME'] in (access_to, '@' + access_to):
+            access_name = access.get('NAME')
+            if access_name in (access_to, '@' + access_to):
                 return access
+            try:
+                format_ip = netaddr.IPAddress(access_name)
+                new_access = str(format_ip.format(dialect=netaddr.ipv6_compact))
+                if new_access == access_to:
+                    return access
+            except Exception:
+                LOG.info("Not IP, Don't need to standardized")
+                continue
 
     def get_share_access_by_id(self, share_id, share_proto, vstore_id):
         accesses = self.get_all_share_access(share_id, share_proto, vstore_id)
@@ -353,6 +365,7 @@ class RestHelper(object):
             if "@" in access_to:
                 access_type = "user"
             else:
+                access_to = huawei_utils.standard_ipaddr(access_to)
                 access_type = "ip"
 
             _access_level = item.get('PERMISSION') or item.get('ACCESSVAL')
@@ -459,7 +472,7 @@ class RestHelper(object):
             "ACCESSVAL": access_level,
             "SYNC": "0",
             "ALLSQUASH": "1",
-            "ROOTSQUASH": "0",
+            "ROOTSQUASH": "1",
         }
 
         if share_type_id:
@@ -513,12 +526,14 @@ class RestHelper(object):
         _assert_result(result, 'Create snapshot %s error.', data)
         return result['data']['ID']
 
-    def get_share_by_name(self, share_name, share_proto, vstore_id=None):
+    def get_share_by_name(self, share_name, share_proto,
+                          vstore_id=None, need_replace=True):
         if share_proto == 'NFS':
-            share_path = huawei_utils.share_path(share_name)
+            share_path = huawei_utils.share_path(share_name, need_replace)
             url = "/NFSHARE?filter=SHAREPATH::%s&range=[0-100]" % share_path
         elif share_proto == 'CIFS':
-            cifs_share = huawei_utils.share_name(share_name)
+            cifs_share = huawei_utils.share_name(share_name)\
+                if need_replace else share_name
             url = "/CIFSHARE?filter=NAME:%s&range=[0-100]" % cifs_share
         else:
             msg = self._invalid_nas_protocol(share_proto)
@@ -709,6 +724,18 @@ class RestHelper(object):
         _assert_result(result, 'Get vlan by tag %s error.', vlan_tag)
         return result.get('data', [])
 
+    def get_vlan(self, port_id, vlan_tag):
+        url = "/vlan"
+        result = self.call(url, 'GET')
+        _assert_result(result, _('Get vlan error.'))
+
+        vlan_tag = six.text_type(vlan_tag)
+        for item in result.get('data', []):
+            if port_id == item.get('PORTID') and vlan_tag == item.get('TAG'):
+                return True, item.get('ID')
+
+        return False, None
+
     def create_vlan(self, port_id, port_type, vlan_tag):
         data = {"PORTID": port_id,
                 "PORTTYPE": port_type,
@@ -734,7 +761,41 @@ class RestHelper(object):
         result = self.call(url, 'GET')
         _assert_result(result, 'Get logical port by IP %s error.', ip)
         for data in result.get('data', []):
-            return data
+            return data.get('ID')
+
+    def _activate_logical_port(self, logical_port_id):
+        url = "/LIF/" + logical_port_id
+        data = jsonutils.dumps({"OPERATIONALSTATUS": "true"})
+        result = self.call(url, 'PUT', data)
+        _assert_result(result, _('Activate logical port error.'))
+
+    def get_logical_port(self, home_port_id, ip_version, ip_address, subnet):
+        url = "/LIF"
+        result = self.call(url, 'GET')
+        _assert_result(result, _('Get logical port error.'))
+
+        if "data" not in result:
+            return False, None
+
+        if ip_version == 4:
+            ip_addr_key = 'IPV4ADDR'
+            ip_mask_key = 'IPV4MASK'
+        else:
+            ip_addr_key = 'IPV6ADDR'
+            ip_mask_key = 'IPV6MASK'
+
+        for item in result['data']:
+            storage_ip_addr = item.get(ip_addr_key)
+            if ip_version == 6:
+                storage_ip_addr = huawei_utils.standard_ipaddr(storage_ip_addr)
+            if (home_port_id == item.get('HOMEPORTID') and
+                    ip_address == storage_ip_addr and
+                    subnet == item.get(ip_mask_key)):
+                if item.get('OPERATIONALSTATUS') != 'true':
+                    self._activate_logical_port(item.get('ID'))
+                return True, item.get('ID')
+
+        return False, None
 
     def create_logical_port(self, params):
         result = self.call("/LIF", 'POST', params)
