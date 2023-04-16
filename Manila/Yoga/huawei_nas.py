@@ -114,10 +114,10 @@ class HuaweiNasDriver(driver.ShareDriver):
         self._setup_rpc_server(rpc_manager.RPC_API_VERSION, [rpc_manager])
 
     def get_configured_ip_versions(self):
-        if self.ipv6_implemented:
-            return [4, 6]
-        else:
-            return [4]
+        return self.get_configured_ip_version()
+
+    def get_configured_ip_version(self):
+        return [4, 6] if self.ipv6_implemented else [4]
 
     def _setup_rpc_server(self, server_version, endpoints):
         host = "%s@%s" % (CONF.host, self.configuration.config_group)
@@ -490,8 +490,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         elif share_proto == 'CIFS':
             share_info = self._get_share_info(share_name, share_proto,
                                               fs_info.get('vstoreId'))
-            path_name = huawei_utils.share_name(share_info.get('NAME'))
-            locations = [r'\\%s\%s' % (ip, path_name) for ip in ips]
+            locations = [r'\\%s\%s' % (ip, share_info.get('NAME')) for ip in ips]
         else:
             msg = _('Invalid NAS protocol %s.') % share_proto
             raise exception.InvalidInput(reason=msg)
@@ -626,9 +625,10 @@ class HuaweiNasDriver(driver.ShareDriver):
                 return
         return fs_info
 
-    def _get_share_info(self, share_name, share_proto, vstore_id):
+    def _get_share_info(self, share_name, share_proto,
+                        vstore_id, need_replace=True):
         share_info = self.helper.get_share_by_name(
-            share_name, share_proto, vstore_id)
+            share_name, share_proto, vstore_id, need_replace)
         if not share_info:
             msg = _("share %s does not exist.") % share_name
             LOG.error(msg)
@@ -804,6 +804,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                 'allocated_capacity_gb': capacity.get('CONSUMEDCAPACITY', 0.0),
                 'reserved_percentage': 0,
                 'reserved_snapshot_percentage': 0,
+                'reserved_share_extend_percentage': 0,
                 'qos': [self.feature_supports['SmartQoS'], False],
                 'huawei_smartcache':
                     [self.feature_supports['SmartCache'], False],
@@ -887,7 +888,8 @@ class HuaweiNasDriver(driver.ShareDriver):
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
 
-            access['access_to'] = self.configuration.nfs_client_ip
+            access['access_to'] = huawei_utils.standard_ipaddr(
+                self.configuration.nfs_client_ip)
             access['access_type'] = 'ip'
         else:
             if not (self.configuration.cifs_client_name and
@@ -910,6 +912,32 @@ class HuaweiNasDriver(driver.ShareDriver):
         return self.create_share_from_snapshot(
             context, share, snapshot, share_server)
 
+    def _get_share_proto(self, snapshot):
+        """Before Pika snapshot don't have 'snapshot' attribution.
+           if snapshot don't have snapshot, we get snapshot_proto by
+           check share whether in array
+        """
+        snapshot_proto = snapshot.get('snapshot', {}).get('share_proto')
+        if snapshot_proto:
+            return snapshot_proto
+        share_proto = None
+        for proto in ('NFS', 'CIFS'):
+            share_info = self.helper.get_share_by_name(
+                snapshot.get('share_name'), proto)
+            if share_info:
+                share_proto = proto
+                break
+
+        if share_info is None:
+            err_msg = (_("Cannot find source share %(share)s of "
+                         "snapshot %(snapshot)s on array.")
+                       % {'share': snapshot['share_id'],
+                          'snapshot': snapshot['snapshot_id']})
+            LOG.error(err_msg)
+            raise exception.ShareResourceNotFound(
+                share_id=snapshot['share_id'])
+        return share_proto
+
     def create_share_from_snapshot(self, context, share,
                                    snapshot, share_server=None,
                                    parent_share=None):
@@ -922,7 +950,8 @@ class HuaweiNasDriver(driver.ShareDriver):
         share_fs_id = share_fs_info['ID']
         snapshot_id = huawei_utils.snapshot_id(share_fs_id, snapshot['name'])
 
-        if snapshot['snapshot']['share_proto'] == share['share_proto']:
+        snapshot_proto = self._get_share_proto(snapshot)
+        if snapshot_proto == share['share_proto']:
             try:
                 location = self._create_from_snapshot_by_clone(
                     context, share, share_fs_id, snapshot_id, share_server)
@@ -998,7 +1027,7 @@ class HuaweiNasDriver(driver.ShareDriver):
 
     def _create_from_snapshot_by_host(self, context, share, snapshot,
                                       share_server=None):
-        src_share_proto = snapshot['snapshot']['share_proto']
+        src_share_proto = self._get_share_proto(snapshot)
         src_share_name = snapshot['share_name']
         src_share = {'name': src_share_name,
                      'share_proto': src_share_proto}
@@ -1144,12 +1173,15 @@ class HuaweiNasDriver(driver.ShareDriver):
         share_name = params['name']
         share_proto = params['share_proto']
         access_to = params['access_to']
+        access_level = params['access_level']
         access_type = params['access_type']
         if (share_proto == 'NFS' and access_type not in ('ip', 'user')
                 or share_proto == 'CIFS' and access_type != 'user'):
             LOG.warning('Access type invalid for %s share.', share_proto)
             return
-
+        if share_proto == 'NFS':
+            access_to, access_level = self._get_nfs_access_info(
+                access_type, access_level, access_to)
         fs_info = self.helper.get_fs_info_by_name(share_name)
         if not fs_info:
             LOG.warning('FS %s to deny access not exist.', share_name)
@@ -1179,6 +1211,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         params = {"name": share_name,
                   "share_proto": share_proto,
                   "access_to": access_to,
+                  "access_level": access_level,
                   "access_type": access_type}
         fs_info = self.helper.get_fs_info_by_name(share_name)
         if not fs_info:
@@ -1204,7 +1237,8 @@ class HuaweiNasDriver(driver.ShareDriver):
         if access_type == 'user':
             # Use 'user' type as netgroup for NFS.
             access_to = '@' + access_to
-
+        else:
+            access_to = huawei_utils.standard_ipaddr(access_to)
         if access_level == common_constants.ACCESS_LEVEL_RW:
             access_level = constants.ACCESS_NFS_RW
         else:
@@ -1296,8 +1330,17 @@ class HuaweiNasDriver(driver.ShareDriver):
                                  "access_to": access['access_to'],
                                  "access_type": access['access_type']})
 
-        fs_info, share_info = self._get_fs_info_with_check(
-            share_name, share_proto)
+        fs_info = self._get_fs_info_by_name(share_name, raise_exception=False)
+        if not fs_info:
+            self._remove_duplicated_access(access_in_db, [])
+            return access_in_db, []
+
+        share_info = self.helper.get_share_by_name(
+            share_name, share_proto, fs_info.get('vstoreId'), need_replace=True)
+        if not share_info:
+            LOG.warning('Cannot get share %s.', share_name)
+            self._remove_duplicated_access(access_in_db, [])
+            return access_in_db, []
         access_in_array = self.helper.get_share_access_by_id(
             share_info['ID'], share_proto, fs_info.get('vstoreId'))
 
@@ -1351,7 +1394,8 @@ class HuaweiNasDriver(driver.ShareDriver):
             msg = _('IP %s inconsistent with logical IP.') % old_share_ip
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
-        share_info = self._get_share_info(old_share_name, share_proto, None)
+        share_info = self._get_share_info(
+            old_share_name, share_proto, None, need_replace=False)
 
         fs_info = self._get_fs_info_by_id(share_info['FSID'])
         if (fs_info['HEALTHSTATUS'] != constants.STATUS_FS_HEALTH or
@@ -1490,21 +1534,33 @@ class HuaweiNasDriver(driver.ShareDriver):
         else:
             return 0
 
+    @staticmethod
+    def _get_all_ip_info(network_info):
+        ip_info = network_info['network_allocations'][0]['ip_address']
+        LOG.info("get available ip_address info: %s", ip_info)
+        ip_version = ipaddress.ip_address(ip_info).version
+        if ip_version == 4:
+            subnet = utils.cidr_to_netmask(network_info.get('cidr'))
+        else:
+            subnet = str(huawei_utils.cidr_to_prefixlen(
+                network_info.get('cidr')))
+        return ip_info, ip_version, subnet
+
     def _setup_server(self, network_info, metadata=None):
         LOG.info('To setup server: %s.', network_info)
-        network_type = network_info['network_type']
+        if isinstance(network_info, list):
+            network_info = network_info[0]
+        network_type = network_info.get('network_type')
         if network_type not in constants.VALID_NETWORK_TYPE:
             msg = _('Network type %s is invalid.') % network_type
             LOG.error(msg)
             raise exception.NetworkBadConfigurationException(reason=msg)
 
-        vlan_tag = network_info['segmentation_id'] or 0
-        ip = network_info['network_allocations'][0]['ip_address']
-        ip_addr = ipaddress.ip_address(ip)
-        subnet = utils.cidr_to_netmask(network_info['cidr'])
+        vlan_tag = network_info.get('segmentation_id', 0)
+        (ip_info, ip_version, subnet) = self._get_all_ip_info(network_info)
 
         ad, ldap = self._get_security_service(
-            network_info['security_services'])
+            network_info.get('security_services', []))
 
         ad_created = False
         if ad:
@@ -1518,7 +1574,7 @@ class HuaweiNasDriver(driver.ShareDriver):
 
         try:
             vlan_id, logical_port_id = self._create_logical_port(
-                vlan_tag, ip, ip_addr.version, subnet)
+                vlan_tag, ip_info, ip_version, subnet)
         except exception.ManilaException:
             if ad_created:
                 self.helper.delete_ad_config(ad['user'], ad['password'])
@@ -1527,9 +1583,10 @@ class HuaweiNasDriver(driver.ShareDriver):
                 self.helper.delete_ldap_config()
             raise
 
-        server_details = {'ip': ip, 'logical_port_id': logical_port_id}
+        server_details = {'ip': ip_info, 'logical_port_id': logical_port_id}
         if vlan_id:
             server_details['vlan_id'] = vlan_id
+        LOG.info("Set up server successfully, server_details is %s" % server_details)
         return server_details
 
     @staticmethod
@@ -1620,44 +1677,51 @@ class HuaweiNasDriver(driver.ShareDriver):
         # Set LDAP config.
         self.helper.add_ldap_config(server, domain)
 
-    def _create_logical_port(self, vlan_tag, ip, ip_type, subnet):
+    def _create_logical_port(self, vlan_tag, ip_info, ip_type, subnet):
+        port, port_type = self._get_optimal_port()
+        LOG.info("get available port: %s" % port)
+        home_port_id = port.get("id")
+        home_port_type = port_type
+        vlan_exists = True
         vlan_id = None
         if vlan_tag:
-            vlans = self.helper.get_vlan_by_tag(vlan_tag)
-            if vlans:
-                vlan_id = vlans[0]['ID']
-            else:
-                port, port_type = self._get_optimal_port()
-                vlan_id = self.helper.create_vlan(
-                    port['id'], port_type, vlan_tag)
+            vlan_exists, vlan_id = self.helper.get_vlan(port.get('id'), vlan_tag)
+            if not vlan_exists:
+                vlan_id = self.helper.create_vlan(port['id'], port_type, vlan_tag)
             home_port_id = vlan_id
             home_port_type = constants.PORT_TYPE_VLAN
-        else:
-            port, port_type = self._get_optimal_port()
-            home_port_id = port['id']
-            home_port_type = port_type
 
-        logical_port = self.helper.get_logical_port_by_ip(ip, ip_type)
-        if not logical_port:
+        if ip_type == 6:
+            ip_info = huawei_utils.standard_ipaddr(ip_info)
+        logical_port_exists, logical_port_id = self.helper.get_logical_port(
+            home_port_id, ip_type, ip_info, subnet)
+
+        port_name = 'manila_' + huawei_utils.generate_random_alphanumeric(24)
+        if not logical_port_exists:
             data = {"HOMEPORTID": home_port_id,
                     "HOMEPORTTYPE": home_port_type,
-                    "NAME": ip,
+                    "NAME": port_name,
                     "OPERATIONALSTATUS": True,
                     "SUPPORTPROTOCOL": 3,
                     }
             if ip_type == 4:
                 data.update({"ADDRESSFAMILY": 0,
-                             "IPV4ADDR": ip,
+                             "IPV4ADDR": ip_info,
                              "IPV4MASK": subnet,
                              })
             else:
                 data.update({"ADDRESSFAMILY": 1,
-                             "IPV6ADDR": ip,
+                             "IPV6ADDR": ip_info,
                              "IPV6MASK": subnet,
                              })
-            logical_port_id = self.helper.create_logical_port(data)
-        else:
-            logical_port_id = logical_port['ID']
+            try:
+                logical_port_id = self.helper.create_logical_port(data)
+            except exception.ManilaException as err:
+                if not vlan_exists:
+                    self.helper.delete_vlan(vlan_id)
+                raise exception.InvalidShare(
+                    reason=(_('Failed to create logical port. '
+                              'Reason: %s.') % err))
 
         return vlan_id, logical_port_id
 

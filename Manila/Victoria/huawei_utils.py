@@ -14,16 +14,18 @@
 #    under the License.
 
 import json
-import retrying
+import random
+import string
 
+import netaddr
 from oslo_log import log
 from oslo_utils import strutils
+import retrying as retry_module
 
 from manila import exception
 from manila.i18n import _
 from manila.share.drivers.huawei import constants
 from manila.share import share_types
-
 
 LOG = log.getLogger(__name__)
 
@@ -192,14 +194,25 @@ def wait_for_condition(func, interval, timeout):
     def _retry_on_result(result):
         return not result
 
-    def _retry_on_exception(result):
+    def _retry_on_exception():
         return False
 
-    r = retrying.Retrying(retry_on_result=_retry_on_result,
-                          retry_on_exception=_retry_on_exception,
-                          wait_fixed=interval * 1000,
-                          stop_max_delay=timeout * 1000)
-    r.call(func)
+    def _retry_use_retrying():
+        ret = retry_module.Retrying(retry_on_result=_retry_on_result,
+                                    retry_on_exception=_retry_on_exception,
+                                    wait_fixed=interval * 1000,
+                                    stop_max_delay=timeout * 1000)
+        ret.call(func)
+
+    def _retry_use_tenacity():
+        ret = retry_module.Retrying(
+            wait=retry_module.wait_fixed(interval),
+            retry=retry_module.retry_if_result(_retry_on_result),
+            stop=retry_module.stop_after_delay(timeout)
+        )
+        ret(func)
+
+    _retry_use_retrying()
 
 
 def wait_fs_online(helper, fs_id, wait_interval, timeout):
@@ -235,8 +248,10 @@ def share_size(size):
     return int(size) * constants.CAPACITY_UNIT
 
 
-def share_path(name):
-    return "/" + name.replace("-", "_") + "/"
+def share_path(name, need_replace=True):
+    if need_replace:
+        name = name.replace("-", "_")
+    return "/" + name + "/"
 
 
 def get_share_by_location(export_location, share_proto):
@@ -294,3 +309,31 @@ def is_dorado_v6(client):
     version_info = array_info['PRODUCTVERSION']
     if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
         return True
+
+
+def standard_ipaddr(access):
+    """
+    When the added client permission is an IP address,
+    standardize it. Otherwise, do not process it.
+    """
+    try:
+        format_ip = netaddr.IPAddress(access)
+        access_to = str(format_ip.format(dialect=netaddr.ipv6_compact))
+        return access_to
+    except Exception:
+        return access
+
+
+def generate_random_alphanumeric(length):
+    return ''.join(random.choice(string.ascii_letters + string.digits)
+                   for _x in range(length))
+
+
+def cidr_to_prefixlen(cidr):
+    try:
+        network = netaddr.IPNetwork(cidr)
+        return network.prefixlen
+    except netaddr.AddrFormatError as err:
+        msg = _("Invalid cidr supplied, reason is %s") % err
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)

@@ -24,7 +24,7 @@ import base64
 import os
 import re
 
-from defusedxml import ElementTree as ET
+from lxml import etree as ET
 from oslo_log import log as logging
 import six
 
@@ -46,7 +46,8 @@ class HuaweiConf(object):
             return
 
         self.last_modify_time = file_time
-        tree = ET.parse(self.conf.cinder_huawei_conf_file)
+        tree = ET.parse(self.conf.cinder_huawei_conf_file,
+                        ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         self._encode_authentication(tree, xml_root)
 
