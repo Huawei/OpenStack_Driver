@@ -81,6 +81,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
+    VERSION = "2.6.1"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -2967,7 +2968,6 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.5.RC4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiISCSIDriver, self).__init__(*args, **kwargs)
@@ -3012,7 +3012,8 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
                 connector, iscsi_info, rmt_iscsi_info)
 
         LOG.info('initialize_common_connection_iscsi, '
-                 'return data is: %s.', iscsi_info)
+                 'return data is: %s.',
+                 huawei_utils.mask_dict_sensitive_info(iscsi_info))
         return iscsi_info
 
     def _initialize_connection(self, volume, connector, local=True):
@@ -3292,7 +3293,6 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         2.2.RC1 - Add force delete volume
     """
 
-    VERSION = "2.5.RC4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiFCDriver, self).__init__(*args, **kwargs)

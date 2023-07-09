@@ -337,3 +337,19 @@ def cidr_to_prefixlen(cidr):
         msg = _("Invalid cidr supplied, reason is %s") % err
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
+
+
+def mask_dict_sensitive_info(data, secret="***"):
+    # mask sensitive data in the dictionary
+    if not isinstance(data, dict):
+        return data
+
+    out = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            value = mask_dict_sensitive_info(value, secret=secret)
+        elif key in constants.SENSITIVE_KEYS:
+            value = secret
+        out[key] = value
+
+    return strutils.mask_dict_password(out)

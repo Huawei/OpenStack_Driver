@@ -84,6 +84,20 @@ class CommonObject(object):
     def get(self, url, **kwargs):
         return self.client.get(url, **kwargs)
 
+    @staticmethod
+    def _get_info_by_range(func, params=None):
+        range_start = 0
+        info_list = []
+        while True:
+            range_end = range_start + constants.GET_PATCH_NUM
+            info = func(range_start, range_end, params)
+            info_list += info
+            if len(info) < constants.GET_PATCH_NUM:
+                break
+
+            range_start += constants.GET_PATCH_NUM
+        return info_list
+
 
 def _assert_result(result, msg_format, *args):
     if _error_code(result) != 0:
@@ -225,17 +239,6 @@ class Lun(CommonObject):
             if lun_info.get("SUBTYPE") == constants.INBAND_LUN_TYPE:
                 return True
 
-        return False
-
-    def is_lun_associated_to_lungroup(self, lungroup_id, lun_info):
-        url = ("/associate?&ASSOCIATEOBJTYPE=256&ASSOCIATEOBJID=%s"
-               "&filter=NAME::%s&selectFields=ID,NAME,ASSOCIATEMETADATA,WWN"
-               % (lungroup_id, lun_info['NAME']))
-        result = self.get(url)
-        _assert_result(result, 'Check lungroup associate error.')
-        for item in result.get('data', []):
-            if item.get('ID') == lun_info.get('ID'):
-                return True
         return False
 
 
@@ -651,8 +654,10 @@ class IscsiInitiator(CommonObject):
             data = {"USECHAP": "false",
                     "MULTIPATHTYPE": "0"}
 
-        result = self.put('/%(ini)s', data=data, ini=initiator)
+        result = self.put('/%(ini)s', data=data, ini=initiator, log_filter=True)
         _assert_result(result, 'Update initiator %s chap error.', initiator)
+        LOG.info("Update initiator chap info successfully, "
+                 "url is /iscsi_initiator/%s, method is %s", initiator, 'put')
 
     def remove_iscsi_initiator_from_host(self, initiator):
         data = {"ID": initiator}
@@ -1062,11 +1067,18 @@ class HyperMetroDomain(CommonObject):
     _obj_url = '/HyperMetroDomain'
 
     def get_hypermetro_domain_id(self, domain_name):
-        result = self.get('?range=[0-32]')
-        _assert_result(result, 'Get hyper metro domains info error.')
-        for item in result.get('data', []):
-            if domain_name == item['NAME']:
-                return item['ID']
+        domain_list = self._get_info_by_range(self._get_hypermetro_domain)
+        for item in domain_list:
+            if domain_name == item.get('NAME'):
+                return item.get('ID')
+        return None
+
+    def _get_hypermetro_domain(self, start, end, params):
+        url = ("?range=[%(start)s-%(end)s]"
+               % {"start": str(start), "end": str(end)})
+        result = self.get(url)
+        _assert_result(result, "Get hyper metro domains info error.")
+        return result.get('data', [])
 
 
 class HyperMetroPair(CommonObject):

@@ -2216,19 +2216,19 @@ class RestClient(object):
 
         return fc_initiators
 
-    def get_hyper_domain_id(self, domain_name):
-        url = "/HyperMetroDomain?range=[0-32]"
+    def _get_hypermetro_domain(self, start, end, params):
+        url = ("/HyperMetroDomain?range=[%(start)s-%(end)s]"
+               % {"start": str(start), "end": str(end)})
         result = self.call(url, None, "GET")
-        domain_id = None
-        if "data" in result:
-            for item in result['data']:
-                if domain_name == item['NAME']:
-                    domain_id = item['ID']
-                    break
+        self._assert_rest_result(result, "Get hyper domain info error.")
+        return result.get('data', [])
 
-        msg = _('get_hyper_domain_id error.')
-        self._assert_rest_result(result, msg)
-        return domain_id
+    def get_hyper_domain_id(self, domain_name):
+        domain_list = self._get_info_by_range(self._get_hypermetro_domain)
+        for item in domain_list:
+            if domain_name == item.get('NAME'):
+                return item.get("ID")
+        return None
 
     def create_hypermetro(self, hcp_param):
         url = "/HyperMetroPair"

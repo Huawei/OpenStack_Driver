@@ -21,6 +21,7 @@ import time
 from oslo_log import log as logging
 from oslo_service import loopingcall
 from oslo_utils import units
+from oslo_utils import strutils
 
 from cinder import exception
 from cinder.i18n import _
@@ -348,3 +349,20 @@ def check_group_volume_type_valid(opt):
                 "specified at the same volume_type.")
         LOG.error(msg)
         raise exception.VolumeBackendAPIException(data=msg)
+
+
+def mask_dict_sensitive_info(data, secret="***"):
+    # mask sensitive data in the dictionary
+    if not isinstance(data, dict):
+        return data
+
+    out = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            value = mask_dict_sensitive_info(value, secret=secret)
+        elif key in constants.SENSITIVE_KEYS:
+            value = secret
+        out[key] = value
+
+    return strutils.mask_dict_password(out)
+
