@@ -15,6 +15,7 @@
 
 import base64
 import json
+import re
 
 import netaddr
 import requests
@@ -236,6 +237,20 @@ class RestHelper(object):
             else:
                 LOG.error('Relogin failed, no need to send again.')
         return result
+
+    @staticmethod
+    def _get_info_by_range(func, params=None):
+        range_start = 0
+        info_list = []
+        while True:
+            range_end = range_start + constants.MAX_QUERY_COUNT
+            info = func(range_start, range_end, params)
+            info_list += info
+            if len(info) < constants.MAX_QUERY_COUNT:
+                break
+
+            range_start += constants.MAX_QUERY_COUNT
+        return info_list
 
     def create_filesystem(self, fs_param):
         url = "/filesystem"
@@ -997,12 +1012,35 @@ class RestHelper(object):
             if con.get('LOCATION') == controller_name:
                 return con.get("ID")
 
-    def split_clone_fs(self, fs_id):
+    def _get_filesystem_split_url_data(self, fs_id):
+        """
+        Since 6.1.5, the oceanstor storage begin
+        support filesystem-split-clone.
+        """
+        array_info = self.get_array_info()
+        point_release = array_info.get("pointRelease", "0")
+        LOG.info("get array release_version success,"
+                 " release_version is %s" % point_release)
+        # Extracts numbers from point_release
+        release_version = "".join(re.findall(r"\d+", point_release))
+        url = "/filesystem_split_switch"
         data = {"ID": fs_id,
                 "SPLITENABLE": True,
                 "SPLITSPEED": 4,
                 }
-        result = self.call("/filesystem_split_switch", "PUT", data)
+        if release_version >= constants.SUPPORT_CLONE_FS_SPLIT_VERSION:
+            url = "/clone_fs_split"
+            data = {
+                "ID": fs_id,
+                "action": constants.ACTION_START_SPLIT,
+                "splitSpeed": 4,
+            }
+
+        return url, data
+
+    def split_clone_fs(self, fs_id):
+        (url, data) = self._get_filesystem_split_url_data(fs_id)
+        result = self.call(url, "PUT", data)
         _assert_result(result, 'Split clone fs %s error.', fs_id)
 
     def create_hypermetro_pair(self, params):
@@ -1038,11 +1076,17 @@ class RestHelper(object):
         _assert_result(result, 'Delete HyperMetro pair %s error.', pair_id)
 
     def get_hypermetro_domain_id(self, domain_name):
-        result = self.call("/HyperMetroDomain?range=[0-100]", "GET")
-        _assert_result(result, "Get HyperMetro domains info error.")
-        for item in result.get("data", []):
+        domain_list = self._get_info_by_range(self._get_hypermetro_domain)
+        for item in domain_list:
             if item.get("NAME") == domain_name:
                 return item.get("ID")
+
+    def _get_hypermetro_domain(self, start, end, params):
+        url = ("/HyperMetroDomain?range=[%(start)s-%(end)s]"
+               % {"start": str(start), "end": str(end)})
+        result = self.call(url, "GET")
+        _assert_result(result, "Get HyperMetro domains info error.")
+        return result.get('data', [])
 
     def get_hypermetro_domain_info(self, domain_name):
         result = self.call("/FsHyperMetroDomain?RUNNINGSTATUS=0", "GET",
@@ -1054,20 +1098,25 @@ class RestHelper(object):
 
     def get_hypermetro_vstore_id(self, domain_name, local_vstore_name,
                                  remote_vstore_name):
-        result = self.call("/vstore_pair?range=[0-100]", "GET",
-                           data=None, log_filter=True)
-        _assert_result(result, "Get HyperMetro vstore_pair id error.")
-        for item in result.get("data", []):
+        vstore_list = self._get_info_by_range(self._get_hypermetro_vstore)
+        for item in vstore_list:
             if item.get("DOMAINNAME") == domain_name and item.get(
                     "LOCALVSTORENAME") == local_vstore_name and item.get(
                     "REMOTEVSTORENAME") == remote_vstore_name:
                 return item.get("ID")
         return None
 
+    def _get_hypermetro_vstore(self, start, end, params):
+        url = ("/vstore_pair?range=[%(start)s-%(end)s]"
+               % {"start": str(start), "end": str(end)})
+        result = self.call(url, "GET")
+        _assert_result(result, "Get vstore_pair id error.")
+        return result.get('data', [])
+
     def get_hypermetro_vstore_by_pair_id(self, vstore_pair_id):
         url = "/vstore_pair/%s" % vstore_pair_id
         result = self.call(url, 'GET', data=None, log_filter=True)
-        _assert_result(result, "Get HyperMetro vstore_pair info by id error.")
+        _assert_result(result, "Get vstore_pair info by id error.")
         return result["data"]
 
     def get_array_info(self):

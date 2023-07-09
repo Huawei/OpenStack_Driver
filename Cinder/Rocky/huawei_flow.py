@@ -388,7 +388,7 @@ class CheckLunIsInUse(task.Task):
             if not metadata.get('hypermetro'):
                 add_hypermetro = True
         else:
-            if not metadata.get('hypermetro'):
+            if metadata.get('hypermetro'):
                 delete_hypermetro = True
 
         if (add_hypermetro or delete_hypermetro) and in_use_lun:
@@ -1671,10 +1671,11 @@ class GetLunMappingTask(task.Task):
 class ClearLunMappingTask(task.Task):
     default_provides = 'ini_tgt_map'
 
-    def __init__(self, client, configuration, fc_san=None, *args, **kwargs):
+    def __init__(self, client, configuration, fc_san=None, is_fc=False, *args, **kwargs):
         super(ClearLunMappingTask, self).__init__(*args, **kwargs)
         self.client = client
         self.fc_san = fc_san
+        self.is_fc = is_fc
         self.configuration = configuration
 
     def _get_obj_count_of_lungroup(self, lungroup_id):
@@ -1748,7 +1749,7 @@ class ClearLunMappingTask(task.Task):
 
         if mappingview_id and portgroup_id:
             self._delete_portgroup(mappingview_id, portgroup_id)
-        if mappingview_id and not self.fc_san:
+        if mappingview_id and not self.is_fc:
             self.client.update_iscsi_initiator_chap(
                 connector.get('initiator'), chap_info=None)
         if mappingview_id and lungroup_id:
@@ -2686,7 +2687,7 @@ def terminate_fc_connection(lun, lun_type, connector, fc_san, client,
 
     work_flow.add(
         GetLunMappingTask(client),
-        ClearLunMappingTask(client, configuration, fc_san),
+        ClearLunMappingTask(client, configuration, fc_san, is_fc=True),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -2703,7 +2704,7 @@ def terminate_remote_fc_connection(hypermetro_id, connector, fc_san, client,
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
         GetLunMappingTask(client),
-        ClearLunMappingTask(client, configuration, fc_san,
+        ClearLunMappingTask(client, configuration, fc_san, is_fc=True,
                             inject={'lun_type': constants.LUN_TYPE}),
     )
 

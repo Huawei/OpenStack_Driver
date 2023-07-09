@@ -25,6 +25,7 @@ LUNGROUP_PREFIX = 'OpenStack_LunGroup_'
 MAPPING_VIEW_PREFIX = 'OpenStack_Mapping_View_'
 PORTGROUP_PREFIX = 'OpenStack_PortGroup_'
 QOS_NAME_PREFIX = 'OpenStack_'
+SENSITIVE_KEYS = ['auth_password']
 
 FC_PORT_CONNECTED = '10'
 FC_INIT_ONLINE = '27'

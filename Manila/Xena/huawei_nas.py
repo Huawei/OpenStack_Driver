@@ -75,6 +75,8 @@ LOG = log.getLogger(__name__)
 
 
 class HuaweiNasDriver(driver.ShareDriver):
+    VERSION = "2.6.1"
+
     def __init__(self, *args, **kwargs):
         super(HuaweiNasDriver, self).__init__((True, False), *args, **kwargs)
         self.configuration.append_config_values(huawei_opts)
@@ -839,7 +841,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         data = {
             'share_backend_name': backend_name or 'HUAWEI_NAS_Driver',
             'vendor_name': 'Huawei',
-            'driver_version': '2.5.RC1',
+            'driver_version': self.VERSION,
             'storage_protocol': 'NFS_CIFS',
             'snapshot_support': (self.feature_supports['HyperSnap']
                                  and self.configuration.snapshot_support),
@@ -904,7 +906,8 @@ class HuaweiNasDriver(driver.ShareDriver):
             access['access_type'] = 'user'
 
         LOG.info("Get access %(access)s for share %(share)s copy.",
-                 {'access': access, 'share': share['name']})
+                 {'access': huawei_utils.mask_dict_sensitive_info(access),
+                  'share': share['name']})
         return access
 
     def rpc_create_share_from_hypermetro_snapshot(self, context, share,
@@ -952,6 +955,7 @@ class HuaweiNasDriver(driver.ShareDriver):
 
         snapshot_proto = self._get_share_proto(snapshot)
         if snapshot_proto == share['share_proto']:
+            LOG.info("Try to create share by clone")
             try:
                 location = self._create_from_snapshot_by_clone(
                     context, share, share_fs_id, snapshot_id, share_server)
@@ -963,6 +967,7 @@ class HuaweiNasDriver(driver.ShareDriver):
             LOG.warning('Share protocol is inconsistent, will use host copy.')
 
         try:
+            LOG.info("Try to create share by host copy")
             location = self._create_from_snapshot_by_host(
                 context, share, snapshot, share_server)
             return location
