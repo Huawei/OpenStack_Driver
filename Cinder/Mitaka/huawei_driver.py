@@ -81,7 +81,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "2.6.1"
+    VERSION = "2.6.2"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -513,6 +513,82 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
         return metro_id, replica_info
 
+    def _create_volume_from_src_by_fast_clone(
+            self, volume, src_obj, src_type, lun_params, expect_size):
+        if volume.volume_type_id != src_obj.volume_type_id:
+            msg = _("Volume type must be the same as source "
+                    "for fast clone.")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        if src_type == objects.Volume:
+            src_id = self._check_volume_exist_on_array(
+                src_obj, constants.VOLUME_NOT_EXISTS_RAISE)
+        else:
+            src_id = self._check_snapshot_exist_on_array(
+                src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
+
+        lun_info = self._create_volume_by_clone(
+            src_id, lun_params, expect_size)
+        return lun_info
+
+    def _create_volume_from_src_by_clone_pair(
+            self, src_type, src_obj, lun_params):
+        clone_speed = self.configuration.lun_copy_speed
+        if src_type == objects.Volume:
+            src_id = self._check_volume_exist_on_array(
+                src_obj, constants.VOLUME_NOT_EXISTS_RAISE)
+        else:
+            src_id = self._check_snapshot_exist_on_array(
+                src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
+        lun_info = self._create_volume_by_clone_pair(
+            src_id, lun_params, clone_speed)
+        return lun_info
+
+    def _create_volume_from_src_by_lun_copy(
+            self, metadata, src_type, src_obj, lun_params):
+        copyspeed = metadata.get('copyspeed')
+        if not copyspeed:
+            copyspeed = self.configuration.lun_copy_speed
+        elif copyspeed not in constants.LUN_COPY_SPEED_TYPES:
+            msg = (_("LUN copy speed is: %(speed)s. It should be between "
+                     "%(low)s and %(high)s.")
+                   % {"speed": copyspeed,
+                      "low": constants.LUN_COPY_SPEED_LOW,
+                      "high": constants.LUN_COPY_SPEED_HIGH})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        if src_type == objects.Volume:
+            vol_kwargs = {
+                'id': src_obj.id,
+                'provider_location': src_obj.provider_location,
+            }
+            snapshot_kwargs = {
+                'id': six.text_type(uuid.uuid4()),
+                'volume_id': src_obj.id,
+                'volume': objects.Volume(**vol_kwargs),
+            }
+
+            snapshot = objects.Snapshot(**snapshot_kwargs)
+            src_id = self._create_snapshot(snapshot)
+        else:
+            src_id = self._check_snapshot_exist_on_array(
+                src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
+
+        try:
+            lun_info = self._create_volume_by_luncopy(
+                src_id, lun_params, copyspeed)
+        except Exception as err:
+            msg = _("Create volume by lun copy error. Reason: %s") % err
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(msg)
+        finally:
+            if src_type == objects.Volume:
+                self._delete_snapshot(src_id)
+
+        return lun_info
+
     def _create_volume_from_src(self, volume, src_obj, src_type, lun_params,
                                 clone_pair_flag=None):
         metadata = huawei_utils.get_volume_metadata(volume)
@@ -520,80 +596,23 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         if (strutils.bool_from_string(metadata.get('fastclone')) or
                 (metadata.get('fastclone') is None and
                  self.configuration.clone_mode == "fastclone")):
-            if volume.volume_type_id != src_obj.volume_type_id:
-                msg = _("Volume type must be the same as source "
-                        "for fast clone.")
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
-
-            if src_type == objects.Volume:
-                src_id = self._check_volume_exist_on_array(
-                    src_obj, constants.VOLUME_NOT_EXISTS_RAISE)
-            else:
-                src_id = self._check_snapshot_exist_on_array(
-                    src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
-
-            lun_info = self._create_volume_by_clone(
-                src_id, lun_params, expect_size)
+            lun_info = self._create_volume_from_src_by_fast_clone(
+                volume, src_obj, src_type, lun_params, expect_size)
         elif clone_pair_flag:
-            clone_speed = self.configuration.lun_copy_speed
-            if src_type == objects.Volume:
-                src_id = self._check_volume_exist_on_array(
-                    src_obj, constants.VOLUME_NOT_EXISTS_RAISE)
-            else:
-                src_id = self._check_snapshot_exist_on_array(
-                    src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
-            lun_info = self._create_volume_by_clone_pair(
-                src_id, lun_params, clone_speed)
+            lun_info = self._create_volume_from_src_by_clone_pair(
+                src_type, src_obj, lun_params)
         else:
-            copyspeed = metadata.get('copyspeed')
-            if not copyspeed:
-                copyspeed = self.configuration.lun_copy_speed
-            elif copyspeed not in constants.LUN_COPY_SPEED_TYPES:
-                msg = (_("LUN copy speed is: %(speed)s. It should be between "
-                         "%(low)s and %(high)s.")
-                       % {"speed": copyspeed,
-                          "low": constants.LUN_COPY_SPEED_LOW,
-                          "high": constants.LUN_COPY_SPEED_HIGH})
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
-
-            if src_type == objects.Volume:
-                vol_kwargs = {
-                    'id': src_obj.id,
-                    'provider_location': src_obj.provider_location,
-                }
-                snapshot_kwargs = {
-                    'id': six.text_type(uuid.uuid4()),
-                    'volume_id': src_obj.id,
-                    'volume': objects.Volume(**vol_kwargs),
-                }
-
-                snapshot = objects.Snapshot(**snapshot_kwargs)
-                src_id = self._create_snapshot(snapshot)
-            else:
-                src_id = self._check_snapshot_exist_on_array(
-                    src_obj, constants.SNAPSHOT_NOT_EXISTS_RAISE)
-
-            try:
-                lun_info = self._create_volume_by_luncopy(
-                    src_id, lun_params, copyspeed)
-            except Exception as err:
-                msg = _("Create volume by lun copy error. Reason: %s") % err
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(msg)
-            finally:
-                if src_type == objects.Volume:
-                    self._delete_snapshot(src_id)
+            lun_info = self._create_volume_from_src_by_lun_copy(
+                metadata, src_type, src_obj, lun_params)
 
         try:
-            if int(lun_info['CAPACITY']) < expect_size:
-                self.client.extend_lun(lun_info["ID"], expect_size)
-                lun_info = self.client.get_lun_info(lun_info["ID"])
+            if int(lun_info.get('CAPACITY')) < expect_size:
+                self.client.extend_lun(lun_info.get("ID"), expect_size)
+                lun_info = self.client.get_lun_info(lun_info.get("ID"))
         except Exception as err:
             LOG.exception('Extend lun %(lun_id)s error. Reason is %(err)s' %
-                          {"lun_id": lun_info['ID'], "err": err})
-            self._delete_lun_with_check(lun_info['ID'])
+                          {"lun_id": lun_info.get("ID"), "err": err})
+            self._delete_lun_with_check(lun_info.get("ID"))
             raise
 
         return lun_info
@@ -630,7 +649,6 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             self.client.delete_lun(lun_id)
             raise
 
-        lun_info = self.client.get_lun_info(lun_id)
         return lun_info
 
     def _create_volume_by_luncopy(self, src_id, lun_params, copyspeed):
@@ -717,14 +735,14 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 volume, volume_type, opts, lun_params, lun_info, is_sync)
         except Exception:
             LOG.exception('Add extend feature to volume %s failed.', volume.id)
-            self._delete_lun_with_check(lun_info['ID'])
+            self._delete_lun_with_check(lun_info.get('ID'))
             raise
 
         hypermetro = True if metro_id else False
 
         provider_location = huawei_utils.to_string(
-            huawei_lun_id=lun_info['ID'], huawei_sn=self.sn,
-            huawei_lun_wwn=lun_info['WWN'], hypermetro=hypermetro)
+            huawei_lun_id=lun_info.get('ID'), huawei_sn=self.sn,
+            huawei_lun_wwn=lun_info.get('WWN'), hypermetro=hypermetro)
         model_update = {'provider_location': provider_location}
         model_update.update(replica_info)
 
@@ -1554,11 +1572,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 raise exception.VolumeBackendAPIException(data=msg)
 
         # smarttier
-        if old_opts['policy'] != new_opts['policy']:
-            if not (old_opts['policy'] == '--'
-                    and new_opts['policy'] is None):
-                change_opts['policy'] = (old_opts['policy'],
-                                         new_opts['policy'])
+        if (new_opts.get('policy') and
+                new_opts.get('policy') != old_opts.get('policy')):
+            change_opts['policy'] = (old_opts.get('policy'),
+                                     new_opts.get('policy'))
 
         # smartcache
         old_cache_id = old_opts['cacheid']
@@ -2229,6 +2246,12 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                               source_group=None, source_vols=None):
         if not volume_utils.is_group_a_cg_snapshot_type(group):
             raise NotImplementedError()
+
+        if self.configuration.clone_mode == "fastclone":
+            msg = ("Can't config fastclone when create "
+                   "consisgroup from cgsnapshot or consisgroup")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(msg)
 
         model_update = self.create_group(context, group)
         volumes_model_update = []

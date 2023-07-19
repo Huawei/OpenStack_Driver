@@ -55,7 +55,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.6.1"
+    VERSION = "2.6.2"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -566,6 +566,12 @@ class HuaweiBaseDriver(object):
     def create_group_from_src(self, context, group, volumes,
                               group_snapshot=None, snapshots=None,
                               source_group=None, source_vols=None):
+        if self.configuration.clone_mode == "fastclone":
+            msg = ("Can't config fastclone when create "
+                   "consisgroup from cgsnapshot or consisgroup")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(msg)
+
         model_update = self.create_group(context, group)
         volumes_model_update = []
         delete_snapshots = False

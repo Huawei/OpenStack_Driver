@@ -2214,27 +2214,27 @@ def migrate_volume(volume, host, local_cli, feature_support, configuration):
 
 
 def create_volume_from_snapshot(
-        volume, snapshot, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
+        volume, src_obj, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
         configuration, feature_support):
     store_spec = {'volume': volume}
     metadata = huawei_utils.get_volume_metadata(volume)
     work_flow = linear_flow.Flow('create_volume_from_snapshot')
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support, configuration),
-        CheckSnapshotExistTask(local_cli, inject={'snapshot': snapshot}))
+        CheckSnapshotExistTask(local_cli, inject={'snapshot': src_obj}))
 
     if (strutils.bool_from_string(metadata.get('fastclone', False)) or
             (metadata.get('fastclone') is None and
              configuration.clone_mode == "fastclone")):
         work_flow.add(
-            LunClonePreCheckTask(inject={'src_volume': snapshot}),
+            LunClonePreCheckTask(inject={'src_volume': src_obj}),
             CreateLunCloneTask(local_cli,
-                               rebind={'src_id': 'snapshot_id'}),
+                               rebind={'src_id': 'snapshot_id'})
         )
     elif configuration.is_dorado_v6:
         work_flow.add(
             CreateLunTask(local_cli, configuration, feature_support,
-                          inject={"src_size": snapshot.volume_size}),
+                          inject={"src_size": src_obj.volume_size}),
             WaitLunOnlineTask(local_cli),
             CreateClonePairTask(local_cli, feature_support, configuration,
                                 rebind={'source_id': 'snapshot_id',
@@ -2247,33 +2247,16 @@ def create_volume_from_snapshot(
             CreateLunCopyTask(local_cli, feature_support, configuration),
             WaitLunCopyDoneTask(local_cli, configuration),)
 
-    work_flow.add(
-        ExtendVolumeTask(local_cli, inject={
-            "new_size": int(volume.size) * constants.CAPACITY_UNIT}),
-        AddQoSTask(local_cli, configuration),
-        AddCacheTask(local_cli),
-        AddPartitionTask(local_cli),
-        CreateHyperMetroTask(
-            local_cli, hypermetro_rmt_cli, configuration),
-        AddHyperMetroGroupTask(
-            local_cli, hypermetro_rmt_cli, configuration),
-        CreateReplicationTask(
-            local_cli, replication_rmt_cli, configuration),
-        AddReplicationGroupTask(
-            local_cli, replication_rmt_cli, configuration),)
-
-    engine = taskflow.engines.load(work_flow, store=store_spec)
-    engine.run()
-
-    lun_id = engine.storage.fetch('lun_id')
-    lun_info = engine.storage.fetch('lun_info')
-    hypermetro_id = engine.storage.fetch('hypermetro_id')
-    replication_id = engine.storage.fetch('replication_id')
-    return lun_id, lun_info['WWN'], hypermetro_id, replication_id
+    general_params = {'local_cli': local_cli,
+                      'hypermetro_rmt_cli': hypermetro_rmt_cli,
+                      'replication_rmt_cli': replication_rmt_cli,
+                      'configuration': configuration}
+    return _create_volume_from_src(
+        work_flow, volume, store_spec, general_params)
 
 
 def create_volume_from_volume(
-        volume, src_volume, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
+        volume, src_obj, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
         configuration, feature_support):
     store_spec = {'volume': volume}
     metadata = huawei_utils.get_volume_metadata(volume)
@@ -2281,20 +2264,20 @@ def create_volume_from_volume(
     work_flow.add(
         LunOptsCheckTask(local_cli, feature_support, configuration),
         CheckLunExistTask(local_cli, provides=('src_lun_info', 'src_id'),
-                          inject={'volume': src_volume}),
+                          inject={'volume': src_obj}),
     )
 
     if (strutils.bool_from_string(metadata.get('fastclone', False)) or
             (metadata.get('fastclone') is None and
              configuration.clone_mode == "fastclone")):
         work_flow.add(
-            LunClonePreCheckTask(inject={'src_volume': src_volume}),
-            CreateLunCloneTask(local_cli),
+            LunClonePreCheckTask(inject={'src_volume': src_obj}),
+            CreateLunCloneTask(local_cli)
         )
     elif configuration.is_dorado_v6:
         work_flow.add(
             CreateLunTask(local_cli, configuration, feature_support,
-                          inject={"src_size": src_volume.size}),
+                          inject={"src_size": src_obj.size}),
             WaitLunOnlineTask(local_cli),
             CreateClonePairTask(local_cli, feature_support, configuration,
                                 rebind={'source_id': 'src_id',
@@ -2312,6 +2295,24 @@ def create_volume_from_volume(
             DeleteTempSnapshotTask(local_cli),
         )
 
+    general_params = {'local_cli': local_cli,
+                      'hypermetro_rmt_cli': hypermetro_rmt_cli,
+                      'replication_rmt_cli': replication_rmt_cli,
+                      'configuration': configuration}
+    return _create_volume_from_src(
+        work_flow, volume, store_spec, general_params)
+
+
+def _create_volume_from_src(
+        work_flow, volume, store_spec, general_params):
+    """
+    Extracting Common Methods for create_volume_from_volume
+    and create_volume_from_snapshot
+    """
+    local_cli = general_params.get('local_cli')
+    configuration = general_params.get('configuration')
+    replication_rmt_cli = general_params.get('replication_rmt_cli')
+    hypermetro_rmt_cli = general_params.get('hypermetro_rmt_cli')
     work_flow.add(
         ExtendVolumeTask(local_cli, inject={
             "new_size": int(volume.size) * constants.CAPACITY_UNIT}),
