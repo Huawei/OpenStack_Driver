@@ -50,10 +50,13 @@ def _assert_result(result, format_str, *args):
 class RestHelper(object):
     """Helper class for Huawei OceanStor V3 storage system."""
 
-    def __init__(self, nas_address, nas_username, nas_password):
+    def __init__(self, nas_address, nas_username, nas_password,
+                 ssl_cert_verify, ssl_cert_path):
         self.nas_address = nas_address
         self.nas_username = nas_username
         self.nas_password = nas_password
+        self.ssl_cert_verify = ssl_cert_verify
+        self.ssl_cert_path = ssl_cert_path
         self.url = None
         self.session = None
         self.semaphore = threading.Semaphore(30)
@@ -71,7 +74,7 @@ class RestHelper(object):
         self.session.headers.update({
             "Connection": "keep-alive",
             "Content-Type": "application/json"})
-        self.session.verify = False
+        self.session.verify = self.ssl_cert_path if self.ssl_cert_verify else False
 
     def do_call(self, postfix_url, method, data=None,
                 timeout=constants.SOCKET_TIMEOUT, **kwargs):
@@ -603,7 +606,7 @@ class RestHelper(object):
         result = self.call(url, "GET")
         _assert_result(result, 'Get partition by name %s error.', name)
         for data in result.get('data', []):
-            return data
+            return data.get('ID')
 
     def get_partition_info_by_id(self, partitionid):
         url = '/cachepartition/' + partitionid

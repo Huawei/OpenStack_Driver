@@ -70,7 +70,17 @@ class RestClient(object):
         self.url = None
         self.ssl_cert_verify = self.configuration.ssl_cert_verify
         self.ssl_cert_path = self.configuration.ssl_cert_path
+        self.in_band_or_not = kwargs.get('in_band_or_not',
+                                         self.configuration.in_band_or_not)
+        self.storage_sn = kwargs.get('storage_sn',
+                                     self.configuration.storage_sn)
         self.is_dorado_v6 = False
+
+        if self.in_band_or_not and not self.storage_sn:
+            msg = _("'Storagesn' is must be set if 'InBandOrNot' is True,"
+                    " Please Check Your config")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         if not self.ssl_cert_verify and hasattr(requests, 'packages'):
             LOG.warning("Suppressing requests library SSL Warnings")
@@ -82,13 +92,14 @@ class RestClient(object):
     def init_http_head(self):
         self.url = None
         self.session = requests.Session()
-        self.session.headers.update({
+        session_headers = {
             "Connection": "keep-alive",
-            "Content-Type": "application/json"})
-        self.session.verify = False
+            "Content-Type": "application/json"}
+        if self.in_band_or_not:
+            session_headers["IBA-Target-Array"] = self.storage_sn
+        self.session.headers.update(session_headers)
 
-        if self.ssl_cert_verify:
-            self.session.verify = self.ssl_cert_path
+        self.session.verify = self.ssl_cert_path if self.ssl_cert_verify else False
 
     def do_call(self, url=None, data=None, method=None,
                 calltimeout=constants.SOCKET_TIMEOUT, filter_flag=False):

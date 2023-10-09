@@ -75,7 +75,7 @@ LOG = log.getLogger(__name__)
 
 
 class HuaweiNasDriver(driver.ShareDriver):
-    VERSION = "2.6.1"
+    VERSION = "2.6.2"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiNasDriver, self).__init__((True, False), *args, **kwargs)
@@ -84,7 +84,8 @@ class HuaweiNasDriver(driver.ShareDriver):
 
         self.helper = helper.RestHelper(
             self.configuration.nas_address, self.configuration.nas_user,
-            self.configuration.nas_password)
+            self.configuration.nas_password, self.configuration.ssl_cert_verify,
+            self.configuration.ssl_cert_path)
         self.metro_domain = None
         self.remote_backend = None
         self.vstore_pair_id = None
@@ -241,11 +242,17 @@ class HuaweiNasDriver(driver.ShareDriver):
                               {"fs_id": local_fs_id, "err": err})
                 raise
 
+    @staticmethod
+    def _add_optional_parameter(params, opt_params, config_param, storage_param):
+        if opt_params is not None:
+            params[storage_param] = opt_params
+        elif config_param is not None:
+            params[storage_param] = config_param
+
     def _get_share_base_params(self, share_name, opts):
         params = {
             "NAME": huawei_utils.share_name(share_name),
-            "ALLOCTYPE": opts.get('LUNType', constants.ALLOC_TYPE_THIN_FLAG),
-            "SNAPSHOTRESERVEPER": self.configuration.snapshot_reserve
+            "ALLOCTYPE": opts.get('LUNType', constants.ALLOC_TYPE_THIN_FLAG)
         }
 
         if opts.get('sectorsize'):
@@ -258,6 +265,16 @@ class HuaweiNasDriver(driver.ShareDriver):
             controller = self.helper.get_controller_id(opts['controllername'])
             if controller:
                 params['OWNINGCONTROLLER'] = controller
+
+        self._add_optional_parameter(
+            params, opts.get('unix_permission'),
+            self.configuration.unix_permission, 'unixPermissions')
+        self._add_optional_parameter(
+            params, opts.get('snapshot_reserve_percentage'),
+            self.configuration.snapshot_reserve, 'SNAPSHOTRESERVEPER')
+        self._add_optional_parameter(
+            params, opts.get('show_snapshot_dir'),
+            self.configuration.show_snapshot_dir, 'ISSHOWSNAPDIR')
 
         remote_vstore_id = None
         if opts.get('hypermetro') and self.vstore_pair_id:

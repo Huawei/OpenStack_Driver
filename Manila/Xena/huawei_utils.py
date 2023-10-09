@@ -75,23 +75,42 @@ def _get_opt_key(spec_key):
         return key_split[1]
 
 
-def _get_bool_param(k, v):
-    words = v.split()
+def _get_bool_param(key, value):
+    words = value.split()
     if len(words) == 2 and words[0] == '<is>':
         return strutils.bool_from_string(words[1], strict=True)
 
-    msg = _("%(k)s spec must be specified as %(k)s='<is> True' "
-            "or '<is> False'.") % {'k': k}
+    msg = _("%(key)s spec must be specified as %(key)s='<is> True' "
+            "or '<is> False'.") % {'key': key}
     LOG.error(msg)
     raise exception.InvalidInput(reason=msg)
 
 
-def _get_string_param(k, v):
-    if not v:
-        msg = _("%s spec must be specified as a string.") % k
+def _get_string_param(key, value):
+    if not value:
+        msg = _("%s spec must be specified as a string.") % key
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
-    return v
+    return value
+
+
+def _get_snapshot_dir_param(key, value):
+    value = _get_string_param(key, value)
+    if value.lower() not in ('true', 'false'):
+        err_msg = _("The show_snapshot_dir value consists "
+                    "can only be 'true' or 'false'")
+        LOG.error(err_msg)
+        raise exception.InvalidInput(reason=err_msg)
+    return value
+
+
+def _get_integer_param(key, value):
+    if value and value.isdigit():
+        return int(value)
+
+    msg = _("%s spec must be specified as an integer.") % key
+    LOG.error(msg)
+    raise exception.InvalidInput(reason=msg)
 
 
 def _get_opts_from_specs(specs, is_dorado):
@@ -108,6 +127,9 @@ def _get_opts_from_specs(specs, is_dorado):
         'huawei_smartpartition:partitionname': (_get_string_param, None),
         'huawei_sectorsize:sectorsize': (_get_string_param, None),
         'huawei_controller:controllername': (_get_string_param, None),
+        'huawei_unixpermission:unix_permission': (_get_string_param, None),
+        'huawei_snapshotreserveper:snapshot_reserve_percentage': (_get_integer_param, None),
+        'huawei_showsnapshotdir:show_snapshot_dir': (_get_snapshot_dir_param, None),
         'qos:iotype': (_get_string_param, None),
         'qos:maxiops': (_get_string_param, None),
         'qos:miniops': (_get_string_param, None),
