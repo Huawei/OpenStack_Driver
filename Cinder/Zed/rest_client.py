@@ -1459,16 +1459,15 @@ def rest_operation_wrapper(func):
 
 
 class RestClient(object):
-    def __init__(self, address, user, password, vstore=None, ssl_verify=None,
-                 cert_path=None, in_band_or_not=None, storage_sn=None):
-        self.san_address = address
-        self.san_user = user
-        self.san_password = password
-        self.vstore_name = vstore
-        self.ssl_verify = ssl_verify
-        self.cert_path = cert_path
-        self.in_band_or_not = in_band_or_not
-        self.storage_sn = storage_sn
+    def __init__(self, config_dict):
+        self.san_address = config_dict.get('san_address')
+        self.san_user = config_dict.get('san_user')
+        self.san_password = config_dict.get('san_password')
+        self.vstore_name = config_dict.get('vstore_name')
+        self.ssl_verify = config_dict.get('ssl_cert_verify')
+        self.cert_path = config_dict.get('ssl_cert_path')
+        self.in_band_or_not = config_dict.get('in_band_or_not')
+        self.storage_sn = config_dict.get('storage_sn')
 
         self._login_url = None
         self._login_device_id = None
@@ -1476,12 +1475,11 @@ class RestClient(object):
         self._session = None
         self._init_object_methods()
 
-        if self.in_band_or_not:
-            if not self.storage_sn:
-                msg = _("please check 'InBandOrNot' and 'Storagesn' "
-                        "they are invaid.")
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
+        if self.in_band_or_not and not self.storage_sn:
+            msg = _("please check 'InBandOrNot' and 'Storagesn' "
+                    "they are invaid.")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         if not self.ssl_verify and hasattr(requests, 'packages'):
             LOG.warning("Suppressing requests library SSL Warnings")
@@ -1560,9 +1558,7 @@ class RestClient(object):
 
     def _loop_login(self):
         self._init_http_head()
-        self._session.verify = False
-        if self.ssl_verify:
-            self._session.verify = self.cert_path
+        self._session.verify = self.cert_path if self.ssl_verify else False
 
         for url in self.san_address:
             try:

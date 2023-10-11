@@ -15,6 +15,7 @@
 
 import base64
 import os
+import re
 
 from oslo_log import log as logging
 from oslo_utils import strutils
@@ -62,6 +63,10 @@ class HuaweiConfig(object):
             self._snapshot_reserve,
             self._logical_ip,
             self._dns,
+            self._unix_permission,
+            self._show_snapshot_dir,
+            self._ssl_cert_path,
+            self._ssl_cert_verify,
         )
 
         for f in attr_funcs:
@@ -248,23 +253,47 @@ class HuaweiConfig(object):
     def _snapshot_reserve(self, xml_root):
         snapshot_reserve = xml_root.findtext('Filesystem/SnapshotReserve')
         if snapshot_reserve:
-            try:
-                snapshot_reserve = int(snapshot_reserve.strip())
-            except Exception as err:
-                err_msg = _('Config snapshot reserve error. The reason is: '
-                            '%s') % err
-                LOG.error(err_msg)
-                raise exception.InvalidInput(reason=err_msg)
+            snapshot_reserve = snapshot_reserve.strip()
+            if (snapshot_reserve.isdigit() and
+                    0 <= int(snapshot_reserve) <= 50):
+                setattr(self.config, 'snapshot_reserve', int(snapshot_reserve))
 
-            if 0 <= snapshot_reserve <= 50:
-                setattr(self.config, 'snapshot_reserve', snapshot_reserve)
             else:
                 err_msg = _("The snapshot reservation percentage can only be "
-                            "between 0 and 50%")
+                            "between 0 and 50")
                 LOG.error(err_msg)
                 raise exception.InvalidInput(reason=err_msg)
         else:
-            setattr(self.config, 'snapshot_reserve', 20)
+            setattr(self.config, 'snapshot_reserve', None)
+
+    @staticmethod
+    def _get_ssl_verify(xml_root):
+        value = False
+        text = xml_root.findtext('Storage/SSLCertVerify')
+        if text:
+            if text.lower() in ('true', 'false'):
+                value = text.lower() == 'true'
+            else:
+                msg = _("SSLCertVerify configured error.")
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+        return value
+
+    def _ssl_cert_path(self, xml_root):
+        text = xml_root.findtext('Storage/SSLCertPath')
+        ssl_value = self._get_ssl_verify(xml_root)
+        if text and ssl_value:
+            setattr(self.config, 'ssl_cert_path', text)
+        elif not text and ssl_value:
+            msg = _("Cert path is necessary if SSLCertVerify is True.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        else:
+            setattr(self.config, 'ssl_cert_path', None)
+
+    def _ssl_cert_verify(self, xml_root):
+        value = self._get_ssl_verify(xml_root)
+        setattr(self.config, 'ssl_cert_verify', value)
 
     def get_metro_info(self):
         metro_infos = self.config.safe_get('metro_info')
@@ -283,3 +312,39 @@ class HuaweiConfig(object):
             metro_configs.append(metro_config)
 
         return metro_configs
+
+    @staticmethod
+    def _check_unix_permission_valid(unix_permission):
+        pattern = r'^[0-7]{3}$'
+        if re.search(pattern, unix_permission):
+            return True
+        return False
+
+    def _unix_permission(self, xml_root):
+        unix_permission = xml_root.findtext('Filesystem/UnixPermission')
+        if unix_permission:
+            unix_permission = unix_permission.strip()
+
+            if self._check_unix_permission_valid(unix_permission):
+                setattr(self.config, 'unix_permission', unix_permission)
+            else:
+                err_msg = _("The UnixPermission value consists of three"
+                            " digits and every digit can only between 0 and 7")
+                LOG.error(err_msg)
+                raise exception.InvalidInput(reason=err_msg)
+        else:
+            setattr(self.config, 'unix_permission', None)
+
+    def _show_snapshot_dir(self, xml_root):
+        show_snapshot_dir = xml_root.findtext('Filesystem/ShowSnapshotDir')
+        if show_snapshot_dir:
+            show_snapshot_dir = show_snapshot_dir.strip()
+            if show_snapshot_dir.lower() in ('true', 'false'):
+                setattr(self.config, 'show_snapshot_dir', show_snapshot_dir)
+            else:
+                err_msg = _("The ShowSnapshotDir value consists "
+                            "can only be 'true' or 'false'")
+                LOG.error(err_msg)
+                raise exception.InvalidInput(reason=err_msg)
+        else:
+            setattr(self.config, 'show_snapshot_dir', None)

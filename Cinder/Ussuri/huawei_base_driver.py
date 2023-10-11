@@ -78,15 +78,17 @@ class HuaweiBaseDriver(object):
     def do_setup(self, context):
         self.conf.update_config_value()
 
-        self.local_cli = rest_client.RestClient(
-            self.configuration.san_address,
-            self.configuration.san_user,
-            self.configuration.san_password,
-            self.configuration.vstore_name,
-            self.configuration.ssl_cert_verify,
-            self.configuration.ssl_cert_path,
-            self.configuration.in_band_or_not,
-            self.configuration.storage_sn)
+        config_dict = {
+                'san_address': self.configuration.san_address,
+                'san_user': self.configuration.san_user,
+                'san_password': self.configuration.san_password,
+                'vstore_name': self.configuration.vstore_name,
+                'ssl_cert_verify': self.configuration.ssl_cert_verify,
+                'ssl_cert_path': self.configuration.ssl_cert_path,
+                'in_band_or_not': self.configuration.in_band_or_not,
+                'storage_sn': self.configuration.storage_sn
+            }
+        self.local_cli = rest_client.RestClient(config_dict)
         self.local_cli.login()
         self.configuration.is_dorado_v6 = huawei_utils.is_support_clone_pair(
             self.local_cli)
@@ -96,24 +98,12 @@ class HuaweiBaseDriver(object):
 
         if self.configuration.hypermetro:
             self.hypermetro_rmt_cli = rest_client.RestClient(
-                self.configuration.hypermetro['san_address'],
-                self.configuration.hypermetro['san_user'],
-                self.configuration.hypermetro['san_password'],
-                self.configuration.hypermetro['vstore_name'],
-                self.configuration.hypermetro['in_band_or_not'],
-                self.configuration.hypermetro['storage_sn'],
-            )
+                self.configuration.hypermetro)
             self.hypermetro_rmt_cli.login()
 
         if self.configuration.replication:
             self.replication_rmt_cli = rest_client.RestClient(
-                self.configuration.replication['san_address'],
-                self.configuration.replication['san_user'],
-                self.configuration.replication['san_password'],
-                self.configuration.replication['vstore_name'],
-                self.configuration.replication['in_band_or_not'],
-                self.configuration.replication['storage_sn'],
-            )
+                self.configuration.replication)
             self.replication_rmt_cli.login()
 
     def check_for_setup_error(self):
