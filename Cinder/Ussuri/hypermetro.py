@@ -156,6 +156,11 @@ class HuaweiHyperMetro(object):
         lun_name = huawei_utils.encode_name(volume.id)
         hypermetro = self.local_cli.get_hypermetro_by_lun_name(lun_name)
 
+        # Judge whether this volume has experienced data migration or not
+        if not hypermetro:
+            lun_name = huawei_utils.encode_name(volume.name_id)
+            hypermetro = self.local_cli.get_hypermetro_by_lun_name(lun_name)
+
         if hypermetro:
             huawei_utils.remove_lun_from_lungroup(
                 self.remote_cli, hypermetro['REMOTEOBJID'],

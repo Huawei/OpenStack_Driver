@@ -89,11 +89,16 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
         mapping_info.pop('aval_host_lun_ids', None)
         conn = {'driver_volume_type': 'iscsi',
                 'data': mapping_info}
-        LOG.info('Initialize iscsi connection successfully: %s.', conn)
+        LOG.info('Initialize iscsi connection successfully,'
+                 'return data is: %s.',
+                 huawei_utils.mask_dict_sensitive_info(conn))
         return conn
 
     def terminate_connection(self, volume, connector, **kwargs):
-        host = connector['host'] if 'host' in connector else ""
+        if connector is None or 'host' not in connector:
+            host = ""
+        else:
+            host = connector.get('host', "")
 
         return self._terminate_connection_locked(host, volume, connector)
 
@@ -134,7 +139,10 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
         return conn
 
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
-        host = connector['host'] if 'host' in connector else ""
+        if connector is None or 'host' not in connector:
+            host = ""
+        else:
+            host = connector.get('host', "")
 
         return self._terminate_connection_snapshot_locked(host, snapshot,
                                                           connector)
@@ -214,7 +222,10 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         return conn
 
     def terminate_connection(self, volume, connector, **kwargs):
-        host = connector['host'] if 'host' in connector else ""
+        if connector is None or 'host' not in connector:
+            host = ""
+        else:
+            host = connector.get('host', "")
 
         return self._terminate_connection_locked(host, volume, connector)
 
@@ -264,7 +275,10 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         return conn
 
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
-        host = connector['host'] if 'host' in connector else ""
+        if connector is None or 'host' not in connector:
+            host = ""
+        else:
+            host = connector.get('host', "")
 
         return self._terminate_connection_snapshot_locked(host, snapshot,
                                                           connector)

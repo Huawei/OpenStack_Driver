@@ -55,7 +55,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.3.RC4"
+    VERSION = "2.6.2"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -78,15 +78,17 @@ class HuaweiBaseDriver(object):
     def do_setup(self, context):
         self.conf.update_config_value()
 
-        self.local_cli = rest_client.RestClient(
-            self.configuration.san_address,
-            self.configuration.san_user,
-            self.configuration.san_password,
-            self.configuration.vstore_name,
-            self.configuration.ssl_cert_verify,
-            self.configuration.ssl_cert_path,
-            self.configuration.in_band_or_not,
-            self.configuration.storage_sn)
+        config_dict = {
+                'san_address': self.configuration.san_address,
+                'san_user': self.configuration.san_user,
+                'san_password': self.configuration.san_password,
+                'vstore_name': self.configuration.vstore_name,
+                'ssl_cert_verify': self.configuration.ssl_cert_verify,
+                'ssl_cert_path': self.configuration.ssl_cert_path,
+                'in_band_or_not': self.configuration.in_band_or_not,
+                'storage_sn': self.configuration.storage_sn
+            }
+        self.local_cli = rest_client.RestClient(config_dict)
         self.local_cli.login()
         self.configuration.is_dorado_v6 = huawei_utils.is_support_clone_pair(
             self.local_cli)
@@ -96,24 +98,12 @@ class HuaweiBaseDriver(object):
 
         if self.configuration.hypermetro:
             self.hypermetro_rmt_cli = rest_client.RestClient(
-                self.configuration.hypermetro['san_address'],
-                self.configuration.hypermetro['san_user'],
-                self.configuration.hypermetro['san_password'],
-                self.configuration.hypermetro['vstore_name'],
-                self.configuration.hypermetro['in_band_or_not'],
-                self.configuration.hypermetro['storage_sn'],
-            )
+                self.configuration.hypermetro)
             self.hypermetro_rmt_cli.login()
 
         if self.configuration.replication:
             self.replication_rmt_cli = rest_client.RestClient(
-                self.configuration.replication['san_address'],
-                self.configuration.replication['san_user'],
-                self.configuration.replication['san_password'],
-                self.configuration.replication['vstore_name'],
-                self.configuration.hypermetro['in_band_or_not'],
-                self.configuration.hypermetro['storage_sn'],
-            )
+                self.configuration.replication)
             self.replication_rmt_cli.login()
 
     def check_for_setup_error(self):
@@ -359,27 +349,51 @@ class HuaweiBaseDriver(object):
 
         return True, {}
 
+    def _change_lun_name(self, lun_id, rmt_lun_id, new_name, description=None):
+        if rmt_lun_id:
+            self.hypermetro_rmt_cli.rename_lun(rmt_lun_id, new_name, description)
+        self.local_cli.rename_lun(lun_id, new_name, description)
+
+    def _get_lun_id(self, volume, metadata, new_metadata):
+        """
+        same storage situation, if new_volume is not
+        hypermetro, we don't need to change remote lun name
+        """
+        rmt_lun_id = None
+        if metadata.get('hypermetro') and new_metadata.get('hypermetro'):
+            rmt_lun_info = huawei_utils.get_lun_info(
+                self.hypermetro_rmt_cli, volume)
+            rmt_lun_id = rmt_lun_info.get('ID')
+        lun_info = huawei_utils.get_lun_info(
+            self.local_cli, volume)
+        return lun_info.get('ID'), rmt_lun_id
+
     def update_migrated_volume(self, ctxt, volume, new_volume,
                                original_volume_status):
-        new_name = huawei_utils.encode_name(volume.id)
+        original_name = huawei_utils.encode_name(volume.id)
+        new_name = huawei_utils.encode_name(new_volume.id)
         org_metadata = huawei_utils.get_volume_private_data(volume)
         new_metadata = huawei_utils.get_volume_private_data(new_volume)
+        new_lun_id, new_rmt_lun_id = self._get_lun_id(new_volume, new_metadata, new_metadata)
 
         try:
             if org_metadata.get('huawei_sn') == new_metadata.get('huawei_sn'):
-                self.local_cli.rename_lun(org_metadata['huawei_lun_id'],
-                                          new_name[:-4] + '-org')
-            self.local_cli.rename_lun(new_metadata['huawei_lun_id'],
-                                      new_name, description=volume.name)
+                lun_id, rmt_lun_id = self._get_lun_id(volume, org_metadata, new_metadata)
+                src_lun_name = new_name[:-4] + '-org'
+                self._change_lun_name(lun_id, rmt_lun_id, src_lun_name)
+                self._change_lun_name(new_lun_id, new_rmt_lun_id, original_name, volume.name)
+                self._change_lun_name(lun_id, rmt_lun_id, new_name)
+            else:
+                self._change_lun_name(new_lun_id, new_rmt_lun_id, original_name, volume.name)
         except Exception:
             LOG.exception('Unable to rename lun %(id)s to %(name)s.',
                           {'id': new_metadata['huawei_lun_id'],
-                           'name': new_name})
+                           'name': original_name})
             name_id = new_volume.name_id
         else:
             LOG.info("Successfully rename lun %(id)s to %(name)s.",
                      {'id': new_metadata['huawei_lun_id'],
-                      'name': new_name})
+                      'name': original_name})
             name_id = None
 
         return {'_name_id': name_id,
@@ -450,7 +464,8 @@ class HuaweiBaseDriver(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        new_opts = huawei_utils.get_volume_type_params(new_type)
+        new_opts = huawei_utils.get_volume_type_params(
+            new_type, self.configuration.is_dorado_v6)
         if new_opts['compression'] is None:
             new_opts['compression'] = (self.configuration.san_product
                                        == "Dorado")
@@ -541,6 +556,12 @@ class HuaweiBaseDriver(object):
     def create_group_from_src(self, context, group, volumes,
                               group_snapshot=None, snapshots=None,
                               source_group=None, source_vols=None):
+        if self.configuration.clone_mode == "fastclone":
+            msg = ("Can't config fastclone when create "
+                   "consisgroup from cgsnapshot or consisgroup")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(msg)
+
         model_update = self.create_group(context, group)
         volumes_model_update = []
         delete_snapshots = False
@@ -580,7 +601,8 @@ class HuaweiBaseDriver(object):
         return model_update, volumes_model_update
 
     def delete_group(self, context, group, volumes):
-        opts = huawei_utils.get_group_type_params(group)
+        opts = huawei_utils.get_group_type_params(
+            group, self.configuration.is_dorado_v6)
 
         hypermetro_group = any(opt for opt in opts if opt.get('hypermetro'))
         if hypermetro_group:
@@ -614,7 +636,8 @@ class HuaweiBaseDriver(object):
 
     def update_group(self, context, group,
                      add_volumes=None, remove_volumes=None):
-        opts = huawei_utils.get_group_type_params(group)
+        opts = huawei_utils.get_group_type_params(
+            group, self.configuration.is_dorado_v6)
 
         hypermetro_group = any(opt for opt in opts if opt.get('hypermetro'))
         if hypermetro_group:

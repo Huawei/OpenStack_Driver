@@ -16,11 +16,11 @@
 import hashlib
 import json
 import re
-import retrying
-import six
 
 from oslo_log import log as logging
 from oslo_utils import strutils
+import tenacity as retry_module
+import six
 
 from cinder import context
 from cinder import exception
@@ -69,14 +69,25 @@ def wait_for_condition(func, interval, timeout):
     def _retry_on_result(result):
         return not result
 
-    def _retry_on_exception(result):
+    def _retry_on_exception():
         return False
 
-    r = retrying.Retrying(retry_on_result=_retry_on_result,
-                          retry_on_exception=_retry_on_exception,
-                          wait_fixed=interval * 1000,
-                          stop_max_delay=timeout * 1000)
-    r.call(func)
+    def _retry_use_retrying():
+        ret = retry_module.Retrying(retry_on_result=_retry_on_result,
+                                    retry_on_exception=_retry_on_exception,
+                                    wait_fixed=interval * 1000,
+                                    stop_max_delay=timeout * 1000)
+        ret.call(func)
+
+    def _retry_use_tenacity():
+        ret = retry_module.Retrying(
+            wait=retry_module.wait_fixed(interval),
+            retry=retry_module.retry_if_result(_retry_on_result),
+            stop=retry_module.stop_after_delay(timeout)
+        )
+        ret(func)
+
+    _retry_use_tenacity()
 
 
 def _get_volume_type(volume):
@@ -439,6 +450,15 @@ def get_lun_info(client, volume):
                      lun_info.get('WWN') != metadata['huawei_lun_wwn']):
         lun_info = None
 
+    # Judge whether this volume has experienced data migration or not
+    if not lun_info:
+        volume_name = encode_name(volume.name_id)
+        lun_info = client.get_lun_info_by_name(volume_name)
+
+    if not lun_info:
+        volume_name = old_encode_name(volume.name_id)
+        lun_info = client.get_lun_info_by_name(volume_name)
+
     return lun_info
 
 
@@ -490,7 +510,9 @@ def get_volume_model_update(volume, **kwargs):
 
     if kwargs.get('hypermetro_id'):
         private_data['hypermetro'] = True
-    elif 'hypermetro_id' in private_data:
+    else:
+        private_data['hypermetro'] = False
+    if 'hypermetro_id' in private_data:
         private_data.pop('hypermetro_id')
         private_data['hypermetro'] = False
 
@@ -514,10 +536,10 @@ def get_volume_model_update(volume, **kwargs):
     return model_update
 
 
-def get_group_type_params(group):
+def get_group_type_params(group, is_dorado_v6=False):
     opts = []
     for volume_type in group.volume_types:
-        opt = get_volume_type_params(volume_type)
+        opt = get_volume_type_params(volume_type, is_dorado_v6)
         opts.append(opt)
     return opts
 
@@ -528,38 +550,63 @@ def get_hypermetro(client, volume):
     return hypermetro
 
 
-def _set_config_info(ini, find_info, tmp_find_info):
-    if find_info is None and tmp_find_info:
-        find_info = tmp_find_info
+def get_config_info_by_ini_name(ini_info, initiator):
+    """
+    get config ini_info by initiator name
+    """
+    LOG.info("begin to get config info by ini name,"
+             "ini_info is %s, ini is %s", ini_info, initiator)
+    for _, info in ini_info.items():
+        ini_name = info.get('Name')
+        if not ini_name:
+            continue
+        # when create host task in initialize_fc_connection just return
+        # the first info in config_info, this scenarios initiator is a list of ini name,
+        # In other scenarios, initiator is a string of ini name.
+        if isinstance(initiator, list) and ini_name in initiator:
+            return info
+        if ini_name == initiator:
+            return info
+    return {}
 
-    if ini:
-        config = ini
-    elif find_info:
-        config = find_info
-    else:
-        config = {}
-    return config
+
+def get_config_info_by_host_name(ini_info, host_name):
+    """
+    get config ini_info by host name
+    """
+    LOG.info("begin to get config info by host name,"
+             "ini_info is %s, host_name is %s", ini_info, host_name)
+    for _, info in ini_info.items():
+        info_host_name = info.get('HostName')
+        if not info_host_name:
+            continue
+        if info_host_name == '*':
+            return info
+        if re.search(info_host_name, host_name):
+            return info
+    return {}
 
 
-def find_config_info(config_info, connector=None, initiator=None):
-    if connector:
-        ini = config_info['initiators'].get(connector['initiator'])
-    else:
-        ini = config_info['initiators'].get(initiator)
+def find_config_info(protocol_info, connector=None, initiator=None):
+    """
+    parse get initiator config in huawei config xml
+    params:
+        protocol_info: a dict with protocol info like this:
+        protocol_info = {'initiators': {'iscsi_ini_01': {'Name': 'iscsi_ini_01', 'ALUA': '1'}}}
+        connector: some info of host,such as host_name, os_type
+        initiator: initiator name of host, may be a string or a list.
+    returns:
+        return a dict with the final config info of initiator,
+        if protocol_info = {'initiators': {'iscsi_ini_01': {'Name': 'iscsi_ini_01', 'ALUA': '1'}}}
+        will return  {'Name': 'iscsi_ini_01', 'ALUA': '1'}
+    """
+    all_ini_info = protocol_info.get('initiators', {})
 
-    find_info = None
-    tmp_find_info = None
-    if not ini:
-        for item in config_info['initiators']:
-            ini_info = config_info['initiators'][item]
-            if ini_info.get('HostName'):
-                if ini_info.get('HostName') == '*':
-                    tmp_find_info = ini_info
-                elif re.search(ini_info.get('HostName'), connector['host']):
-                    find_info = ini_info
-                    break
+    find_info = get_config_info_by_ini_name(all_ini_info, initiator)
+    if not find_info:
+        find_info = get_config_info_by_host_name(all_ini_info, connector.get('host'))
 
-    return _set_config_info(ini, find_info, tmp_find_info)
+    return find_info
 
 
 def is_support_clone_pair(client):
@@ -617,3 +664,31 @@ def get_mapping_info(client, lun_id):
         LOG.warning('lun %s is is added to multiple lungroups', lun_id)
 
     return mappingview_id, lungroup_id, hostgroup_id, portgroup_id, host_id
+
+
+def check_volume_type_valid(opt):
+    if opt.get('hypermetro') and opt.get('replication_enabled'):
+        msg = _("Hypermetro and replication cannot be "
+                "specified at the same volume_type.")
+        LOG.error(msg)
+        raise exception.VolumeBackendAPIException(data=msg)
+
+
+def mask_dict_sensitive_info(data, secret="***"):
+    # mask sensitive data in the dictionary
+    if not isinstance(data, dict):
+        return data
+
+    out = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            value = mask_dict_sensitive_info(value, secret=secret)
+        elif key in constants.SENSITIVE_KEYS:
+            value = secret
+        out[key] = value
+
+    return strutils.mask_dict_password(out)
+
+
+def convert_connector_wwns(wwns):
+    return [x.lower() for x in wwns]
