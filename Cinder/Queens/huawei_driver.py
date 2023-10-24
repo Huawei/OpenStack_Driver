@@ -221,8 +221,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             'consistencygroup_support': True,
             'multiattach': True,
             'huawei_controller': True,
-            'dedup': [str(dedup_enabled).lower(), "false"],
-            'compression': [str(compression_enabled).lower(), "false"],
+            'dedup': [dedup_enabled, False],
+            'compression': [compression_enabled, False],
             'huawei_application_type': False,
         }
 
@@ -388,12 +388,12 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
         if opts.get('dedup'):
             params['ENABLESMARTDEDUP'] = opts['dedup']
-        elif "true" not in self.support_func['dedup']:
+        elif True not in self.support_func['dedup']:
             params['ENABLESMARTDEDUP'] = False
 
         if opts.get('compression'):
             params['ENABLECOMPRESSION'] = opts['compression']
-        elif "true" not in self.support_func['compression']:
+        elif True not in self.support_func['compression']:
             params['ENABLECOMPRESSION'] = False
 
         if opts.get('application_type'):
@@ -486,10 +486,10 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 self.client, self.rmt_client, self.configuration)
             metro_id = metro.create_hypermetro(lun_id, lun_params, is_sync)
 
-            if volume.consistencygroup_id:
+            if volume.group_id:
                 try:
                     metro.add_hypermetro_to_consistencygroup(
-                        {'id': volume.consistencygroup_id}, metro_id)
+                        {'id': volume.group_id}, metro_id)
                 except Exception:
                     metro.delete_hypermetro(volume)
                     raise
@@ -499,12 +499,12 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             replica_model = opts.get('replication_type')
             replica_info = self.replica.create_replica(lun_info, replica_model)
 
-            if volume.consistencygroup_id:
+            if volume.group_id:
                 try:
                     replicg = replication.ReplicaCG(
                         self.client, self.replica_client, self.configuration)
                     replicg.add_replica_to_group(
-                        volume.consistencygroup_id,
+                        volume.group_id,
                         replica_info['replication_driver_data'])
                 except Exception:
                     self.replica.delete_replica(
@@ -2818,7 +2818,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                                                       self.configuration)
         return secondary_id, volumes_update
 
-    def failover_host(self, context, volumes, secondary_id=None):
+    def failover_host(self, context, volumes, secondary_id=None, groups=None):
         """Failover all volumes to secondary."""
         if secondary_id == 'default':
             try:
@@ -2840,7 +2840,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             LOG.error(msg)
             raise exception.InvalidReplicationTarget(reason=msg)
 
-        return secondary_id, volumes_update
+        return secondary_id, volumes_update, []
 
     def initialize_connection_snapshot(self, snapshot, connector, **kwargs):
         """Map a snapshot to a host and return target iSCSI information."""
@@ -3010,7 +3010,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         host = "" if connector is None else connector.get('host', "")
         lock_mapping = 'huawei-mapping-%s' % host
 
-        @utils.synchronized(lock_mapping, external=True)
+        @coordination.synchronized(lock_mapping)
         def lock_host_when_initialize_connection():
             return self._initialize_connection_lock(volume, connector)
         return lock_host_when_initialize_connection()
@@ -3185,7 +3185,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         host = "" if connector is None else connector.get('host', "")
         lock_mapping = 'huawei-mapping-%s' % host
 
-        @utils.synchronized(lock_mapping, external=True)
+        @coordination.synchronized(lock_mapping)
         def lock_host_when_terminate_connection():
             return self._terminate_connection_locked(volume, connector, **kwargs)
 
@@ -3379,8 +3379,8 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         host = "" if connector is None else connector.get('host', "")
         lock_mapping = 'huawei-mapping-%s' % host
 
-        @utils.synchronized(lock_mapping, external=True)
-        @fczm_utils.AddFCZone
+        @fczm_utils.add_fc_zone
+        @coordination.synchronized(lock_mapping)
         def lock_host_when_initialize_connection(volume, connector):
             return self._initialize_connection_lock(volume, connector)
 
@@ -3505,8 +3505,8 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
         host = "" if connector is None else connector.get('host', "")
         lock_mapping = 'huawei-mapping-%s' % host
 
-        @utils.synchronized(lock_mapping, external=True)
-        @fczm_utils.RemoveFCZone
+        @fczm_utils.remove_fc_zone
+        @coordination.synchronized(lock_mapping)
         def lock_host_when_terminate_connection(volume, connector):
             return self._terminate_connection_locked(volume, connector, **kwargs)
 

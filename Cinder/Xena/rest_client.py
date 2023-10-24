@@ -84,6 +84,20 @@ class CommonObject(object):
     def get(self, url, **kwargs):
         return self.client.get(url, **kwargs)
 
+    @staticmethod
+    def _get_info_by_range(func, params=None):
+        range_start = 0
+        info_list = []
+        while True:
+            range_end = range_start + constants.GET_PATCH_NUM
+            info = func(range_start, range_end, params)
+            info_list += info
+            if len(info) < constants.GET_PATCH_NUM:
+                break
+
+            range_start += constants.GET_PATCH_NUM
+        return info_list
+
 
 def _assert_result(result, msg_format, *args):
     if _error_code(result) != 0:
@@ -533,10 +547,13 @@ class HostGroup(CommonObject):
 class LunGroup(CommonObject):
     _obj_url = '/lungroup'
 
-    def associate_lun_to_lungroup(self, lungroup_id, obj_id, obj_type):
+    def associate_lun_to_lungroup(self, lungroup_id, obj_id, obj_type,
+                                  is_dorado_v6=False, is_associated_host=False):
         data = {"ID": lungroup_id,
                 "ASSOCIATEOBJTYPE": obj_type,
                 "ASSOCIATEOBJID": obj_id}
+        if all((is_dorado_v6, is_associated_host)):
+            data['startHostLunId'] = 1
         result = self.post('/associate', data=data)
         if _error_code(result) in (constants.OBJECT_ID_NOT_UNIQUE,
                                    constants.LUN_ALREADY_IN_LUNGROUP):
@@ -634,10 +651,13 @@ class IscsiInitiator(CommonObject):
                     "CHAPNAME": chap_info['CHAPNAME'],
                     "CHAPPASSWORD": chap_info['CHAPPASSWORD']}
         else:
-            data = {"USECHAP": "false"}
+            data = {"USECHAP": "false",
+                    "MULTIPATHTYPE": "0"}
 
-        result = self.put('/%(ini)s', data=data, ini=initiator)
+        result = self.put('/%(ini)s', data=data, ini=initiator, log_filter=True)
         _assert_result(result, 'Update initiator %s chap error.', initiator)
+        LOG.info("Update initiator chap info successfully, "
+                 "url is /iscsi_initiator/%s, method is %s", initiator, 'put')
 
     def remove_iscsi_initiator_from_host(self, initiator):
         data = {"ID": initiator}
@@ -805,6 +825,23 @@ class FCInitiator(CommonObject):
             fc_initiator_count -= constants.GET_PATCH_NUM
             range_start += constants.GET_PATCH_NUM
         return totals, frees
+
+    def get_fc_init_info(self, wwn):
+        """Get wwn info by wwn_id and judge is error need to be raised"""
+        result = self.get("/%(wwn)s", wwn=wwn)
+
+        if _error_code(result) != 0:
+            if _error_code(result) not in (constants.FC_INITIATOR_NOT_EXIST,
+                                           constants.ERROR_PARAMETER_ERROR):
+                msg = (_('Get fc initiator %(initiator)s on array error. '
+                         'result: %(res)s.') % {'initiator': wwn,
+                                                'res': result})
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=msg)
+            else:
+                return {}
+
+        return result.get('data', {})
 
     def add_fc_initiator(self, initiator):
         data = {'ID': initiator}
@@ -1030,11 +1067,18 @@ class HyperMetroDomain(CommonObject):
     _obj_url = '/HyperMetroDomain'
 
     def get_hypermetro_domain_id(self, domain_name):
-        result = self.get('?range=[0-32]')
-        _assert_result(result, 'Get hyper metro domains info error.')
-        for item in result.get('data', []):
-            if domain_name == item['NAME']:
-                return item['ID']
+        domain_list = self._get_info_by_range(self._get_hypermetro_domain)
+        for item in domain_list:
+            if domain_name == item.get('NAME'):
+                return item.get('ID')
+        return None
+
+    def _get_hypermetro_domain(self, start, end, params):
+        url = ("?range=[%(start)s-%(end)s]"
+               % {"start": str(start), "end": str(end)})
+        result = self.get(url)
+        _assert_result(result, "Get hyper metro domains info error.")
+        return result.get('data', [])
 
 
 class HyperMetroPair(CommonObject):
@@ -1385,9 +1429,8 @@ def rest_operation_wrapper(func):
                 else:
                     r.raise_for_status()
                     result = r.json()
-                    if (_error_code(result) in
-                            (constants.ERROR_CONNECT_TO_SERVER,
-                             constants.ERROR_UNAUTHORIZED_TO_SERVER)):
+                    if _error_code(result) in constants.RELOGIN_ERROR_CODE:
+                        LOG.error("Can't open the recent url, relogin.")
                         need_relogin = True
             else:
                 need_relogin = True
@@ -1416,16 +1459,15 @@ def rest_operation_wrapper(func):
 
 
 class RestClient(object):
-    def __init__(self, address, user, password, vstore=None, ssl_verify=None,
-                 cert_path=None, in_band_or_not=None, storage_sn=None):
-        self.san_address = address
-        self.san_user = user
-        self.san_password = password
-        self.vstore_name = vstore
-        self.ssl_verify = ssl_verify
-        self.cert_path = cert_path
-        self.in_band_or_not = in_band_or_not
-        self.storage_sn = storage_sn
+    def __init__(self, config_dict):
+        self.san_address = config_dict.get('san_address')
+        self.san_user = config_dict.get('san_user')
+        self.san_password = config_dict.get('san_password')
+        self.vstore_name = config_dict.get('vstore_name')
+        self.ssl_verify = config_dict.get('ssl_cert_verify')
+        self.cert_path = config_dict.get('ssl_cert_path')
+        self.in_band_or_not = config_dict.get('in_band_or_not')
+        self.storage_sn = config_dict.get('storage_sn')
 
         self._login_url = None
         self._login_device_id = None
@@ -1433,12 +1475,11 @@ class RestClient(object):
         self._session = None
         self._init_object_methods()
 
-        if self.in_band_or_not:
-            if not self.storage_sn:
-                msg = _("please check 'InBandOrNot' and 'Storagesn' "
-                        "they are invaid.")
-                LOG.error(msg)
-                raise exception.VolumeBackendAPIException(data=msg)
+        if self.in_band_or_not and not self.storage_sn:
+            msg = _("please check 'InBandOrNot' and 'Storagesn' "
+                    "they are invaid.")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
 
         if not self.ssl_verify and hasattr(requests, 'packages'):
             LOG.warning("Suppressing requests library SSL Warnings")
@@ -1517,9 +1558,7 @@ class RestClient(object):
 
     def _loop_login(self):
         self._init_http_head()
-        self._session.verify = False
-        if self.ssl_verify:
-            self._session.verify = self.cert_path
+        self._session.verify = self.cert_path if self.ssl_verify else False
 
         for url in self.san_address:
             try:

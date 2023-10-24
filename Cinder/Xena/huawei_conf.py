@@ -21,12 +21,12 @@ and set every property into Configuration object as an attribute.
 """
 
 import base64
-from xml.etree import ElementTree as ET
 import os
 import re
-import six
 
+from lxml import etree as ET
 from oslo_log import log as logging
+import six
 
 from cinder import exception
 from cinder.i18n import _
@@ -46,7 +46,8 @@ class HuaweiConf(object):
             return
 
         self.last_modify_time = file_time
-        tree = ET.parse(self.conf.cinder_huawei_conf_file)
+        tree = ET.parse(self.conf.cinder_huawei_conf_file,
+                        ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
         self._encode_authentication(tree, xml_root)
 
@@ -105,7 +106,7 @@ class HuaweiConf(object):
             need_encode = True
 
         if need_encode:
-            tree.write(self.conf.cinder_huawei_conf_file, 'UTF-8')
+            tree.write(self.conf.cinder_huawei_conf_file, encoding='UTF-8')
 
     def _san_address(self, xml_root):
         text = xml_root.findtext('Storage/RestURL')
@@ -144,21 +145,36 @@ class HuaweiConf(object):
             vstore = base64.b64decode(six.b(text[4:])).decode()
         setattr(self.conf, 'vstore_name', vstore)
 
-    def _ssl_cert_path(self, xml_root):
-        text = xml_root.findtext('Storage/SSLCertPath')
-        setattr(self.conf, 'ssl_cert_path', text)
+    @staticmethod
+    def _parser_ssl_value(ssl_value):
+        if ssl_value.lower() in ('true', 'false'):
+            return ssl_value.lower() == 'true'
+        else:
+            msg = _("SSLCertVerify configured error.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
 
-    def _ssl_cert_verify(self, xml_root):
+    def _get_ssl_verify(self, xml_root):
         value = False
         text = xml_root.findtext('Storage/SSLCertVerify')
         if text:
-            if text.lower() in ('true', 'false'):
-                value = text.lower() == 'true'
-            else:
-                msg = _("SSLCertVerify configured error.")
-                LOG.error(msg)
-                raise exception.InvalidInput(reason=msg)
+            value = self._parser_ssl_value(text)
+        return value
 
+    def _ssl_cert_path(self, xml_root):
+        text = xml_root.findtext('Storage/SSLCertPath')
+        ssl_value = self._get_ssl_verify(xml_root)
+        if text and ssl_value:
+            setattr(self.conf, 'ssl_cert_path', text)
+        elif not text and ssl_value:
+            msg = _("Cert path is necessary if SSLCertVerify is True.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        else:
+            setattr(self.conf, 'ssl_cert_path', None)
+
+    def _ssl_cert_verify(self, xml_root):
+        value = self._get_ssl_verify(xml_root)
         setattr(self.conf, 'ssl_cert_verify', value)
 
     def _set_extra_constants_by_product(self, product):
@@ -381,16 +397,29 @@ class HuaweiConf(object):
         self._check_hostname_regex_config(ini_info)
         return ini_info
 
+    def _check_ssl_valid(self, dev):
+        ssl_cert_verify = dev.get('ssl_cert_verify', 'false')
+        ssl_verify = self._parser_ssl_value(ssl_cert_verify)
+        ssl_cert_path = dev.get('ssl_cert_path')
+        if not ssl_cert_path and ssl_verify:
+            msg = _("Cert path is necessary if SSLCertVerify is True.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        return ssl_verify
+
     def _hypermetro_devices(self, xml_root):
         dev = self.conf.safe_get('hypermetro_device')
         config = {}
 
         if dev:
+            ssl_verify = self._check_ssl_valid(dev)
             config = {
                 'san_address': dev['san_address'].split(';'),
                 'san_user': dev['san_user'],
                 'san_password': dev['san_password'],
                 'vstore_name': dev.get('vstore_name'),
+                'ssl_cert_verify': ssl_verify,
+                'ssl_cert_path': dev.get('ssl_cert_path'),
                 'metro_domain': dev['metro_domain'],
                 'storage_pools': dev['storage_pool'].split(';')[:1],
                 'iscsi_info': self._parse_remote_initiator_info(
@@ -413,12 +442,15 @@ class HuaweiConf(object):
 
         if replication_devs:
             dev = replication_devs[0]
+            ssl_verify = self._check_ssl_valid(dev)
             config = {
                 'backend_id': dev['backend_id'],
                 'san_address': dev['san_address'].split(';'),
                 'san_user': dev['san_user'],
                 'san_password': dev['san_password'],
                 'vstore_name': dev.get('vstore_name'),
+                'ssl_cert_verify': ssl_verify,
+                'ssl_cert_path': dev.get('ssl_cert_path'),
                 'storage_pools': dev['storage_pool'].split(';')[:1],
                 'iscsi_info': self._parse_remote_initiator_info(
                     dev, 'iscsi_info'),
