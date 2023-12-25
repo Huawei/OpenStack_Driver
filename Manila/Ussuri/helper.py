@@ -15,6 +15,9 @@
 
 import base64
 import json
+import re
+
+import netaddr
 import requests
 import six
 import threading
@@ -22,12 +25,12 @@ import time
 
 from oslo_concurrency import lockutils
 from oslo_log import log
+from oslo_serialization import jsonutils
 
 from manila import exception
 from manila.i18n import _
 from manila.share.drivers.huawei import constants
 from manila.share.drivers.huawei import huawei_utils
-from manila import utils
 
 LOG = log.getLogger(__name__)
 
@@ -47,10 +50,13 @@ def _assert_result(result, format_str, *args):
 class RestHelper(object):
     """Helper class for Huawei OceanStor V3 storage system."""
 
-    def __init__(self, nas_address, nas_username, nas_password):
+    def __init__(self, nas_address, nas_username, nas_password,
+                 ssl_cert_verify, ssl_cert_path):
         self.nas_address = nas_address
         self.nas_username = nas_username
         self.nas_password = nas_password
+        self.ssl_cert_verify = ssl_cert_verify
+        self.ssl_cert_path = ssl_cert_path
         self.url = None
         self.session = None
         self.semaphore = threading.Semaphore(30)
@@ -68,7 +74,7 @@ class RestHelper(object):
         self.session.headers.update({
             "Connection": "keep-alive",
             "Content-Type": "application/json"})
-        self.session.verify = False
+        self.session.verify = self.ssl_cert_path if self.ssl_cert_verify else False
 
     def do_call(self, postfix_url, method, data=None,
                 timeout=constants.SOCKET_TIMEOUT, **kwargs):
@@ -216,9 +222,9 @@ class RestHelper(object):
                     "code": constants.ERROR_UNAUTHORIZED_TO_SERVER,
                     "description": "unauthorized."}}
 
-        if _error_code(result) in (constants.ERROR_CONNECT_TO_SERVER,
-                                   constants.ERROR_UNAUTHORIZED_TO_SERVER,
-                                   constants.ERROR_BAD_STATUS_LINE):
+        if _error_code(result) in constants.RELOGIN_ERROR_CODE:
+            LOG.error(("Can't open the recent url, relogin. "
+                       "the error code is %s."), _error_code(result))
             with self.call_lock.write_lock():
                 relogin_result = self.relogin(old_token)
             if relogin_result:
@@ -234,6 +240,20 @@ class RestHelper(object):
             else:
                 LOG.error('Relogin failed, no need to send again.')
         return result
+
+    @staticmethod
+    def _get_info_by_range(func, params=None):
+        range_start = 0
+        info_list = []
+        while True:
+            range_end = range_start + constants.MAX_QUERY_COUNT
+            info = func(range_start, range_end, params)
+            info_list += info
+            if len(info) < constants.MAX_QUERY_COUNT:
+                break
+
+            range_start += constants.MAX_QUERY_COUNT
+        return info_list
 
     def create_filesystem(self, fs_param):
         url = "/filesystem"
@@ -341,9 +361,19 @@ class RestHelper(object):
             access_to = '*'
 
         accesses = self.get_all_share_access(share_id, share_proto, vstore_id)
+        # Check whether the IP address is standardized.
         for access in accesses:
-            if access['NAME'] in (access_to, '@' + access_to):
+            access_name = access.get('NAME')
+            if access_name in (access_to, '@' + access_to):
                 return access
+            try:
+                format_ip = netaddr.IPAddress(access_name)
+                new_access = str(format_ip.format(dialect=netaddr.ipv6_compact))
+                if new_access == access_to:
+                    return access
+            except Exception:
+                LOG.info("Not IP, Don't need to standardized")
+                continue
 
     def get_share_access_by_id(self, share_id, share_proto, vstore_id):
         accesses = self.get_all_share_access(share_id, share_proto, vstore_id)
@@ -353,6 +383,7 @@ class RestHelper(object):
             if "@" in access_to:
                 access_type = "user"
             else:
+                access_to = huawei_utils.standard_ipaddr(access_to)
                 access_type = "ip"
 
             _access_level = item.get('PERMISSION') or item.get('ACCESSVAL')
@@ -459,7 +490,7 @@ class RestHelper(object):
             "ACCESSVAL": access_level,
             "SYNC": "0",
             "ALLSQUASH": "1",
-            "ROOTSQUASH": "0",
+            "ROOTSQUASH": "1",
         }
 
         if share_type_id:
@@ -470,7 +501,13 @@ class RestHelper(object):
             access['vstoreId'] = vstore_id
 
         result = self.call("/NFS_SHARE_AUTH_CLIENT", "POST", access)
-        _assert_result(result, 'Allow NFS access %s error.', access)
+        share_access = self._check_and_get_access(
+            result, share_id, access_to, "NFS", vstore_id)
+        if not share_access:
+            _assert_result(result, "Allow NFS access %s error.", access)
+        elif self._is_needed_change_access(share_access, access_level):
+            self.change_access(share_access.get("ID"), "NFS", access_level, vstore_id)
+        LOG.info("Add NFS access %s on storage successfully", access_to)
 
     def _allow_cifs_access(self, share_id, access_to, access_level, vstore_id):
         access = {
@@ -487,7 +524,35 @@ class RestHelper(object):
             # If add user access failed, try to add group access.
             access['NAME'] = '@' + access_to
             result = self.call("/CIFS_SHARE_AUTH_CLIENT", "POST", access)
-        _assert_result(result, 'Allow CIFS access %s error.', access)
+
+        share_access = self._check_and_get_access(
+            result, share_id, access_to, "CIFS", vstore_id)
+        if not share_access:
+            _assert_result(result, "Allow CIFS access %s error.", access)
+        elif self._is_needed_change_access(share_access, access_level):
+            self.change_access(share_access.get("ID"), "CIFS", access_level, vstore_id)
+        LOG.info("Add CIFS access %s on storage successfully", access_to)
+
+    def _check_and_get_access(
+            self, result, share_id, access_to, share_proto, vstore_id):
+        # if access already been created, get access info
+        if _error_code(result) == constants.ACCESS_ALREADY_EXISTS:
+            share_access = self.get_share_access(
+                share_id, access_to, share_proto, vstore_id)
+            return share_access
+        return {}
+
+    @staticmethod
+    def _is_needed_change_access(share_access, access_level):
+        # NFS share
+        if 'ACCESSVAL' in share_access and share_access.get('ACCESSVAL') != access_level:
+            return True
+
+        # CIFS share
+        if 'PERMISSION' in share_access and share_access.get('PERMISSION') != access_level:
+            return True
+
+        return False
 
     def get_snapshot_by_id(self, snap_id):
         url = "/FSSNAPSHOT/" + snap_id
@@ -513,12 +578,14 @@ class RestHelper(object):
         _assert_result(result, 'Create snapshot %s error.', data)
         return result['data']['ID']
 
-    def get_share_by_name(self, share_name, share_proto, vstore_id=None):
+    def get_share_by_name(self, share_name, share_proto,
+                          vstore_id=None, need_replace=True):
         if share_proto == 'NFS':
-            share_path = huawei_utils.share_path(share_name)
+            share_path = huawei_utils.share_path(share_name, need_replace)
             url = "/NFSHARE?filter=SHAREPATH::%s&range=[0-100]" % share_path
         elif share_proto == 'CIFS':
-            cifs_share = huawei_utils.share_name(share_name)
+            cifs_share = huawei_utils.share_name(share_name)\
+                if need_replace else share_name
             url = "/CIFSHARE?filter=NAME:%s&range=[0-100]" % cifs_share
         else:
             msg = self._invalid_nas_protocol(share_proto)
@@ -573,7 +640,7 @@ class RestHelper(object):
         result = self.call(url, "GET")
         _assert_result(result, 'Get partition by name %s error.', name)
         for data in result.get('data', []):
-            return data
+            return data.get('ID')
 
     def get_partition_info_by_id(self, partitionid):
         url = '/cachepartition/' + partitionid
@@ -709,6 +776,18 @@ class RestHelper(object):
         _assert_result(result, 'Get vlan by tag %s error.', vlan_tag)
         return result.get('data', [])
 
+    def get_vlan(self, port_id, vlan_tag):
+        url = "/vlan"
+        result = self.call(url, 'GET')
+        _assert_result(result, _('Get vlan error.'))
+
+        vlan_tag = six.text_type(vlan_tag)
+        for item in result.get('data', []):
+            if port_id == item.get('PORTID') and vlan_tag == item.get('TAG'):
+                return True, item.get('ID')
+
+        return False, None
+
     def create_vlan(self, port_id, port_type, vlan_tag):
         data = {"PORTID": port_id,
                 "PORTTYPE": port_type,
@@ -734,7 +813,41 @@ class RestHelper(object):
         result = self.call(url, 'GET')
         _assert_result(result, 'Get logical port by IP %s error.', ip)
         for data in result.get('data', []):
-            return data
+            return data.get('ID')
+
+    def _activate_logical_port(self, logical_port_id):
+        url = "/LIF/" + logical_port_id
+        data = jsonutils.dumps({"OPERATIONALSTATUS": "true"})
+        result = self.call(url, 'PUT', data)
+        _assert_result(result, _('Activate logical port error.'))
+
+    def get_logical_port(self, home_port_id, ip_version, ip_address, subnet):
+        url = "/LIF"
+        result = self.call(url, 'GET')
+        _assert_result(result, _('Get logical port error.'))
+
+        if "data" not in result:
+            return False, None
+
+        if ip_version == 4:
+            ip_addr_key = 'IPV4ADDR'
+            ip_mask_key = 'IPV4MASK'
+        else:
+            ip_addr_key = 'IPV6ADDR'
+            ip_mask_key = 'IPV6MASK'
+
+        for item in result['data']:
+            storage_ip_addr = item.get(ip_addr_key)
+            if ip_version == 6:
+                storage_ip_addr = huawei_utils.standard_ipaddr(storage_ip_addr)
+            if (home_port_id == item.get('HOMEPORTID') and
+                    ip_address == storage_ip_addr and
+                    subnet == item.get(ip_mask_key)):
+                if item.get('OPERATIONALSTATUS') != 'true':
+                    self._activate_logical_port(item.get('ID'))
+                return True, item.get('ID')
+
+        return False, None
 
     def create_logical_port(self, params):
         result = self.call("/LIF", 'POST', params)
@@ -936,12 +1049,35 @@ class RestHelper(object):
             if con.get('LOCATION') == controller_name:
                 return con.get("ID")
 
-    def split_clone_fs(self, fs_id):
+    def _get_filesystem_split_url_data(self, fs_id):
+        """
+        Since 6.1.5, the oceanstor storage begin
+        support filesystem-split-clone.
+        """
+        array_info = self.get_array_info()
+        point_release = array_info.get("pointRelease", "0")
+        LOG.info("get array release_version success,"
+                 " release_version is %s" % point_release)
+        # Extracts numbers from point_release
+        release_version = "".join(re.findall(r"\d+", point_release))
+        url = "/filesystem_split_switch"
         data = {"ID": fs_id,
                 "SPLITENABLE": True,
                 "SPLITSPEED": 4,
                 }
-        result = self.call("/filesystem_split_switch", "PUT", data)
+        if release_version >= constants.SUPPORT_CLONE_FS_SPLIT_VERSION:
+            url = "/clone_fs_split"
+            data = {
+                "ID": fs_id,
+                "action": constants.ACTION_START_SPLIT,
+                "splitSpeed": 4,
+            }
+
+        return url, data
+
+    def split_clone_fs(self, fs_id):
+        (url, data) = self._get_filesystem_split_url_data(fs_id)
+        result = self.call(url, "PUT", data)
         _assert_result(result, 'Split clone fs %s error.', fs_id)
 
     def create_hypermetro_pair(self, params):
@@ -977,11 +1113,17 @@ class RestHelper(object):
         _assert_result(result, 'Delete HyperMetro pair %s error.', pair_id)
 
     def get_hypermetro_domain_id(self, domain_name):
-        result = self.call("/HyperMetroDomain?range=[0-100]", "GET")
-        _assert_result(result, "Get HyperMetro domains info error.")
-        for item in result.get("data", []):
+        domain_list = self._get_info_by_range(self._get_hypermetro_domain)
+        for item in domain_list:
             if item.get("NAME") == domain_name:
                 return item.get("ID")
+
+    def _get_hypermetro_domain(self, start, end, params):
+        url = ("/HyperMetroDomain?range=[%(start)s-%(end)s]"
+               % {"start": str(start), "end": str(end)})
+        result = self.call(url, "GET")
+        _assert_result(result, "Get HyperMetro domains info error.")
+        return result.get('data', [])
 
     def get_hypermetro_domain_info(self, domain_name):
         result = self.call("/FsHyperMetroDomain?RUNNINGSTATUS=0", "GET",
@@ -993,20 +1135,25 @@ class RestHelper(object):
 
     def get_hypermetro_vstore_id(self, domain_name, local_vstore_name,
                                  remote_vstore_name):
-        result = self.call("/vstore_pair?range=[0-100]", "GET",
-                           data=None, log_filter=True)
-        _assert_result(result, "Get HyperMetro vstore_pair id error.")
-        for item in result.get("data", []):
+        vstore_list = self._get_info_by_range(self._get_hypermetro_vstore)
+        for item in vstore_list:
             if item.get("DOMAINNAME") == domain_name and item.get(
                     "LOCALVSTORENAME") == local_vstore_name and item.get(
                     "REMOTEVSTORENAME") == remote_vstore_name:
                 return item.get("ID")
         return None
 
+    def _get_hypermetro_vstore(self, start, end, params):
+        url = ("/vstore_pair?range=[%(start)s-%(end)s]"
+               % {"start": str(start), "end": str(end)})
+        result = self.call(url, "GET")
+        _assert_result(result, "Get vstore_pair id error.")
+        return result.get('data', [])
+
     def get_hypermetro_vstore_by_pair_id(self, vstore_pair_id):
         url = "/vstore_pair/%s" % vstore_pair_id
         result = self.call(url, 'GET', data=None, log_filter=True)
-        _assert_result(result, "Get HyperMetro vstore_pair info by id error.")
+        _assert_result(result, "Get vstore_pair info by id error.")
         return result["data"]
 
     def get_array_info(self):

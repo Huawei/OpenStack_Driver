@@ -81,3 +81,21 @@ class HuaweiManager(object):
 
     def get_remote_fs_info(self, context, share_name):
         self.metro_mgr.get_remote_fs_info(share_name)
+
+    def create_hypermetro_snapshot(self, context, share_name, snapshot_name):
+        return self.driver.rpc_create_hypermetro_snapshot(context, share_name,
+                                                          snapshot_name)
+
+    def delete_hypermetro_snapshot(self, context, share_name, snapshot_name):
+        return self.driver.rpc_delete_hypermetro_snapshot(context, share_name,
+                                                          snapshot_name)
+
+    def revert_to_hypermetro_snapshot(self, context, share_name,
+                                      snapshot_name):
+        self.driver.rpc_revert_to_hypermetro_snapshot(context, share_name,
+                                                      snapshot_name)
+
+    def create_share_from_hypermetro_snapshot(self, context, share, snapshot,
+                                              share_server):
+        return self.driver.rpc_create_share_from_hypermetro_snapshot(
+            context, share, snapshot, share_server)

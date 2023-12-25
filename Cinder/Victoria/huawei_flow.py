@@ -1733,6 +1733,8 @@ class ClearLunMappingTask(task.Task):
         obj_count = 0
         if lun_id and lungroup_id:
             self.client.remove_lun_from_lungroup(lungroup_id, lun_id, lun_type)
+
+        if lungroup_id:
             obj_count = self._get_obj_count_of_lungroup(lungroup_id)
 
         # If lungroup still has member objects, don't clear mapping relation.

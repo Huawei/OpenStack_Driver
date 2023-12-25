@@ -14,16 +14,18 @@
 #    under the License.
 
 import json
-import retrying
+import random
+import string
 
+import netaddr
 from oslo_log import log
 from oslo_utils import strutils
+import retrying as retry_module
 
 from manila import exception
 from manila.i18n import _
 from manila.share.drivers.huawei import constants
 from manila.share import share_types
-
 
 LOG = log.getLogger(__name__)
 
@@ -73,23 +75,42 @@ def _get_opt_key(spec_key):
         return key_split[1]
 
 
-def _get_bool_param(k, v):
-    words = v.split()
+def _get_bool_param(key, value):
+    words = value.split()
     if len(words) == 2 and words[0] == '<is>':
         return strutils.bool_from_string(words[1], strict=True)
 
-    msg = _("%(k)s spec must be specified as %(k)s='<is> True' "
-            "or '<is> False'.") % {'k': k}
+    msg = _("%(key)s spec must be specified as %(key)s='<is> True' "
+            "or '<is> False'.") % {'key': key}
     LOG.error(msg)
     raise exception.InvalidInput(reason=msg)
 
 
-def _get_string_param(k, v):
-    if not v:
-        msg = _("%s spec must be specified as a string.") % k
+def _get_string_param(key, value):
+    if not value:
+        msg = _("%s spec must be specified as a string.") % key
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
-    return v
+    return value
+
+
+def _get_snapshot_dir_param(key, value):
+    value = _get_string_param(key, value)
+    if value.lower() not in ('true', 'false'):
+        err_msg = _("The show_snapshot_dir value consists "
+                    "can only be 'true' or 'false'")
+        LOG.error(err_msg)
+        raise exception.InvalidInput(reason=err_msg)
+    return value
+
+
+def _get_integer_param(key, value):
+    if value and value.isdigit():
+        return int(value)
+
+    msg = _("%s spec must be specified as an integer.") % key
+    LOG.error(msg)
+    raise exception.InvalidInput(reason=msg)
 
 
 def _get_opts_from_specs(specs, is_dorado):
@@ -106,6 +127,9 @@ def _get_opts_from_specs(specs, is_dorado):
         'huawei_smartpartition:partitionname': (_get_string_param, None),
         'huawei_sectorsize:sectorsize': (_get_string_param, None),
         'huawei_controller:controllername': (_get_string_param, None),
+        'huawei_unixpermission:unix_permission': (_get_string_param, None),
+        'huawei_snapshotreserveper:snapshot_reserve_percentage': (_get_integer_param, None),
+        'huawei_showsnapshotdir:show_snapshot_dir': (_get_snapshot_dir_param, None),
         'qos:iotype': (_get_string_param, None),
         'qos:maxiops': (_get_string_param, None),
         'qos:miniops': (_get_string_param, None),
@@ -192,14 +216,25 @@ def wait_for_condition(func, interval, timeout):
     def _retry_on_result(result):
         return not result
 
-    def _retry_on_exception(result):
+    def _retry_on_exception():
         return False
 
-    r = retrying.Retrying(retry_on_result=_retry_on_result,
-                          retry_on_exception=_retry_on_exception,
-                          wait_fixed=interval * 1000,
-                          stop_max_delay=timeout * 1000)
-    r.call(func)
+    def _retry_use_retrying():
+        ret = retry_module.Retrying(retry_on_result=_retry_on_result,
+                                    retry_on_exception=_retry_on_exception,
+                                    wait_fixed=interval * 1000,
+                                    stop_max_delay=timeout * 1000)
+        ret.call(func)
+
+    def _retry_use_tenacity():
+        ret = retry_module.Retrying(
+            wait=retry_module.wait_fixed(interval),
+            retry=retry_module.retry_if_result(_retry_on_result),
+            stop=retry_module.stop_after_delay(timeout)
+        )
+        ret(func)
+
+    _retry_use_retrying()
 
 
 def wait_fs_online(helper, fs_id, wait_interval, timeout):
@@ -235,8 +270,10 @@ def share_size(size):
     return int(size) * constants.CAPACITY_UNIT
 
 
-def share_path(name):
-    return "/" + name.replace("-", "_") + "/"
+def share_path(name, need_replace=True):
+    if need_replace:
+        name = name.replace("-", "_")
+    return "/" + name + "/"
 
 
 def get_share_by_location(export_location, share_proto):
@@ -294,3 +331,47 @@ def is_dorado_v6(client):
     version_info = array_info['PRODUCTVERSION']
     if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
         return True
+
+
+def standard_ipaddr(access):
+    """
+    When the added client permission is an IP address,
+    standardize it. Otherwise, do not process it.
+    """
+    try:
+        format_ip = netaddr.IPAddress(access)
+        access_to = str(format_ip.format(dialect=netaddr.ipv6_compact))
+        return access_to
+    except Exception:
+        return access
+
+
+def generate_random_alphanumeric(length):
+    return ''.join(random.choice(string.ascii_letters + string.digits)
+                   for _x in range(length))
+
+
+def cidr_to_prefixlen(cidr):
+    try:
+        network = netaddr.IPNetwork(cidr)
+        return network.prefixlen
+    except netaddr.AddrFormatError as err:
+        msg = _("Invalid cidr supplied, reason is %s") % err
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+
+
+def mask_dict_sensitive_info(data, secret="***"):
+    # mask sensitive data in the dictionary
+    if not isinstance(data, dict):
+        return data
+
+    out = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            value = mask_dict_sensitive_info(value, secret=secret)
+        elif key in constants.SENSITIVE_KEYS:
+            value = secret
+        out[key] = value
+
+    return strutils.mask_dict_password(out)
