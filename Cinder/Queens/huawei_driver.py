@@ -81,7 +81,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "2.6.2"
+    VERSION = "2.6.RC3"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -431,7 +431,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         lun_id = lun_info['ID']
 
         try:
-            qos = smartx.SmartQos.get_qos_by_volume_type(volume_type)
+            qos = huawei_utils.get_qos_by_volume_type(volume_type)
             if qos:
                 if not self.support_func.get('QoS_support'):
                     msg = (_("Can't support qos on the array"))
@@ -458,7 +458,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         lun_id = lun_info['ID']
         lun_params.update({"CAPACITY": huawei_utils.get_volume_size(volume)})
 
-        qos = smartx.SmartQos.get_qos_by_volume_type(volume_type)
+        qos = huawei_utils.get_qos_by_volume_type(volume_type)
         if qos:
             smart_qos = smartx.SmartQos(self.client)
             smart_qos.add(qos, lun_id)
@@ -1178,7 +1178,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         lun_info = self.client.get_lun_info(lun_id)
 
         old_size = int(lun_info.get('CAPACITY'))
-        new_size = int(new_size) * units.Gi / 512
+        new_size = int(new_size) * constants.CAPACITY_UNIT
         if new_size == old_size:
             LOG.info("New size is equal to the real size from backend"
                      " storage, no need to extend."
@@ -1525,7 +1525,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
-        new_qos = smartx.SmartQos.get_qos_by_volume_type(new_type)
+        new_qos = huawei_utils.get_qos_by_volume_type(new_type)
         if not self.support_func.get('QoS_support'):
             if new_qos:
                 msg = (_("Can't support qos on the array."))
@@ -1609,7 +1609,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
                                            new_partition_name])
 
         # smartqos
-        new_qos = smartx.SmartQos.get_qos_by_volume_type(new_type)
+        new_qos = huawei_utils.get_qos_by_volume_type(new_type)
         if not self.support_func.get('QoS_support'):
             if new_qos:
                 msg = (_("Can't support qos on the array."))

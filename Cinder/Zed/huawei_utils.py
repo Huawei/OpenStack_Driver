@@ -218,19 +218,39 @@ def _get_opts_from_specs(specs):
     return opts
 
 
+def _check_and_set_qos_info(specs, qos):
+    for key, value in specs.items():
+        if key in constants.QOS_IGNORED_PARAMS:
+            LOG.info("this qos spec param %s is front-end qos param, "
+                     "backend driver will ignore it", key)
+            continue
+
+        if key not in constants.QOS_SPEC_KEYS:
+            msg = _('Invalid QoS %s specification.') % key
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if key != 'IOType' and int(value) <= 0:
+            msg = _('QoS config is wrong. %s must > 0.') % key
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        qos[key.upper()] = value
+
+
 def _get_qos_specs(qos_specs_id, is_dorado_v6):
     ctxt = context.get_admin_context()
-    specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
-    if specs is None:
+    qos_specs_info = qos_specs.get_qos_specs(ctxt, qos_specs_id)
+    if qos_specs_info is None:
         return {}
 
-    if specs.get('consumer') == 'front-end':
+    if qos_specs_info.get('consumer') == 'front-end':
         return {}
 
-    kvs = specs.get('specs', {})
-    LOG.info('The QoS specs is: %s.', kvs)
+    specs = qos_specs_info.get('specs', {})
+    LOG.info('The QoS specs is: %s.', specs)
 
-    qos = {'IOTYPE': kvs.pop('IOType', None)}
+    qos = {'IOTYPE': specs.pop('IOType', None)}
 
     if qos['IOTYPE'] not in constants.QOS_IOTYPES:
         msg = _('IOType must be in %(types)s.'
@@ -238,18 +258,7 @@ def _get_qos_specs(qos_specs_id, is_dorado_v6):
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
 
-    for k, v in kvs.items():
-        if k not in constants.QOS_SPEC_KEYS:
-            msg = _('QoS key %s is not valid.') % k
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-
-        if int(v) <= 0:
-            msg = _('QoS value for %s must > 0.') % k
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-
-        qos[k.upper()] = v
+    _check_and_set_qos_info(specs, qos)
 
     if len(qos) < 2:
         msg = _('QoS policy must specify both IOType and one another '
