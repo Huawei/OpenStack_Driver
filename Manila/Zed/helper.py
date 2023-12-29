@@ -501,7 +501,13 @@ class RestHelper(object):
             access['vstoreId'] = vstore_id
 
         result = self.call("/NFS_SHARE_AUTH_CLIENT", "POST", access)
-        _assert_result(result, 'Allow NFS access %s error.', access)
+        share_access = self._check_and_get_access(
+            result, share_id, access_to, "NFS", vstore_id)
+        if not share_access:
+            _assert_result(result, "Allow NFS access %s error.", access)
+        elif self._is_needed_change_access(share_access, access_level):
+            self.change_access(share_access.get("ID"), "NFS", access_level, vstore_id)
+        LOG.info("Add NFS access %s on storage successfully", access_to)
 
     def _allow_cifs_access(self, share_id, access_to, access_level, vstore_id):
         access = {
@@ -518,7 +524,35 @@ class RestHelper(object):
             # If add user access failed, try to add group access.
             access['NAME'] = '@' + access_to
             result = self.call("/CIFS_SHARE_AUTH_CLIENT", "POST", access)
-        _assert_result(result, 'Allow CIFS access %s error.', access)
+
+        share_access = self._check_and_get_access(
+            result, share_id, access_to, "CIFS", vstore_id)
+        if not share_access:
+            _assert_result(result, "Allow CIFS access %s error.", access)
+        elif self._is_needed_change_access(share_access, access_level):
+            self.change_access(share_access.get("ID"), "CIFS", access_level, vstore_id)
+        LOG.info("Add CIFS access %s on storage successfully", access_to)
+
+    def _check_and_get_access(
+            self, result, share_id, access_to, share_proto, vstore_id):
+        # if access already been created, get access info
+        if _error_code(result) == constants.ACCESS_ALREADY_EXISTS:
+            share_access = self.get_share_access(
+                share_id, access_to, share_proto, vstore_id)
+            return share_access
+        return {}
+
+    @staticmethod
+    def _is_needed_change_access(share_access, access_level):
+        # NFS share
+        if 'ACCESSVAL' in share_access and share_access.get('ACCESSVAL') != access_level:
+            return True
+
+        # CIFS share
+        if 'PERMISSION' in share_access and share_access.get('PERMISSION') != access_level:
+            return True
+
+        return False
 
     def get_snapshot_by_id(self, snap_id):
         url = "/FSSNAPSHOT/" + snap_id

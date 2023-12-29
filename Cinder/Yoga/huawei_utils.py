@@ -218,19 +218,39 @@ def _get_opts_from_specs(specs):
     return opts
 
 
+def _check_and_set_qos_info(specs, qos):
+    for key, value in specs.items():
+        if key in constants.QOS_IGNORED_PARAMS:
+            LOG.info("this qos spec param %s is front-end qos param, "
+                     "backend driver will ignore it", key)
+            continue
+
+        if key not in constants.QOS_SPEC_KEYS:
+            msg = _('Invalid QoS %s specification.') % key
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if key != 'IOType' and int(value) <= 0:
+            msg = _('QoS config is wrong. %s must > 0.') % key
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        qos[key.upper()] = value
+
+
 def _get_qos_specs(qos_specs_id, is_dorado_v6):
     ctxt = context.get_admin_context()
-    specs = qos_specs.get_qos_specs(ctxt, qos_specs_id)
-    if specs is None:
+    qos_specs_info = qos_specs.get_qos_specs(ctxt, qos_specs_id)
+    if qos_specs_info is None:
         return {}
 
-    if specs.get('consumer') == 'front-end':
+    if qos_specs_info.get('consumer') == 'front-end':
         return {}
 
-    kvs = specs.get('specs', {})
-    LOG.info('The QoS specs is: %s.', kvs)
+    specs = qos_specs_info.get('specs', {})
+    LOG.info('The QoS specs is: %s.', specs)
 
-    qos = {'IOTYPE': kvs.pop('IOType', None)}
+    qos = {'IOTYPE': specs.pop('IOType', None)}
 
     if qos['IOTYPE'] not in constants.QOS_IOTYPES:
         msg = _('IOType must be in %(types)s.'
@@ -238,18 +258,7 @@ def _get_qos_specs(qos_specs_id, is_dorado_v6):
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
 
-    for k, v in kvs.items():
-        if k not in constants.QOS_SPEC_KEYS:
-            msg = _('QoS key %s is not valid.') % k
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-
-        if int(v) <= 0:
-            msg = _('QoS value for %s must > 0.') % k
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-
-        qos[k.upper()] = v
+    _check_and_set_qos_info(specs, qos)
 
     if len(qos) < 2:
         msg = _('QoS policy must specify both IOType and one another '
@@ -550,41 +559,63 @@ def get_hypermetro(client, volume):
     return hypermetro
 
 
-def _set_config_info(ini, find_info, tmp_find_info):
-    if find_info is None and tmp_find_info:
-        find_info = tmp_find_info
+def get_config_info_by_ini_name(ini_info, initiator):
+    """
+    get config ini_info by initiator name
+    """
+    LOG.info("begin to get config info by ini name,"
+             "ini_info is %s, ini is %s", ini_info, initiator)
+    for _, info in ini_info.items():
+        ini_name = info.get('Name')
+        if not ini_name:
+            continue
+        # when create host task in initialize_fc_connection just return
+        # the first info in config_info, this scenarios initiator is a list of ini name,
+        # In other scenarios, initiator is a string of ini name.
+        if isinstance(initiator, list) and ini_name in initiator:
+            return info
+        if ini_name == initiator:
+            return info
+    return {}
 
-    if ini:
-        config = ini
-    elif find_info:
-        config = find_info
-    else:
-        config = {}
-    return config
+
+def get_config_info_by_host_name(ini_info, host_name):
+    """
+    get config ini_info by host name
+    """
+    LOG.info("begin to get config info by host name,"
+             "ini_info is %s, host_name is %s", ini_info, host_name)
+    for _, info in ini_info.items():
+        info_host_name = info.get('HostName')
+        if not info_host_name:
+            continue
+        if info_host_name == '*':
+            return info
+        if re.search(info_host_name, host_name):
+            return info
+    return {}
 
 
-def find_config_info(config_info, connector=None, initiator=None):
-    if initiator:
-        ini = config_info['initiators'].get(initiator)
-        connector = {} if not connector else connector
-    elif connector:
-        ini = config_info['initiators'].get(connector['initiator'])
-    else:
-        return {}
+def find_config_info(protocol_info, connector=None, initiator=None):
+    """
+    parse get initiator config in huawei config xml
+    params:
+        protocol_info: a dict with protocol info like this:
+        protocol_info = {'initiators': {'iscsi_ini_01': {'Name': 'iscsi_ini_01', 'ALUA': '1'}}}
+        connector: some info of host,such as host_name, os_type
+        initiator: initiator name of host, may be a string or a list.
+    returns:
+        return a dict with the final config info of initiator,
+        if protocol_info = {'initiators': {'iscsi_ini_01': {'Name': 'iscsi_ini_01', 'ALUA': '1'}}}
+        will return  {'Name': 'iscsi_ini_01', 'ALUA': '1'}
+    """
+    all_ini_info = protocol_info.get('initiators', {})
 
-    find_info = None
-    tmp_find_info = None
-    if not ini:
-        for item in config_info['initiators']:
-            ini_info = config_info['initiators'][item]
-            if ini_info.get('HostName'):
-                if ini_info.get('HostName') == '*':
-                    tmp_find_info = ini_info
-                elif re.search(ini_info.get('HostName'), connector.get('host', '')):
-                    find_info = ini_info
-                    break
+    find_info = get_config_info_by_ini_name(all_ini_info, initiator)
+    if not find_info:
+        find_info = get_config_info_by_host_name(all_ini_info, connector.get('host'))
 
-    return _set_config_info(ini, find_info, tmp_find_info)
+    return find_info
 
 
 def is_support_clone_pair(client):
@@ -666,3 +697,7 @@ def mask_dict_sensitive_info(data, secret="***"):
         out[key] = value
 
     return strutils.mask_dict_password(out)
+
+
+def convert_connector_wwns(wwns):
+    return [x.lower() for x in wwns]

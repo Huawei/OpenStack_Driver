@@ -39,25 +39,28 @@ class HuaweiConf(object):
     def __init__(self, conf):
         self.conf = conf
 
-    def _encode_authentication(self):
-        need_encode = False
+    def get_xml_info(self):
         tree = ET.parse(self.conf.cinder_huawei_conf_file,
                         ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
+        return tree, xml_root
+
+    def _encode_authentication(self, tree, xml_root):
+        need_encode = False
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
         vstore_node = xml_root.find('Storage/vStoreName')
         if (name_node is not None
                 and not name_node.text.startswith('!$$$')):
-            name_node.text = '!$$$' + base64.b64encode(name_node.text)
+            name_node.text = '!$$$' + base64.b64encode(name_node.text.encode()).decode()
             need_encode = True
         if (pwd_node is not None
                 and not pwd_node.text.startswith('!$$$')):
-            pwd_node.text = '!$$$' + base64.b64encode(pwd_node.text)
+            pwd_node.text = '!$$$' + base64.b64encode(pwd_node.text.encode()).decode()
             need_encode = True
         if (vstore_node is not None
                 and not vstore_node.text.startswith('!$$$')):
-            vstore_node.text = '!$$$' + base64.b64encode(vstore_node.text)
+            vstore_node.text = '!$$$' + base64.b64encode(vstore_node.text.encode()).decode()
             need_encode = True
 
         if need_encode:
@@ -68,7 +71,8 @@ class HuaweiConf(object):
             tree.write(self.conf.cinder_huawei_conf_file, encoding='UTF-8')
 
     def update_config_value(self):
-        self._encode_authentication()
+        tree, xml_root = self.get_xml_info()
+        self._encode_authentication(tree, xml_root)
 
         set_attr_funcs = (self._san_address,
                           self._san_user,
@@ -97,11 +101,9 @@ class HuaweiConf(object):
                           self._hyper_enforce_multipath,
                           self._get_local_in_band_or_not,
                           self._get_local_storage_sn,
-                          self._rollback_speed)
+                          self._rollback_speed,
+                          self._set_qos_ignored_param)
 
-        tree = ET.parse(self.conf.cinder_huawei_conf_file,
-                        ET.XMLParser(resolve_entities=False))
-        xml_root = tree.getroot()
         for f in set_attr_funcs:
             f(xml_root)
 
@@ -152,7 +154,7 @@ class HuaweiConf(object):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        user = base64.b64decode(text[4:])
+        user = base64.b64decode(text[4:]).decode()
         setattr(self.conf, 'san_user', user)
 
     def _san_password(self, xml_root):
@@ -162,13 +164,13 @@ class HuaweiConf(object):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        pwd = base64.b64decode(text[4:])
+        pwd = base64.b64decode(text[4:]).decode()
         setattr(self.conf, 'san_password', pwd)
 
     def _vstore_name(self, xml_root):
         text = xml_root.findtext('Storage/vStoreName')
         if text:
-            vstore_name = base64.b64decode(text[4:])
+            vstore_name = base64.b64decode(text[4:]).decode()
             setattr(self.conf, 'vstore_name', vstore_name)
         else:
             setattr(self.conf, 'vstore_name', None)
@@ -668,3 +670,12 @@ class HuaweiConf(object):
         else:
             speed = text.strip()
         setattr(self.conf, 'rollback_speed', int(speed))
+
+    @staticmethod
+    def _set_qos_ignored_param(xml_root):
+        text = xml_root.findtext('LUN/QosIgnoredParam')
+        qos_ignored_params = []
+        if text:
+            qos_ignored_params = text.split(';')
+            qos_ignored_params = list(set(x.strip() for x in qos_ignored_params if x.strip()))
+        setattr(constants, 'QOS_IGNORED_PARAMS', qos_ignored_params)

@@ -23,10 +23,12 @@ from oslo_service import loopingcall
 from oslo_utils import units
 from oslo_utils import strutils
 
+from cinder import context
 from cinder import exception
 from cinder.i18n import _
 from cinder import objects
 from cinder.volume.drivers.huawei import constants
+from cinder.volume import qos_specs
 
 LOG = logging.getLogger(__name__)
 
@@ -89,9 +91,9 @@ def get_volume_size(volume):
     We should divide the given volume size by 512 for the 18000 system
     calculates volume size with sectors, which is 512 bytes.
     """
-    volume_size = units.Gi / 512  # 1G
+    volume_size = constants.CAPACITY_UNIT  # 1G
     if int(volume.size) != 0:
-        volume_size = int(volume.size) * units.Gi / 512
+        volume_size = int(volume.size) * constants.CAPACITY_UNIT
 
     return volume_size
 
@@ -366,3 +368,67 @@ def mask_dict_sensitive_info(data, secret="***"):
 
     return strutils.mask_dict_password(out)
 
+
+def _check_and_set_qos_info(specs, qos):
+    LOG.info('The QoS specs is: %s.', specs)
+
+    for key, value in specs.items():
+        if key in constants.QOS_IGNORED_PARAMS:
+            LOG.info("this qos spec param %s is front-end qos param, "
+                     "backend driver will ignore it", key)
+            continue
+
+        if key not in constants.QOS_SPEC_KEYS:
+            msg = _('Invalid QoS %s specification.') % key
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if key != 'IOType' and int(value) <= 0:
+            msg = _('QoS config is wrong. %s must > 0.') % key
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        qos[key.upper()] = value
+
+
+def get_qos_by_volume_type(volume_type):
+    # We prefer the qos_specs association
+    # and override any existing extra-specs settings
+    # if present.
+    if not volume_type:
+        return {}
+
+    qos_specs_id = volume_type.get('qos_specs_id')
+    if not qos_specs_id:
+        return {}
+
+    qos = {}
+    ctxt = context.get_admin_context()
+    qos_specs_info = qos_specs.get_qos_specs(ctxt, qos_specs_id)
+    consumer = qos_specs_info.get('consumer')
+    if consumer == 'front-end':
+        return qos
+
+    _check_and_set_qos_info(qos_specs_info.get('specs', {}), qos)
+
+    if qos.get('IOTYPE') not in constants.QOS_IOTYPES:
+        msg = _('IOType value must be in %(valid)s.'
+                ) % {'valid': constants.QOS_IOTYPES}
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+
+    if len(qos) < 2:
+        msg = _('QoS policy must specify IOType and one of QoS specs.')
+        LOG.error(msg)
+        raise exception.InvalidInput(reason=msg)
+
+    for upper_limit in constants.UPPER_LIMIT_KEYS:
+        for lower_limit in constants.LOWER_LIMIT_KEYS:
+            if upper_limit in qos and lower_limit in qos:
+                msg = (_('QoS policy upper_limit and lower_limit '
+                         'conflict, QoS policy: %(qos_policy)s.')
+                       % {'qos_policy': qos})
+                LOG.error(msg)
+                raise exception.InvalidInput(reason=msg)
+
+    return qos
