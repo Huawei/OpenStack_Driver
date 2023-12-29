@@ -75,7 +75,7 @@ LOG = log.getLogger(__name__)
 
 
 class HuaweiNasDriver(driver.ShareDriver):
-    VERSION = "2.6.2"
+    VERSION = "2.6.3"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiNasDriver, self).__init__((True, False), *args, **kwargs)
@@ -1294,20 +1294,9 @@ class HuaweiNasDriver(driver.ShareDriver):
         fs_info, share_info = self._get_fs_info_with_check(
             share_name, share_proto)
         vstore_id = fs_info.get('vstoreId')
-        share_access = self.helper.get_share_access(
-            share_info['ID'], access_to, share_proto, vstore_id)
-        if share_access:
-            if (('ACCESSVAL' in share_access and
-                 share_access['ACCESSVAL'] != access_level)
-                    or ('PERMISSION' in share_access
-                        and share_access['PERMISSION'] != access_level)):
-                self.helper.change_access(
-                    share_access['ID'], share_proto, access_level,
-                    vstore_id)
-        else:
-            self.helper.allow_access(
-                share_info['ID'], access_to, share_proto, access_level,
-                share_type_id, vstore_id)
+        self.helper.allow_access(
+            share_info['ID'], access_to, share_proto, access_level,
+            share_type_id, vstore_id)
 
     def allow_access(self, context, share, access, share_server=None):
         share_name = share['name']

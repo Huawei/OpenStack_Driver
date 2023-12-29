@@ -1363,7 +1363,7 @@ class GetISCSIConnectionTask(task.Task):
         iqn_info = port_id.split(',', 1)[0]
         return iqn_info.split('+')[1]
 
-    def execute(self, connector):
+    def execute(self, connector, initiator):
         ip_iqn_map = {}
         target_ports = self.client.get_iscsi_tgt_ports()
         for port in target_ports:
@@ -1371,8 +1371,8 @@ class GetISCSIConnectionTask(task.Task):
             normalized_ip = ipaddress.ip_address(six.text_type(ip)).exploded
             ip_iqn_map[normalized_ip] = (port['ID'], port['ETHPORTID'])
 
-        config_info = huawei_utils.find_config_info(self.iscsi_info,
-                                                    connector=connector)
+        config_info = huawei_utils.find_config_info(
+            self.iscsi_info, connector=connector, initiator=initiator)
 
         config_ips = self._get_config_target_ips(config_info)
         LOG.info('Configured iscsi ips %s.', config_ips)
@@ -1409,10 +1409,10 @@ class GetISCSIConnectionTask(task.Task):
 class CreateHostTask(task.Task):
     default_provides = 'host_id'
 
-    def __init__(self, client, iscsi_info, configuration, *args, **kwargs):
+    def __init__(self, client, protocol_info, configuration, *args, **kwargs):
         super(CreateHostTask, self).__init__(*args, **kwargs)
         self.client = client
-        self.iscsi_info = iscsi_info
+        self.protocol_info = protocol_info
         self.configuration = configuration
 
     def _get_new_alua_info(self, config):
@@ -1425,13 +1425,13 @@ class CreateHostTask(task.Task):
 
         return info
 
-    def execute(self, connector):
+    def execute(self, connector, initiator):
         orig_host_name = connector['host']
         host_id = huawei_utils.get_host_id(self.client, orig_host_name)
         info = {}
         if self.configuration.is_dorado_v6:
             config_info = huawei_utils.find_config_info(
-                self.iscsi_info, connector=connector)
+                self.protocol_info, connector=connector, initiator=initiator)
             info = self._get_new_alua_info(config_info)
         if host_id:
             self.client.update_host(host_id, info)
@@ -1733,6 +1733,8 @@ class ClearLunMappingTask(task.Task):
         obj_count = 0
         if lun_id and lungroup_id:
             self.client.remove_lun_from_lungroup(lungroup_id, lun_id, lun_type)
+
+        if lungroup_id:
             obj_count = self._get_obj_count_of_lungroup(lungroup_id)
 
         # If lungroup still has member objects, don't clear mapping relation.
@@ -2521,7 +2523,8 @@ def initialize_iscsi_connection(lun, lun_type, connector, client,
                                 configuration):
     store_spec = {'connector': connector,
                   'lun': lun,
-                  'lun_type': lun_type}
+                  'lun_type': lun_type,
+                  'initiator': connector.get('initiator', '')}
     work_flow = linear_flow.Flow('initialize_iscsi_connection')
 
     if lun_type == constants.LUN_TYPE:
@@ -2550,7 +2553,8 @@ def initialize_iscsi_connection(lun, lun_type, connector, client,
 def initialize_remote_iscsi_connection(hypermetro_id, connector,
                                        client, configuration):
     store_spec = {'connector': connector,
-                  'lun_type': constants.LUN_TYPE}
+                  'lun_type': constants.LUN_TYPE,
+                  'initiator': connector.get('initiator', '')}
     work_flow = linear_flow.Flow('initialize_remote_iscsi_connection')
 
     work_flow.add(
@@ -2617,7 +2621,10 @@ def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
                              configuration):
     store_spec = {'connector': connector,
                   'lun': lun,
-                  'lun_type': lun_type}
+                  'lun_type': lun_type,
+                  'initiator': huawei_utils.convert_connector_wwns(
+                      connector.get('wwpns', [])
+                  )}
     work_flow = linear_flow.Flow('initialize_fc_connection')
 
     if lun_type == constants.LUN_TYPE:
@@ -2647,7 +2654,10 @@ def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
 def initialize_remote_fc_connection(hypermetro_id, connector, fc_san, client,
                                     configuration):
     store_spec = {'connector': connector,
-                  'lun_type': constants.LUN_TYPE}
+                  'lun_type': constants.LUN_TYPE,
+                  'initiator': huawei_utils.convert_connector_wwns(
+                      connector.get('wwpns', [])
+                  )}
     work_flow = linear_flow.Flow('initialize_remote_fc_connection')
 
     work_flow.add(

@@ -16,12 +16,11 @@
 from oslo_log import log as logging
 from oslo_utils import excutils
 
-from cinder import context
 from cinder import exception
 from cinder.i18n import _
 from cinder import utils
 from cinder.volume.drivers.huawei import constants
-from cinder.volume import qos_specs
+
 
 LOG = logging.getLogger(__name__)
 
@@ -29,62 +28,6 @@ LOG = logging.getLogger(__name__)
 class SmartQos(object):
     def __init__(self, client):
         self.client = client
-
-    @staticmethod
-    def get_qos_by_volume_type(volume_type):
-        # We prefer the qos_specs association
-        # and override any existing extra-specs settings
-        # if present.
-        if not volume_type:
-            return {}
-
-        qos_specs_id = volume_type.get('qos_specs_id')
-        if not qos_specs_id:
-            return {}
-
-        qos = {}
-        ctxt = context.get_admin_context()
-        consumer = qos_specs.get_qos_specs(ctxt, qos_specs_id)['consumer']
-        if consumer == 'front-end':
-            return
-
-        kvs = qos_specs.get_qos_specs(ctxt, qos_specs_id)['specs']
-        LOG.info('The QoS sepcs is: %s.', kvs)
-
-        for k, v in kvs.items():
-            if k not in constants.QOS_SPEC_KEYS:
-                msg = _('Invalid QoS %s specification.') % k
-                LOG.error(msg)
-                raise exception.InvalidInput(reason=msg)
-
-            if k != 'IOType' and int(v) <= 0:
-                msg = _('QoS config is wrong. %s must > 0.') % k
-                LOG.error(msg)
-                raise exception.InvalidInput(reason=msg)
-
-            qos[k.upper()] = v
-
-        if 'IOTYPE' not in qos or qos['IOTYPE'] not in constants.QOS_IOTYPES:
-            msg = _('IOType value must be in %(valid)s.'
-                    ) % {'valid': constants.QOS_IOTYPES}
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-
-        if len(qos) < 2:
-            msg = _('QoS policy must specify IOType and one of QoS specs.')
-            LOG.error(msg)
-            raise exception.InvalidInput(reason=msg)
-
-        for upper_limit in constants.UPPER_LIMIT_KEYS:
-            for lower_limit in constants.LOWER_LIMIT_KEYS:
-                if upper_limit in qos and lower_limit in qos:
-                    msg = (_('QoS policy upper_limit and lower_limit '
-                             'conflict, QoS policy: %(qos_policy)s.')
-                           % {'qos_policy': qos})
-                    LOG.error(msg)
-                    raise exception.InvalidInput(reason=msg)
-
-        return qos
 
     def _is_high_priority(self, qos):
         """Check QoS priority."""

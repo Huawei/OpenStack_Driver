@@ -40,15 +40,19 @@ class HuaweiConf(object):
         self.conf = conf
         self.last_modify_time = None
 
+    def get_xml_info(self):
+        tree = ET.parse(self.conf.cinder_huawei_conf_file,
+                        ET.XMLParser(resolve_entities=False))
+        xml_root = tree.getroot()
+        return tree, xml_root
+
     def update_config_value(self):
         file_time = os.stat(self.conf.cinder_huawei_conf_file).st_mtime
         if self.last_modify_time == file_time:
             return
 
         self.last_modify_time = file_time
-        tree = ET.parse(self.conf.cinder_huawei_conf_file,
-                        ET.XMLParser(resolve_entities=False))
-        xml_root = tree.getroot()
+        tree, xml_root = self.get_xml_info()
         self._encode_authentication(tree, xml_root)
 
         attr_funcs = (
@@ -79,6 +83,7 @@ class HuaweiConf(object):
             self._rollback_speed,
             self._get_local_in_band_or_not,
             self._get_local_storage_sn,
+            self._set_qos_ignored_param,
         )
 
         for f in attr_funcs:
@@ -626,3 +631,12 @@ class HuaweiConf(object):
         storagen_sn = text.strip() if text else None
 
         setattr(self.conf, 'storage_sn', storagen_sn)
+
+    @staticmethod
+    def _set_qos_ignored_param(xml_root):
+        text = xml_root.findtext('LUN/QosIgnoredParam')
+        qos_ignored_params = []
+        if text:
+            qos_ignored_params = text.split(';')
+            qos_ignored_params = list(set(x.strip() for x in qos_ignored_params if x.strip()))
+        setattr(constants, 'QOS_IGNORED_PARAMS', qos_ignored_params)
