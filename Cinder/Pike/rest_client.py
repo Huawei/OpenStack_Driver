@@ -58,6 +58,7 @@ class RestClient(object):
         self.iscsi_info = kwargs.get('iscsi_info',
                                      self.configuration.iscsi_info)
         self.fc_info = kwargs.get('fc_info', self.configuration.fc_info)
+        self.roce_info = kwargs.get('roce_info', self.configuration.roce_info)
         self.iscsi_default_target_ip = kwargs.get(
             'iscsi_default_target_ip',
             self.configuration.iscsi_default_target_ip)
@@ -840,7 +841,7 @@ class RestClient(object):
         host_id = huawei_utils.get_host_id(self, host_name)
         new_alua_info = {}
         if self.is_dorado_v6:
-            info = self.iscsi_info or self.fc_info
+            info = self.iscsi_info or self.fc_info or self.roce_info
             new_alua_info = self._find_new_alua_info(
                 info, host_name, initiator)
         if host_id:
@@ -2992,3 +2993,190 @@ class RestClient(object):
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, 'Cancel rollback snapshot %s error.'
                                  % snapshot_id)
+
+    def ensure_roceini_added(self, initiator_name, host_id):
+        # Check and associate RoCE initiator to host on array
+        initiator = self._get_roceini_by_id(initiator_name)
+
+        if not initiator:
+            self._add_roceini_to_array(initiator_name)
+            self._associate_roceini_to_host(initiator_name, host_id)
+            return
+
+        if initiator.get('ISFREE') == "true":
+            self._associate_roceini_to_host(initiator_name, host_id)
+            return
+
+        # if initiator was associated to another host
+        if initiator.get("PARENTID") != host_id:
+            msg = (_("Initiator %(ini)s has been added to another host "
+                     "%(host)s.") % {"ini": initiator_name,
+                                     "host": initiator.get('PARENTNAME')})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+    def _get_roceini_by_id(self, nqn):
+        """Get RoCE initiator from array."""
+        url = '/NVMe_over_RoCE_initiator/%s' % nqn
+        result = self.call(url, None, "GET")
+
+        if result.get('error', {}).get('code') == constants.FC_INITIATOR_NOT_EXIST:
+            LOG.warning('RoCE NQN %s not exist.', nqn)
+            return {}
+        self._assert_rest_result(result, 'get RoCE NQN %s error.' % nqn)
+
+        return result.get("data", {})
+
+    def _add_roceini_to_array(self, nqn):
+        """Add a new RoCE initiator to storage device."""
+        url = "/NVMe_over_RoCE_initiator"
+        data = {"ID": nqn}
+        result = self.call(url, data, "POST")
+        if result.get('error', {}).get('code') == constants.OBJECT_ALREADY_EXIST:
+            LOG.warning('RoCE NQN %s has already exist in array.', nqn)
+        else:
+            self._assert_rest_result(
+                result, _('Add RoCE initiator %s to array error.' % nqn))
+
+    def _associate_roceini_to_host(self, nqn, host_id):
+        """Associate RoCE initiator with the host."""
+        url = "/host/create_associate"
+        data = {"ASSOCIATEOBJTYPE": constants.NVME_ROCE_INITIATOR_TYPE,
+                "ID": host_id,
+                "ASSOCIATEOBJID": nqn}
+        result = self.call(url, data, "PUT")
+        self._assert_rest_result(
+            result, _("Associate RoCE initiator %(ini)s to host %(host)s "
+                      "error." % {"ini": nqn, "host": host_id}))
+
+    def is_roce_initiator_associated_to_host(self, initiator_name, host_id):
+        initiator = self._get_roceini_by_id(initiator_name)
+        if not initiator or initiator.get('ISFREE') == "true":
+            return False
+
+        if initiator.get('PARENTID') == host_id:
+            return True
+        else:
+            msg = _("Initiator %(ini)s has been added to host "
+                    "%(host)s.") % {"ini": initiator_name,
+                                    "host": initiator.get('PARENTID')}
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+    def remove_roce_initiator_from_host(self, initiator_name, host_id):
+        url = "/host/remove_associate"
+        data = {"ID": host_id,
+                "ASSOCIATEOBJTYPE": constants.NVME_ROCE_INITIATOR_TYPE,
+                "ASSOCIATEOBJID": initiator_name}
+        result = self.call(url, data, "PUT")
+        self._assert_rest_result(result,
+                                 _('Remove RoCE initiator from host error.'))
+
+    def get_roce_params(self, connector):
+        """Get target ROCE params, including IP."""
+        host_nqn = connector.get('host_nqn')
+        host_name = connector.get('host')
+        target_ips = self._get_roce_target_ips(host_nqn, host_name)
+
+        logic_ports = self.get_roce_logical_ports()
+        result = []
+        for ip in target_ips:
+            if self._is_roce_target_ip_in_array(ip, logic_ports):
+                format_ip = netaddr.IPAddress(ip)
+                if format_ip.version == 6:
+                    ip = str(format_ip.format(dialect=netaddr.ipv6_compact))
+                    ip = '[' + ip + ']'
+                result.append(ip)
+
+        if not result:
+            err_msg = _('There is no any logic ips exist on array of the '
+                        'configured target_ip %s in conf file' % target_ips)
+            LOG.error(err_msg)
+            raise exception.VolumeBackendAPIException(data=err_msg)
+
+        return result
+
+    def _get_roce_target_ips(self, initiator, host_name):
+        target_ips = self._get_target_ips_by_initiator_name(initiator)
+
+        if not target_ips:
+            target_ips = self._get_target_ips_by_host_name(host_name)
+
+        if not target_ips:
+            msg = (_(
+                'get_roce_params: Failed to get target IP '
+                'for host %(host)s, please check config file.')
+                   % {'host': host_name})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        LOG.info('Get the default ip: %s.', target_ips)
+        return target_ips
+
+    def _get_roce_logic_ports(self, start, end, params):
+        url = ("/lif?range=[%(start)s-%(end)s]"
+               % {"start": six.text_type(start), "end": six.text_type(end)})
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, _('get RoCE Logic Ports error.'))
+        return result.get('data', [])
+
+    def get_roce_logical_ports(self):
+        all_logic_ports = self._get_info_by_range(
+            self._get_roce_logic_ports)
+        return all_logic_ports
+
+    def _is_roce_target_ip_in_array(self, ip, logic_ports):
+        for logic_port in logic_ports:
+            if logic_port.get('ADDRESSFAMILY') == constants.ADDRESS_FAMILY_IPV4:
+                if ip == logic_port.get('IPV4ADDR'):
+                    return True
+            else:
+                if self._is_same_ipv6(ip, logic_port.get('IPV6ADDR')):
+                    return True
+
+        return False
+
+    @staticmethod
+    def _is_same_ipv6(left_ip, right_ip):
+        format_left_ip = str(
+            netaddr.IPAddress(left_ip).format(dialect=netaddr.ipv6_compact))
+        format_right_ip = str(
+            netaddr.IPAddress(right_ip).format(dialect=netaddr.ipv6_compact))
+        if format_left_ip == format_right_ip:
+            return True
+
+        return False
+
+    @staticmethod
+    def _get_target_ip_list(roce_info, target_ips):
+        for target_ip in roce_info.get('TargetIP').split():
+            if target_ip.strip():
+                target_ips.append(target_ip)
+
+    def _get_target_ips_by_initiator_name(self, initiator):
+        target_ips = []
+        for info in self.roce_info:
+            config_initiator = info.get('Name')
+            if not config_initiator:
+                continue
+            if config_initiator == initiator:
+                self._get_target_ip_list(info, target_ips)
+        return target_ips
+
+    def _get_target_ips_by_host_name(self, host_name):
+        target_ips = []
+        temp_target_ips = []
+        for info in self.roce_info:
+            config_host_name = info.get('HostName')
+            if not config_host_name:
+                continue
+            if config_host_name == '*':
+                self._get_target_ip_list(info, temp_target_ips)
+            elif re.search(config_host_name, host_name):
+                self._get_target_ip_list(info, target_ips)
+                break
+
+        if not target_ips and temp_target_ips:
+            target_ips = temp_target_ips
+
+        return target_ips

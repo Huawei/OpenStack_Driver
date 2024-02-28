@@ -90,6 +90,7 @@ class HuaweiConf(object):
                           self._force_delete_volume,
                           self._iscsi_default_target_ip,
                           self._iscsi_info,
+                          self._roce_info,
                           self._fc_info,
                           self._ssl_cert_path,
                           self._ssl_cert_verify,
@@ -474,6 +475,8 @@ class HuaweiConf(object):
                 dev.get('iscsi_info'))
             dev_config['fc_info'] = self._parse_rmt_iscsi_info(
                 dev.get('fc_info'))
+            dev_config['roce_info'] = self._parse_rmt_iscsi_info(
+                dev.get('roce_info'))
             dev_config['iscsi_default_target_ip'] = (
                 dev['iscsi_default_target_ip'].split(';')
                 if 'iscsi_default_target_ip' in dev
@@ -507,6 +510,8 @@ class HuaweiConf(object):
                 dev.get('iscsi_info'))
             dev_config['fc_info'] = self._parse_rmt_iscsi_info(
                 dev.get('fc_info'))
+            dev_config['roce_info'] = self._parse_rmt_iscsi_info(
+                dev.get('roce_info'))
             dev_config['iscsi_default_target_ip'] = (
                 dev['iscsi_default_target_ip'].split(';')
                 if 'iscsi_default_target_ip' in dev
@@ -529,6 +534,7 @@ class HuaweiConf(object):
             'storage_pools': self.conf.storage_pools,
             'iscsi_info': self.conf.iscsi_info,
             'fc_info': self.conf.fc_info,
+            'roce_info': self.conf.roce_info,
             'iscsi_default_target_ip': self.conf.iscsi_default_target_ip,
             'in_band_or_not': self.conf.in_band_or_not,
             'storage_sn': self.conf.storage_sn,
@@ -679,3 +685,20 @@ class HuaweiConf(object):
             qos_ignored_params = text.split(';')
             qos_ignored_params = list(set(x.strip() for x in qos_ignored_params if x.strip()))
         setattr(constants, 'QOS_IGNORED_PARAMS', qos_ignored_params)
+
+    def _roce_info(self, xml_root):
+        nodes = xml_root.findall('RoCE/Initiator')
+        if nodes is None:
+            setattr(self.conf, 'roce_info', [])
+            return
+
+        roce_info = []
+        for node in nodes:
+            props = {}
+            for item in node.items():
+                props[item[0].strip()] = item[1].strip()
+
+            roce_info.append(props)
+
+        self._check_hostname_regex_config(roce_info)
+        setattr(self.conf, 'roce_info', roce_info)
