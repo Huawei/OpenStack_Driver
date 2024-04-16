@@ -81,7 +81,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "2.6.3"
+    VERSION = "2.6.4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -3642,3 +3642,226 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
                 'data': {'target_wwn': tgt_port_wwns,
                          'initiator_target_map': init_targ_map}}
         return info, portg_id
+
+
+class HuaweiROCEDriver(HuaweiBaseDriver):
+    """RoCE driver for Huawei storage arrays.
+
+    Version history:
+        2.6.4 - start to support RoCE.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super(HuaweiROCEDriver, self).__init__(*args, **kwargs)
+
+    def get_volume_stats(self, refresh=False):
+        """Get volume status."""
+        data = HuaweiBaseDriver.get_volume_stats(self, refresh=False)
+        backend_name = self.configuration.safe_get('volume_backend_name')
+        data['volume_backend_name'] = backend_name or self.__class__.__name__
+        data['storage_protocol'] = 'nvmeof'
+        data['driver_version'] = self.VERSION
+        data['vendor_name'] = 'Huawei'
+        return data
+
+    @coordination.synchronized('huawei-mapping-{connector[host]}')
+    def initialize_connection(self, volume, connector):
+        """Map a volume to a host and return target RoCE information."""
+        self._check_roce_params(volume, connector)
+
+        # Attach local lun.
+        roce_info = self._initialize_connection(volume, connector)
+
+        # Attach remote lun if exists.
+        metadata = huawei_utils.get_lun_metadata(volume)
+        LOG.info("Attach Volume, metadata is: %s.", metadata)
+        if metadata.get('hypermetro'):
+            try:
+                rmt_roce_info = (
+                    self._initialize_connection(volume, connector, False))
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    self._terminate_connection(volume, connector)
+
+            roce_info.get('data').get('target_portals').extend(
+                rmt_roce_info.get('data').get('target_portals'))
+            roce_info.get('data').get('target_luns').extend(
+                rmt_roce_info.get('data').get('target_luns'))
+
+        LOG.info('initialize_common_connection_roce, '
+                 'return data is: %s.', roce_info)
+        return roce_info
+
+    def _initialize_connection(self, volume, connector, local=True):
+        LOG.info('Initialize RoCE connection for volume %(id)s, '
+                 'connector info %(conn)s. array is in %(location)s.',
+                 {'id': volume.id, 'conn': connector,
+                  'location': 'local' if local else 'remote'})
+
+        host_nqn = connector.get("host_nqn")
+
+        client = self.client if local else self.rmt_client
+
+        lun_id, lun_type = self.get_lun_id_and_type(
+            volume, constants.VOLUME_NOT_EXISTS_RAISE, local)
+        lun_info = client.get_lun_info(lun_id, lun_type)
+
+        target_ips = client.get_roce_params(connector)
+
+        host_id = client.add_host_with_check(
+            connector.get('host'), self.is_dorado_v6, host_nqn)
+
+        try:
+            client.ensure_roceini_added(host_nqn, host_id)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.remove_host_with_check(host_id)
+
+        hostgroup_id = client.add_host_to_hostgroup(host_id)
+
+        metadata = huawei_utils.get_lun_metadata(volume)
+        hypermetro_lun = metadata.get('hypermetro')
+
+        map_info = client.do_mapping(
+            lun_info, hostgroup_id, host_id,
+            lun_type=lun_type, hypermetro_lun=hypermetro_lun)
+        host_lun_id = client.get_host_lun_id(host_id, lun_info, lun_type)
+        LOG.info('initialize_connection, host lun id is: %(id)s. '
+                 'View info is %(view)s.',
+                 {'id': host_lun_id, 'view': map_info})
+        host_lun_id = int(host_lun_id)
+        mapping_info = {
+            'target_portals': ['%s:4420' % ip for ip in target_ips],
+            'target_luns': [host_lun_id] * len(target_ips),
+            'transport_type': 'rdma',
+            'host_nqn': host_nqn,
+            'discard': True,
+            'volume_nguid': lun_info.get("NGUID")
+        }
+        conn = {
+            'driver_volume_type': 'nvmeof',
+            'data': mapping_info
+        }
+        LOG.info('Initialize RoCE connection successfully: %s.', conn)
+        return conn
+
+    @coordination.synchronized('huawei-mapping-{connector[host]}')
+    def terminate_connection(self, volume, connector, **kwargs):
+        """Delete map between a volume and a host."""
+        self._check_roce_params(volume, connector)
+
+        metadata = huawei_utils.get_lun_metadata(volume)
+        LOG.info("terminate_connection, metadata is: %s.", metadata)
+        self._terminate_connection(volume, connector)
+
+        if metadata.get('hypermetro'):
+            self._terminate_connection(volume, connector, False)
+
+        LOG.info('terminate_connection success.')
+
+    def _terminate_connection(self, volume, connector, local=True):
+        LOG.info('_terminate_connection, detach %(local)s volume.',
+                 {'local': 'local' if local else 'remote'})
+
+        client = self.client if local else self.rmt_client
+
+        lun_id, lun_type = self.get_lun_id_and_type(
+            volume, constants.VOLUME_NOT_EXISTS_WARN, local)
+
+        initiator_name = connector.get('host_nqn')
+        host_name = connector.get('host')
+
+        LOG.info('terminate_connection: initiator name: %(ini)s, LUN ID: %('
+                 'lunid)s, lun type: %(lun_type)s, connector: %('
+                 'connector)s.', {'ini': initiator_name, 'lunid': lun_id,
+                                  'lun_type': lun_type,
+                                  'connector': connector})
+
+        lungroup_id = None
+        portgroup_id = None
+        view_id = None
+
+        host_id = huawei_utils.get_host_id(client, host_name)
+        if host_id:
+            mapping_view_name = constants.MAPPING_VIEW_PREFIX + host_id
+            view_id = client.find_mapping_view(mapping_view_name)
+            if view_id:
+                lungroup_id = client.find_lungroup_from_map(view_id)
+                portgroup_id = client.get_portgroup_by_view(view_id)
+
+        if lun_id and lungroup_id:
+            lungroup_ids = client.get_lungroupids_by_lunid(lun_id, lun_type)
+            if lungroup_id in lungroup_ids:
+                client.remove_lun_from_lungroup(lungroup_id, lun_id, lun_type)
+            else:
+                LOG.warning("LUN is not in lungroup. LUN ID: %(lun_id)s. "
+                            "Lungroup id: %(lungroup_id)s.",
+                            {"lun_id": lun_id, "lungroup_id": lungroup_id})
+        if self.configuration.retain_storage_mapping:
+            return
+
+        mapping_param = {'host_id': host_id, 'initiator_name': initiator_name,
+                         'lungroup_id': lungroup_id, 'view_id': view_id,
+                         'portgroup_id': portgroup_id}
+        self._delete_storage_mapping(client, mapping_param)
+
+    def _delete_storage_mapping(self, client, mapping_param):
+        left_lun_num = -1
+        lungroup_id = mapping_param.get('lungroup_id')
+        view_id = mapping_param.get('view_id')
+        portgroup_id = mapping_param.get('portgroup_id')
+        initiator_name = mapping_param.get('initiator_name')
+        host_id = mapping_param.get('host_id')
+        if lungroup_id:
+            left_lun_num = client.get_obj_count_from_lungroup(lungroup_id)
+        if view_id and (int(left_lun_num) <= 0):
+            if portgroup_id and client.is_portgroup_associated_to_view(
+                    view_id, portgroup_id):
+                client.delete_portgroup_mapping_view(view_id, portgroup_id)
+
+            if client.lungroup_associated(view_id, lungroup_id):
+                client.delete_lungroup_mapping_view(view_id, lungroup_id)
+
+            client.delete_lungroup(lungroup_id)
+
+            if client.is_roce_initiator_associated_to_host(
+                    initiator_name, host_id):
+                client.remove_roce_initiator_from_host(initiator_name, host_id)
+
+            hostgroup_name = constants.HOSTGROUP_PREFIX + host_id
+            hostgroup_id = client.find_hostgroup(hostgroup_name)
+            if hostgroup_id:
+                if client.hostgroup_associated(view_id, hostgroup_id):
+                    client.delete_hostgoup_mapping_view(view_id, hostgroup_id)
+                client.remove_host_from_hostgroup(hostgroup_id, host_id)
+                client.delete_hostgroup(hostgroup_id)
+            client.remove_host(host_id)
+
+            client.delete_mapping_view(view_id)
+
+    def _check_roce_params(self, volume, connector):
+        if not volume or not connector:
+            msg = _(
+                '%(param)s is none.'
+                % {'param': 'volume' if not volume else 'connector'})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        if not volume.id:
+            msg = _(
+                'volume param is error. volume is %(volume)s.'
+                % {'volume': volume})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        if not connector.get('host_nqn') or not connector.get('host'):
+            msg = _(
+                'connector param is error. connector is %(connector)s.'
+                % {'connector': connector})
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        if not self.is_dorado_v6:
+            msg = _("Current storage doesn't support RoCE.")
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)

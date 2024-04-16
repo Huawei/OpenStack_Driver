@@ -84,6 +84,7 @@ class HuaweiConf(object):
             self._get_local_in_band_or_not,
             self._get_local_storage_sn,
             self._set_qos_ignored_param,
+            self._get_rest_client_semaphore,
         )
 
         for f in attr_funcs:
@@ -640,3 +641,15 @@ class HuaweiConf(object):
             qos_ignored_params = text.split(';')
             qos_ignored_params = list(set(x.strip() for x in qos_ignored_params if x.strip()))
         setattr(constants, 'QOS_IGNORED_PARAMS', qos_ignored_params)
+
+    def _get_rest_client_semaphore(self, xml_root):
+        semaphore = xml_root.findtext('Storage/Semaphore')
+        if not semaphore or not semaphore.strip():
+            setattr(self.conf, 'semaphore', constants.DEFAULT_SEMAPHORE)
+        elif semaphore.isdigit() and int(semaphore) > 0:
+            setattr(self.conf, 'semaphore', int(semaphore))
+        else:
+            msg = _("Semaphore configured error. The semaphore must be an "
+                    "integer and must be greater than zero")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)

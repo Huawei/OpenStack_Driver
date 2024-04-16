@@ -55,7 +55,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.6.3"
+    VERSION = "2.6.4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -86,7 +86,8 @@ class HuaweiBaseDriver(object):
                 'ssl_cert_verify': self.configuration.ssl_cert_verify,
                 'ssl_cert_path': self.configuration.ssl_cert_path,
                 'in_band_or_not': self.configuration.in_band_or_not,
-                'storage_sn': self.configuration.storage_sn
+                'storage_sn': self.configuration.storage_sn,
+                'semaphore': self.configuration.semaphore
             }
         self.local_cli = rest_client.RestClient(config_dict)
         self.local_cli.login()
@@ -97,11 +98,17 @@ class HuaweiBaseDriver(object):
             self.support_capability[c] = False
 
         if self.configuration.hypermetro:
+            self.configuration.hypermetro.update(
+                {'semaphore': self.configuration.semaphore}
+            )
             self.hypermetro_rmt_cli = rest_client.RestClient(
                 self.configuration.hypermetro)
             self.hypermetro_rmt_cli.login()
 
         if self.configuration.replication:
+            self.configuration.replication.update(
+                {'semaphore': self.configuration.semaphore}
+            )
             self.replication_rmt_cli = rest_client.RestClient(
                 self.configuration.replication)
             self.replication_rmt_cli.login()
