@@ -38,10 +38,6 @@ def _error_code(result):
     return result['error']['code']
 
 
-# To limit the requests concurrently sent to array
-_semaphore = threading.Semaphore(20)
-
-
 def obj_operation_wrapper(func):
     @functools.wraps(func)
     def wrapped(self, url_format=None, **kwargs):
@@ -49,7 +45,7 @@ def obj_operation_wrapper(func):
         if url_format:
             url += url_format % kwargs
 
-        _semaphore.acquire()
+        self.semaphore.acquire()
 
         try:
             result = func(self, url, **kwargs)
@@ -57,7 +53,7 @@ def obj_operation_wrapper(func):
             return {"error": {"code": exc.response.status_code,
                               "description": six.text_type(exc)}}
         finally:
-            _semaphore.release()
+            self.semaphore.release()
 
         return result
 
@@ -67,6 +63,7 @@ def obj_operation_wrapper(func):
 class CommonObject(object):
     def __init__(self, client):
         self.client = client
+        self.semaphore = client.semaphore
 
     @obj_operation_wrapper
     def post(self, url, **kwargs):
@@ -1403,12 +1400,9 @@ def rest_operation_wrapper(func):
         need_relogin = False
 
         if not kwargs.get('log_filter'):
-            LOG.info('\nURL: %(url)s\n'
-                     'Method: %(method)s\n'
-                     'Data: %(data)s\n',
+            LOG.info('URL: %(url)s, Method: %(method)s, Data: %(data)s,',
                      {'url': (self._login_url or '') + url,
-                      'method': func.__name__,
-                      'data': kwargs.get('data')})
+                      'method': func.__name__, 'data': kwargs.get('data')})
 
         with self._session_lock.read_lock():
             if self._login_url:
@@ -1451,8 +1445,10 @@ def rest_operation_wrapper(func):
 
         r.raise_for_status()
         result = r.json()
+        response_time = r.elapsed.total_seconds()
         if not kwargs.get('log_filter'):
-            LOG.info('Response: %s', result)
+            LOG.info('Response: %s, Response duration time is %s',
+                     result, response_time)
         return result
 
     return wrapped
@@ -1468,6 +1464,9 @@ class RestClient(object):
         self.cert_path = config_dict.get('ssl_cert_path')
         self.in_band_or_not = config_dict.get('in_band_or_not')
         self.storage_sn = config_dict.get('storage_sn')
+        # To limit the requests concurrently sent to array
+        self.semaphore = threading.Semaphore(
+            config_dict.get('semaphore', constants.DEFAULT_SEMAPHORE))
 
         self._login_url = None
         self._login_device_id = None
