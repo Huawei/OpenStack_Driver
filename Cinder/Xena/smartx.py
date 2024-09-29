@@ -29,6 +29,7 @@ class SmartQos(object):
     def __init__(self, client, is_dorado_v6=False):
         self.client = client
         self.is_dorado_v6 = is_dorado_v6
+        self.qos_id = None
 
     def _check_qos_consistency(self, policy, qos):
         for key in [k.upper() for k in constants.QOS_SPEC_KEYS]:
@@ -77,12 +78,13 @@ class SmartQos(object):
             return
 
         self.remove(qos_id, lun_id, qos_info)
-        self.add(new_qos, lun_id)
+        self.qos_id = self.add(new_qos, lun_id)
 
 
 class SmartPartition(object):
     def __init__(self, client):
         self.client = client
+        self.partition_id = None
 
     def add(self, partitionname, lun_id):
         partition_id = self.client.get_partition_id_by_name(partitionname)
@@ -103,7 +105,7 @@ class SmartPartition(object):
             return
 
         self.remove(partition_id, lun_id)
-        self.add(partitionname, lun_id)
+        self.partition_id = self.add(partitionname, lun_id)
 
     def check_partition_valid(self, partitionname):
         partition_id = self.client.get_partition_id_by_name(partitionname)
@@ -116,6 +118,7 @@ class SmartPartition(object):
 class SmartCache(object):
     def __init__(self, client):
         self.client = client
+        self.cache_id = None
 
     def add(self, cachename, lun_id):
         cache_id = self.client.get_cache_id_by_name(cachename)
@@ -136,7 +139,7 @@ class SmartCache(object):
             return
 
         self.remove(cache_id, lun_id)
-        self.add(cachename, lun_id)
+        self.cache_id = self.add(cachename, lun_id)
 
     def check_cache_valid(self, cachename):
         cache_id = self.client.get_cache_id_by_name(cachename)

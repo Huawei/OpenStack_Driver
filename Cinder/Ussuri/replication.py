@@ -83,8 +83,10 @@ class BaseReplicationOp(object):
         self._sync(rep_id, client)
 
     def split(self, rep_id, rep_info=None):
-        expect_status = (constants.REPLICA_RUNNING_STATUS_SPLIT,
-                         constants.REPLICA_RUNNING_STATUS_INTERRUPTED)
+        expect_status = (
+            constants.REPLICA_RUNNING_STATUS_SPLIT,
+            constants.REPLICA_RUNNING_STATUS_INTERRUPTED
+        )
         info = rep_info or self.get_info(rep_id)
         if (info.get('ISEMPTY') == 'true' or
                 info['RUNNINGSTATUS'] in expect_status):
@@ -303,11 +305,12 @@ class ReplicationManager(object):
                   'replication model: %(model)s.'),
                  {'local_lun_id': local_lun_id, 'model': replica_model})
 
-        store_spec = {'local_lun_id': local_lun_id,
-                      'lun_params': lun_params,
-                      'replica_model': replica_model,
-                      'rmt_pool': self.configs['storage_pools'][0],
-                      }
+        store_spec = {
+            'local_lun_id': local_lun_id,
+            'lun_params': lun_params,
+            'replica_model': replica_model,
+            'rmt_pool': self.configs['storage_pools'][0],
+        }
 
         work_flow = linear_flow.Flow('create_replication')
         work_flow.add(
@@ -459,11 +462,13 @@ class ReplicationManager(object):
     def create_group(self, group_id, replica_model):
         LOG.info("Create replication group %s.", group_id)
         group_name = huawei_utils.encode_name(group_id)
-        params = {'NAME': group_name,
-                  'DESCRIPTION': group_id,
-                  'RECOVERYPOLICY': '1',
-                  'REPLICATIONMODEL': replica_model,
-                  'SPEED': self.configs['sync_speed']}
+        params = {
+            'NAME': group_name,
+            'DESCRIPTION': group_id,
+            'RECOVERYPOLICY': '1',
+            'REPLICATIONMODEL': replica_model,
+            'SPEED': self.configs['sync_speed']
+        }
 
         if replica_model == constants.REPLICA_ASYNC_MODEL:
             params['SYNCHRONIZETYPE'] = '2'
@@ -503,9 +508,9 @@ class ReplicationManager(object):
                         group_id)
             return
 
-        self.group_op.split(group_info['ID'], group_info)
-        self._remove_volumes_from_group(group_info['ID'], volumes)
-        self.group_op.delete(group_info['ID'])
+        self.group_op.split(group_info[constants.ID_UPPER], group_info)
+        self._remove_volumes_from_group(group_info[constants.ID_UPPER], volumes)
+        self.group_op.delete(group_info[constants.ID_UPPER])
 
     def update_group(self, group_id, add_volumes, remove_volumes):
         LOG.info("Update replication group %s.", group_id)
@@ -516,10 +521,10 @@ class ReplicationManager(object):
                         group_id)
             return
 
-        self.group_op.split(group_info['ID'], group_info)
-        self._add_volumes_to_group(group_info['ID'], add_volumes)
-        self._remove_volumes_from_group(group_info['ID'], remove_volumes)
-        self.group_op.sync(group_info['ID'])
+        self.group_op.split(group_info[constants.ID_UPPER], group_info)
+        self._add_volumes_to_group(group_info[constants.ID_UPPER], add_volumes)
+        self._remove_volumes_from_group(group_info[constants.ID_UPPER], remove_volumes)
+        self.group_op.sync(group_info[constants.ID_UPPER])
 
     def add_replication_to_group(self, group_id, pair_id):
         group_info = huawei_utils.get_replication_group(
@@ -529,7 +534,7 @@ class ReplicationManager(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        self.group_op.split(group_info['ID'], group_info)
+        self.group_op.split(group_info[constants.ID_UPPER], group_info)
         self.pair_op.split(pair_id)
-        self.group_op.add_pair_to_group(group_info['ID'], pair_id)
-        self.group_op.sync(group_info['ID'])
+        self.group_op.add_pair_to_group(group_info[constants.ID_UPPER], pair_id)
+        self.group_op.sync(group_info[constants.ID_UPPER])

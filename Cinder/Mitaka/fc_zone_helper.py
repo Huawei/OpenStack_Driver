@@ -254,7 +254,7 @@ class FCZoneHelper(object):
             portgroup_id = self.client.create_portg(portgroup_name)
 
         for port in new_ports:
-            self.client.add_port_to_portg(portgroup_id, port_map[port]['id'])
+            self.client.add_port_to_portg(portgroup_id, port_map.get(port, {}).get('id'))
 
         LOG.debug("build_ini_targ_map: Port group name: %(portg_name)s, "
                   "init_targ_map: %(map)s, target_wwns: %(wwns)s.",

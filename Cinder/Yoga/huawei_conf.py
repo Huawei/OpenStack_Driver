@@ -1,4 +1,4 @@
-# Copyright (c) 2016 Huawei Technologies Co., Ltd.
+# Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -30,6 +30,7 @@ import six
 
 from cinder import exception
 from cinder.i18n import _
+from cinder.volume.drivers.huawei import cipher
 from cinder.volume.drivers.huawei import constants
 
 LOG = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class HuaweiConf(object):
             self._ssl_cert_verify,
             self._iscsi_info,
             self._fc_info,
+            self._roce_info,
             self._hyper_pair_sync_speed,
             self._replication_pair_sync_speed,
             self._hypermetro_devices,
@@ -84,30 +86,33 @@ class HuaweiConf(object):
             self._get_local_in_band_or_not,
             self._get_local_storage_sn,
             self._set_qos_ignored_param,
+            self._get_rest_client_semaphore,
+            self._san_protocol,
         )
 
         for f in attr_funcs:
             f(xml_root)
 
     def _encode_authentication(self, tree, xml_root):
+        node_start_text = '!$$$'
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
         vstore_node = xml_root.find('Storage/vStoreName')
 
         need_encode = False
-        if name_node is not None and not name_node.text.startswith('!$$$'):
+        if name_node is not None and not name_node.text.startswith(node_start_text):
             encoded = base64.b64encode(six.b(name_node.text)).decode()
-            name_node.text = '!$$$' + encoded
+            name_node.text = node_start_text + encoded
             need_encode = True
 
-        if pwd_node is not None and not pwd_node.text.startswith('!$$$'):
+        if pwd_node is not None and not pwd_node.text.startswith(node_start_text):
             encoded = base64.b64encode(six.b(pwd_node.text)).decode()
-            pwd_node.text = '!$$$' + encoded
+            pwd_node.text = node_start_text + encoded
             need_encode = True
 
-        if vstore_node is not None and not vstore_node.text.startswith('!$$$'):
+        if vstore_node is not None and not vstore_node.text.startswith(node_start_text):
             encoded = base64.b64encode(six.b(vstore_node.text)).decode()
-            vstore_node.text = '!$$$' + encoded
+            vstore_node.text = node_start_text + encoded
             need_encode = True
 
         if need_encode:
@@ -141,7 +146,7 @@ class HuaweiConf(object):
             raise exception.InvalidInput(reason=msg)
 
         pwd = base64.b64decode(six.b(text[4:])).decode()
-        setattr(self.conf, 'san_password', pwd)
+        setattr(self.conf, 'san_password', cipher.decrypt_cipher(pwd))
 
     def _san_vstore(self, xml_root):
         vstore = None
@@ -189,17 +194,19 @@ class HuaweiConf(object):
                 'maxIOPS', 'minIOPS',
                 'maxBandWidth', 'minBandWidth',
                 'burstIOPS', 'burstBandWidth', 'burstTime',
-                'IOType')
+                'IOType'
+            )
             extra_constants['QOS_IOTYPES'] = ('2',)
-            extra_constants['SUPPORT_LUN_TYPES'] = ('Thin',)
-            extra_constants['DEFAULT_LUN_TYPE'] = 'Thin'
+            extra_constants['SUPPORT_LUN_TYPES'] = (constants.THIN,)
+            extra_constants['DEFAULT_LUN_TYPE'] = constants.THIN
             extra_constants['SUPPORT_CLONE_MODE'] = ('fastclone', 'luncopy')
         else:
             extra_constants['QOS_SPEC_KEYS'] = (
                 'maxIOPS', 'minIOPS', 'minBandWidth',
-                'maxBandWidth', 'latency', 'IOType')
+                'maxBandWidth', 'latency', 'IOType'
+            )
             extra_constants['QOS_IOTYPES'] = ('0', '1', '2')
-            extra_constants['SUPPORT_LUN_TYPES'] = ('Thick', 'Thin')
+            extra_constants['SUPPORT_LUN_TYPES'] = ('Thick', constants.THIN)
             extra_constants['DEFAULT_LUN_TYPE'] = 'Thick'
             extra_constants['SUPPORT_CLONE_MODE'] = ('luncopy',)
 
@@ -296,41 +303,17 @@ class HuaweiConf(object):
         iscsi_info = {}
         text = xml_root.findtext('iSCSI/DefaultTargetIP')
         if text:
-            iscsi_info['default_target_ips'] = [
-                ip.strip() for ip in text.split() if ip.strip()]
-
-        initiators = {}
+            iscsi_info['default_target_ips'] = [ip.strip() for ip in text.split() if ip.strip()]
         nodes = xml_root.findall('iSCSI/Initiator')
-        for node in nodes or []:
-            if 'Name' in node.attrib:
-                initiators[node.attrib['Name']] = node.attrib
-            if 'HostName' in node.attrib:
-                initiators[node.attrib['HostName']] = node.attrib
-
-        if nodes and not initiators:
-            msg = _("Name or HostName must be set one")
-            LOG.error(msg)
-            raise exception.InvalidInput(msg)
-
+        initiators = self._initiator_info(nodes)
         iscsi_info['initiators'] = initiators
         self._check_hostname_regex_config(iscsi_info)
         setattr(self.conf, 'iscsi_info', iscsi_info)
 
     def _fc_info(self, xml_root):
         fc_info = {}
-        initiators = {}
         nodes = xml_root.findall('FC/Initiator')
-        for node in nodes or []:
-            if 'Name' in node.attrib:
-                initiators[node.attrib['Name']] = node.attrib
-            if 'HostName' in node.attrib:
-                initiators[node.attrib['HostName']] = node.attrib
-
-        if nodes and not initiators:
-            msg = _("Name or HostName must be set one")
-            LOG.error(msg)
-            raise exception.InvalidInput(msg)
-
+        initiators = self._initiator_info(nodes)
         fc_info['initiators'] = initiators
         self._check_hostname_regex_config(fc_info)
         setattr(self.conf, 'fc_info', fc_info)
@@ -338,11 +321,11 @@ class HuaweiConf(object):
     def _check_hostname_regex_config(self, info):
         for item in info['initiators'].keys():
             ini = info['initiators'][item]
-            if ini.get("HostName"):
+            if ini.get(constants.HOSTNAME):
                 try:
-                    if ini.get("HostName") == '*':
+                    if ini.get(constants.HOSTNAME) == '*':
                         continue
-                    re.compile(ini['HostName'])
+                    re.compile(ini[constants.HOSTNAME])
                 except Exception as err:
                     msg = _('Invalid initiator configuration. '
                             'Reason: %s.') % err
@@ -421,7 +404,7 @@ class HuaweiConf(object):
             config = {
                 'san_address': dev['san_address'].split(';'),
                 'san_user': dev['san_user'],
-                'san_password': dev['san_password'],
+                'san_password': cipher.decrypt_cipher(dev['san_password']),
                 'vstore_name': dev.get('vstore_name'),
                 'ssl_cert_verify': ssl_verify,
                 'ssl_cert_path': dev.get('ssl_cert_path'),
@@ -431,11 +414,13 @@ class HuaweiConf(object):
                     dev, 'iscsi_info'),
                 'fc_info': self._parse_remote_initiator_info(
                     dev, 'fc_info'),
+                'roce_info': self._parse_remote_initiator_info(
+                    dev, ini_type='roce_info'),
                 'sync_speed': self.conf.hyper_sync_speed,
-                'metro_sync_completed': dev['metro_sync_completed']
-                if 'metro_sync_completed' in dev else "True",
-                'in_band_or_not': dev['in_band_or_not'].lower() == 'true'
-                if 'in_band_or_not' in dev else False,
+                constants.METRO_SYNC_COMPLETED: dev[constants.METRO_SYNC_COMPLETED]
+                if constants.METRO_SYNC_COMPLETED in dev else "True",
+                constants.IN_BAND_OR_NOT: dev[constants.IN_BAND_OR_NOT].lower() == 'true'
+                if constants.IN_BAND_OR_NOT in dev else False,
                 'storage_sn': dev.get('storage_sn')
             }
 
@@ -452,7 +437,7 @@ class HuaweiConf(object):
                 'backend_id': dev['backend_id'],
                 'san_address': dev['san_address'].split(';'),
                 'san_user': dev['san_user'],
-                'san_password': dev['san_password'],
+                'san_password': cipher.decrypt_cipher(dev['san_password']),
                 'vstore_name': dev.get('vstore_name'),
                 'ssl_cert_verify': ssl_verify,
                 'ssl_cert_path': dev.get('ssl_cert_path'),
@@ -461,9 +446,11 @@ class HuaweiConf(object):
                     dev, 'iscsi_info'),
                 'fc_info': self._parse_remote_initiator_info(
                     dev, 'fc_info'),
+                'roce_info': self._parse_remote_initiator_info(
+                    dev, 'roce_info'),
                 'sync_speed': self.conf.replica_sync_speed,
-                'in_band_or_not': dev['in_band_or_not'].lower() == 'true'
-                if 'in_band_or_not' in dev else False,
+                constants.IN_BAND_OR_NOT: dev[constants.IN_BAND_OR_NOT].lower() == 'true'
+                if constants.IN_BAND_OR_NOT in dev else False,
                 'storage_sn': dev.get('storage_sn')
             }
 
@@ -640,3 +627,55 @@ class HuaweiConf(object):
             qos_ignored_params = text.split(';')
             qos_ignored_params = list(set(x.strip() for x in qos_ignored_params if x.strip()))
         setattr(constants, 'QOS_IGNORED_PARAMS', qos_ignored_params)
+
+    def _get_rest_client_semaphore(self, xml_root):
+        semaphore = xml_root.findtext('Storage/Semaphore')
+        if not semaphore or not semaphore.strip():
+            setattr(self.conf, 'semaphore', constants.DEFAULT_SEMAPHORE)
+        elif semaphore.isdigit() and int(semaphore) > 0:
+            setattr(self.conf, 'semaphore', int(semaphore))
+        else:
+            msg = _("Semaphore configured error. The semaphore must be an "
+                    "integer and must be greater than zero")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+    def _initiator_info(self, nodes):
+        initiators = {}
+        for node in nodes or []:
+            if 'Name' in node.attrib:
+                initiators[node.attrib['Name']] = node.attrib
+            if 'HostName' in node.attrib:
+                initiators[node.attrib['HostName']] = node.attrib
+
+        if nodes and not initiators:
+            msg = _("Either one of Name or HostName must be set")
+            LOG.error(msg)
+            raise exception.InvalidInput(msg)
+        return initiators
+
+    def _roce_info(self, xml_root):
+        roce_info = {}
+        text = xml_root.findtext('RoCE/DefaultTargetIP')
+        if text:
+            roce_info['default_target_ips'] = [ip.strip() for ip in text.split() if ip.strip()]
+        nodes = xml_root.findall('RoCE/Initiator')
+        initiators = self._initiator_info(nodes)
+        roce_info['initiators'] = initiators
+        self._check_hostname_regex_config(roce_info)
+        setattr(self.conf, 'roce_info', roce_info)
+
+    def _san_protocol(self, xml_root):
+        text = xml_root.findtext('Storage/Protocol')
+        if not text:
+            msg = _("SAN protocol is not configured.")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+
+        if text not in constants.VALID_PROTOCOL:
+            msg = (_("Invalid SAN protocol '%(text)s', SAN protocol must be in %(valid)s.") %
+                    {'text': text, 'valid': constants.VALID_PROTOCOL})
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
+        protocol = text.strip()
+        setattr(self.conf, 'san_protocol', protocol)

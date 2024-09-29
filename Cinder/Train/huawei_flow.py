@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Huawei Technologies Co., Ltd.
+# Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,8 +15,10 @@
 
 import ipaddress
 import json
-import six
+import re
 import uuid
+import six
+import netaddr
 
 from oslo_log import log as logging
 from oslo_utils import strutils
@@ -28,6 +30,7 @@ from taskflow.types import failure
 
 from cinder import exception
 from cinder.i18n import _
+from cinder.volume.drivers.huawei import cipher
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
 from cinder.volume.drivers.huawei import hypermetro
@@ -97,14 +100,14 @@ class CreateLunTask(task.Task):
         self.feature_support = feature_support
 
     def _get_lun_application_name(self, opts, lun_params):
-        if opts.get('applicationname') is not None:
+        if opts.get(constants.APPLICATIONNAME) is not None:
             workload_type_id = self.client.get_workload_type_id(
-                opts['applicationname'])
+                opts[constants.APPLICATIONNAME])
             if workload_type_id:
                 lun_params['WORKLOADTYPEID'] = workload_type_id
             else:
                 msg = _("The workload type %s is not exist. Please create it "
-                        "on the array") % opts['applicationname']
+                        "on the array") % opts[constants.APPLICATIONNAME]
                 LOG.error(msg)
                 raise exception.InvalidInput(reason=msg)
         return lun_params
@@ -180,6 +183,7 @@ class AddQoSTask(task.Task):
         if opts.get('qos'):
             qos_id = self.smartqos.add(opts['qos'], lun_id)
             return qos_id
+        return None
 
     def revert(self, result, lun_id, **kwargs):
         if isinstance(result, failure.Failure):
@@ -199,6 +203,7 @@ class AddCacheTask(task.Task):
         if opts.get('smartcache'):
             cache_id = self.smartcache.add(opts['cachename'], lun_id)
             return cache_id
+        return None
 
     def revert(self, result, lun_id, **kwargs):
         if isinstance(result, failure.Failure):
@@ -219,6 +224,7 @@ class AddPartitionTask(task.Task):
             partition_id = self.smartpartition.add(
                 opts['partitionname'], lun_id)
             return partition_id
+        return None
 
     def revert(self, result, lun_id, **kwargs):
         if isinstance(result, failure.Failure):
@@ -247,23 +253,25 @@ class CreateHyperMetroTask(task.Task):
             return hypermetro_id
 
         if metadata.get('hypermetro'):
-            hypermetro = huawei_utils.get_hypermetro(self.loc_client, volume)
-            hypermetro_id = hypermetro.get('ID') if hypermetro else None
+            hyper_metro = huawei_utils.get_hypermetro(self.loc_client, volume)
+            hypermetro_id = hyper_metro.get('ID') if hyper_metro else None
 
         if not hypermetro_id:
-            lun_keys = ('CAPACITY', 'ALLOCTYPE', 'PREFETCHPOLICY',
-                        'PREFETCHVALUE', 'WRITEPOLICY', 'DATATRANSFERPOLICY')
+            lun_keys = (
+                'CAPACITY', 'ALLOCTYPE', 'PREFETCHPOLICY',
+                'PREFETCHVALUE', 'WRITEPOLICY', 'DATATRANSFERPOLICY'
+            )
             lun_params = {k: lun_info[k] for k in lun_keys if k in lun_info}
             lun_params['NAME'] = huawei_utils.encode_name(volume.id)
             lun_params['DESCRIPTION'] = volume.name
             if (lun_info.get("WORKLOADTYPENAME") and
-                    lun_info.get("WORKLOADTYPEID")):
+                    lun_info.get(constants.WORKLOADTYPEID)):
                 workload_type_name = self.loc_client.get_workload_type_name(
-                    lun_info['WORKLOADTYPEID'])
+                    lun_info[constants.WORKLOADTYPEID])
                 rmt_workload_type_id = self.rmt_client.get_workload_type_id(
                     workload_type_name)
                 if rmt_workload_type_id:
-                    lun_params['WORKLOADTYPEID'] = rmt_workload_type_id
+                    lun_params[constants.WORKLOADTYPEID] = rmt_workload_type_id
                 else:
                     msg = _("The workload type %s is not exist. Please create "
                             "it on the array") % workload_type_name
@@ -309,19 +317,21 @@ class CreateReplicationTask(task.Task):
         pair_id = data.get('pair_id')
 
         if opts.get('replication_enabled') and not pair_id:
-            lun_keys = ('CAPACITY', 'ALLOCTYPE', 'PREFETCHPOLICY',
-                        'PREFETCHVALUE', 'WRITEPOLICY', 'DATATRANSFERPOLICY')
+            lun_keys = (
+                'CAPACITY', 'ALLOCTYPE', 'PREFETCHPOLICY',
+                'PREFETCHVALUE', 'WRITEPOLICY', 'DATATRANSFERPOLICY'
+            )
             lun_params = {k: lun_info[k] for k in lun_keys if k in lun_info}
             lun_params['NAME'] = huawei_utils.encode_name(volume.id)
             lun_params['DESCRIPTION'] = volume.name
             if (lun_info.get("WORKLOADTYPENAME") and
-                    lun_info.get("WORKLOADTYPEID")):
+                    lun_info.get(constants.WORKLOADTYPEID)):
                 workload_type_name = self.loc_client.get_workload_type_name(
-                    lun_info['WORKLOADTYPEID'])
+                    lun_info[constants.WORKLOADTYPEID])
                 rmt_workload_type_id = self.rmt_client.get_workload_type_id(
                     workload_type_name)
                 if rmt_workload_type_id:
-                    lun_params['WORKLOADTYPEID'] = rmt_workload_type_id
+                    lun_params[constants.WORKLOADTYPEID] = rmt_workload_type_id
                 else:
                     msg = _("The workload type %s is not exist. Please create "
                             "it on the array") % workload_type_name
@@ -384,11 +394,11 @@ class CheckLunIsInUse(task.Task):
         delete_hypermetro = False
         metadata = huawei_utils.get_volume_private_data(volume)
         in_use_lun = lun_info.get('EXPOSEDTOINITIATOR') == 'true'
-        if opts.get('hypermetro'):
-            if not metadata.get('hypermetro'):
+        if opts.get(constants.HYPERMETRO):
+            if not metadata.get(constants.HYPERMETRO):
                 add_hypermetro = True
         else:
-            if metadata.get('hypermetro'):
+            if metadata.get(constants.HYPERMETRO):
                 delete_hypermetro = True
 
         if (add_hypermetro or delete_hypermetro) and in_use_lun:
@@ -422,10 +432,17 @@ class CheckLunMappedTask(task.Task):
     def execute(self, lun_info):
         if lun_info.get('EXPOSEDTOINITIATOR') == 'true':
             msg = _("LUN %s has been mapped to host. Now force to "
-                    "delete it") % lun_info['ID']
+                    "delete it") % lun_info[constants.ID_UPPER]
             LOG.warning(msg)
+
+            if (self.configuration.san_protocol == 'nvmeof'):
+                huawei_utils.remove_lun_from_host(
+                    self.client, lun_info[constants.ID_UPPER],
+                    self.configuration.force_delete_volume)
+                return
+
             huawei_utils.remove_lun_from_lungroup(
-                self.client, lun_info["ID"],
+                self.client, lun_info[constants.ID_UPPER],
                 self.configuration.force_delete_volume)
 
 
@@ -535,9 +552,11 @@ class CreateMigratedLunTask(task.Task):
             new_lun_type = None
             tier_policy = None
 
-        lun_keys = ('DESCRIPTION', 'ALLOCTYPE', 'CAPACITY', 'WRITEPOLICY',
-                    'PREFETCHPOLICY', 'PREFETCHVALUE', 'DATATRANSFERPOLICY',
-                    'OWNINGCONTROLLER')
+        lun_keys = (
+            'DESCRIPTION', 'ALLOCTYPE', 'CAPACITY', 'WRITEPOLICY',
+            'PREFETCHPOLICY', 'PREFETCHVALUE', 'DATATRANSFERPOLICY',
+            'OWNINGCONTROLLER'
+        )
         lun_params = {k: lun_info[k] for k in lun_keys if k in lun_info}
         lun_params['NAME'] = lun_info['NAME'][:-4] + '-mig'
         lun_params['PARENTID'] = pool_id
@@ -546,8 +565,8 @@ class CreateMigratedLunTask(task.Task):
         if tier_policy:
             lun_params['DATATRANSFERPOLICY'] = tier_policy
         if lun_info.get("WORKLOADTYPENAME") and lun_info.get(
-                "WORKLOADTYPEID"):
-            lun_params["WORKLOADTYPEID"] = lun_info["WORKLOADTYPEID"]
+                constants.WORKLOADTYPEID):
+            lun_params[constants.WORKLOADTYPEID] = lun_info[constants.WORKLOADTYPEID]
 
         lun = self.client.create_lun(lun_params)
         return lun['ID'], lun
@@ -856,6 +875,7 @@ class WaitSnapshotReadyTask(task.Task):
     def __init__(self, client, *args, **kwargs):
         super(WaitSnapshotReadyTask, self).__init__(*args, **kwargs)
         self.client = client
+        self.snapshot = None
 
     def execute(self, snapshot_id):
         def _snapshot_ready():
@@ -986,13 +1006,13 @@ class ExtendHyperMetroTask(task.Task):
         if not metadata.get('hypermetro'):
             return
 
-        hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
-        if not hypermetro:
+        hyper_metro = huawei_utils.get_hypermetro(self.local_cli, volume)
+        if not hyper_metro:
             msg = _('Volume %s is not in hypermetro pair') % volume.id
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        self.hypermetro.extend_hypermetro(hypermetro['ID'], new_size)
+        self.hypermetro.extend_hypermetro(hyper_metro['ID'], new_size)
 
 
 class ExtendReplicationTask(task.Task):
@@ -1023,9 +1043,9 @@ class UpdateLunTask(task.Task):
         if not opts['dedup'] and dedup_check:
             data["ENABLESMARTDEDUP"] = 'false'
 
-        if (opts.get('policy') and
-                opts['policy'] != lun_info.get('DATATRANSFERPOLICY')):
-            data["DATATRANSFERPOLICY"] = opts['policy']
+        if (opts.get(constants.POLICY) and
+                opts[constants.POLICY] != lun_info.get('DATATRANSFERPOLICY')):
+            data["DATATRANSFERPOLICY"] = opts[constants.POLICY]
 
         if data:
             self.client.update_lun(lun_info['ID'], data)
@@ -1039,13 +1059,13 @@ class UpdateQoSTask(task.Task):
 
     def execute(self, lun_info, opts):
         qos_id = lun_info.get('IOCLASSID')
-        if opts.get('qos'):
+        if opts.get(constants.QOS):
             if qos_id:
-                self.smartqos.update(qos_id, opts['qos'], lun_info['ID'])
+                self.smartqos.update(qos_id, opts[constants.QOS], lun_info[constants.ID_UPPER])
             else:
-                self.smartqos.add(opts['qos'], lun_info['ID'])
+                self.smartqos.add(opts[constants.QOS], lun_info[constants.ID_UPPER])
         elif qos_id:
-            self.smartqos.remove(qos_id, lun_info['ID'])
+            self.smartqos.remove(qos_id, lun_info[constants.ID_UPPER])
 
 
 class UpdateCacheTask(task.Task):
@@ -1058,11 +1078,11 @@ class UpdateCacheTask(task.Task):
         if opts.get('smartcache'):
             if cache_id:
                 self.smartcache.update(
-                    cache_id, opts['cachename'], lun_info['ID'])
+                    cache_id, opts['cachename'], lun_info[constants.ID_UPPER])
             else:
-                self.smartcache.add(opts['cachename'], lun_info['ID'])
+                self.smartcache.add(opts['cachename'], lun_info[constants.ID_UPPER])
         elif cache_id:
-            self.smartcache.remove(cache_id, lun_info['ID'])
+            self.smartcache.remove(cache_id, lun_info[constants.ID_UPPER])
 
 
 class UpdatePartitionTask(task.Task):
@@ -1075,11 +1095,11 @@ class UpdatePartitionTask(task.Task):
         if opts.get('smartpartition'):
             if partition_id:
                 self.smartpartition.update(
-                    partition_id, opts['partitionname'], lun_info['ID'])
+                    partition_id, opts['partitionname'], lun_info[constants.ID_UPPER])
             else:
-                self.smartpartition.add(opts['partitionname'], lun_info['ID'])
+                self.smartpartition.add(opts['partitionname'], lun_info[constants.ID_UPPER])
         elif partition_id:
-            self.smartpartition.remove(partition_id, lun_info['ID'])
+            self.smartpartition.remove(partition_id, lun_info[constants.ID_UPPER])
 
 
 class ManageVolumePreCheckTask(task.Task):
@@ -1313,14 +1333,14 @@ class CreateReplicationGroupTask(task.Task):
         self.feature_support = feature_support
 
     def execute(self, group, opts):
-        create_group = False
+        need_create_group = False
         replication_type = set()
         for opt in opts:
             if opt['replication_enabled']:
-                create_group = True
+                need_create_group = True
                 replication_type.add(opt['replication_type'])
 
-        if create_group:
+        if need_create_group:
             if not self.feature_support['HyperReplication']:
                 msg = _("Huawei storage doesn't support HyperReplication.")
                 LOG.error(msg)
@@ -1339,8 +1359,7 @@ class CreateReplicationGroupTask(task.Task):
 
 
 class GetISCSIConnectionTask(task.Task):
-    default_provides = ('target_ips', 'target_iqns', 'target_eths',
-                        'config_info')
+    default_provides = ('target_ips', 'target_iqns', 'target_eths', 'config_info')
 
     def __init__(self, client, iscsi_info, *args, **kwargs):
         super(GetISCSIConnectionTask, self).__init__(*args, **kwargs)
@@ -1349,8 +1368,7 @@ class GetISCSIConnectionTask(task.Task):
 
     def _get_config_target_ips(self, ini):
         if ini and ini.get('TargetIP'):
-            target_ips = [ip.strip() for ip in ini['TargetIP'].split()
-                          if ip.strip()]
+            target_ips = [ip.strip() for ip in ini['TargetIP'].split() if ip.strip()]
         else:
             target_ips = self.iscsi_info['default_target_ips']
         return target_ips
@@ -1401,7 +1419,7 @@ class GetISCSIConnectionTask(task.Task):
             raise exception.VolumeBackendAPIException(data=msg)
 
         LOG.info('Get iscsi target_ips: %s, target_iqns: %s, target_eths: %s.',
-                 target_ips, target_iqns, target_eths)
+                 target_ips, huawei_utils.mask_initiator_sensitive_info(target_iqns), target_eths)
 
         return target_ips, target_iqns, target_eths, config_info
 
@@ -1455,19 +1473,19 @@ class AddISCSIInitiatorTask(task.Task):
         if not chap_config:
             return {}
 
-        chap_name, chap_password = chap_config.split(';')
+        chap_name, chap_password = chap_config.split(';', 1)
         return {'CHAPNAME': chap_name,
-                'CHAPPASSWORD': chap_password}
+                'CHAPPASSWORD': cipher.decrypt_cipher(chap_password)}
 
     def _get_alua_info(self, config):
-        alua_info = {'MULTIPATHTYPE': '0'}
+        alua_info = {constants.MULTIPATHTYPE: '0'}
         if config.get('ACCESSMODE') and self.configuration.is_dorado_v6:
             return alua_info
 
         if config.get('ALUA'):
-            alua_info['MULTIPATHTYPE'] = config['ALUA']
+            alua_info[constants.MULTIPATHTYPE] = config['ALUA']
 
-        if alua_info['MULTIPATHTYPE'] == '1':
+        if alua_info[constants.MULTIPATHTYPE] == '1':
             for k in ('FAILOVERMODE', 'SPECIALMODETYPE', 'PATHTYPE'):
                 if config.get(k):
                     alua_info[k] = config[k]
@@ -1484,8 +1502,9 @@ class AddISCSIInitiatorTask(task.Task):
 
         chap_info = self._get_chap_info(config_info)
         ini_info = self.client.get_iscsi_initiator(initiator)
-        if (ini_info['USECHAP'] == 'true' and not chap_info) or (
-                ini_info['USECHAP'] == 'false' and chap_info):
+        usechap_and_not_chap_info = (ini_info['USECHAP'] == 'true' and not chap_info)
+        chap_info_and_not_usechap = (ini_info['USECHAP'] == 'false' and chap_info)
+        if usechap_and_not_chap_info or chap_info_and_not_usechap:
             self.client.update_iscsi_initiator_chap(initiator, chap_info)
 
         return chap_info
@@ -1630,8 +1649,10 @@ class GetHyperMetroRemoteLunTask(task.Task):
 
 
 class GetLunMappingTask(task.Task):
-    default_provides = ('mappingview_id', 'lungroup_id', 'hostgroup_id',
-                        'portgroup_id', 'host_id')
+    default_provides = (
+        'mappingview_id', 'lungroup_id', 'hostgroup_id',
+        'portgroup_id', 'host_id'
+    )
 
     def __init__(self, client, *args, **kwargs):
         super(GetLunMappingTask, self).__init__(*args, **kwargs)
@@ -1658,13 +1679,13 @@ class GetLunMappingTask(task.Task):
             return None, None, None, None, host_id
 
         lungroup_id = self.client.get_lungroup_in_mappingview(
-            mappingview['ID'])
+            mappingview[constants.ID_UPPER])
         portgroup_id = self.client.get_portgroup_in_mappingview(
-            mappingview['ID'])
+            mappingview[constants.ID_UPPER])
         hostgroup_id = self.client.get_hostgroup_in_mappingview(
-            mappingview['ID'])
+            mappingview[constants.ID_UPPER])
 
-        return (mappingview['ID'], lungroup_id, hostgroup_id, portgroup_id,
+        return (mappingview[constants.ID_UPPER], lungroup_id, hostgroup_id, portgroup_id,
                 host_id)
 
 
@@ -1766,6 +1787,230 @@ class ClearLunMappingTask(task.Task):
         return ini_tgt_map
 
 
+class GetRoCEConnectionTask(task.Task):
+    default_provides = 'target_ips'
+
+    def __init__(self, client, configuration, *args, **kwargs):
+        super(GetRoCEConnectionTask, self).__init__(*args, **kwargs)
+        self.client = client
+        self.configuration = configuration
+        self.roce_info = kwargs.get('roce_info', self.configuration.roce_info)
+
+    @staticmethod
+    def _is_same_ipv6(left_ip, right_ip):
+        format_left_ip = str(
+            netaddr.IPAddress(left_ip).format(dialect=netaddr.ipv6_compact))
+        format_right_ip = str(
+            netaddr.IPAddress(right_ip).format(dialect=netaddr.ipv6_compact))
+        if format_left_ip == format_right_ip:
+            return True
+        return False
+
+    def execute(self, initiator, host_name):
+        target_ips = self._get_roce_target_ips(initiator, host_name)
+        return target_ips
+
+    def _get_roce_target_ips(self, initiator, host_name):
+        target_ips = self._get_target_ips_by_initiator_name(initiator)
+
+        if not target_ips:
+            target_ips = self._get_target_ips_by_host_name(host_name)
+
+        if not target_ips:
+            msg = _('Failed to get target IP for host %s, please check config file.' % host_name)
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        LOG.info('Get configured ips: %s.', target_ips)
+
+        result = self._target_ip_check(target_ips)
+        return result
+
+    def _target_ip_check(self, target_ips):
+        logic_ports = self._get_roce_logical_ports()
+        result = []
+        for ip in target_ips:
+            if not self._is_roce_target_ip_in_array(ip, logic_ports):
+                continue
+            format_ip = netaddr.IPAddress(ip)
+            if format_ip.version == 6:
+                ip = str(format_ip.format(dialect=netaddr.ipv6_compact))
+                ip = '[' + ip + ']'
+            result.append(ip)
+
+        if not result:
+            err_msg = _('There is no any logic ips exist on array of the '
+                        'configured target_ip %s in conf file' % target_ips)
+            LOG.error(err_msg)
+            raise exception.VolumeBackendAPIException(data=err_msg)
+
+        return result
+
+    def _get_roce_logical_ports(self):
+        all_logic_ports = self._get_info_by_range(self.client.get_roce_logic_ports)
+        return all_logic_ports
+
+    def _is_roce_target_ip_in_array(self, ip, logic_ports):
+        for logic_port in logic_ports:
+            if logic_port.get('ADDRESSFAMILY') == constants.ADDRESS_FAMILY_IPV4:
+                if ip == logic_port.get('IPV4ADDR'):
+                    return True
+            else:
+                if self._is_same_ipv6(ip, logic_port.get('IPV6ADDR')):
+                    return True
+        return False
+
+    def _get_info_by_range(self, func):
+        range_start = 0
+        info_list = []
+        while True:
+            range_end = range_start + constants.MAX_QUERY_COUNT
+            info = func(range_start, range_end)
+            info_list += info
+            if len(info) < constants.MAX_QUERY_COUNT:
+                break
+            range_start += constants.MAX_QUERY_COUNT
+        return info_list
+
+    def _get_target_ips_by_host_name(self, host_name):
+        target_ips = []
+        temp_target_ips = []
+        initiator_dict = self.roce_info.get('initiators', {})
+        for config_initiator in initiator_dict.keys():
+            info = initiator_dict[config_initiator]
+            config_host_name = info.get('HostName')
+            if not config_host_name:
+                continue
+            if config_host_name == '*':
+                temp_target_ips = self._get_target_ip_list(info, temp_target_ips)
+            elif re.search(config_host_name, host_name):
+                target_ips = self._get_target_ip_list(info, target_ips)
+                break
+
+        if not target_ips and temp_target_ips:
+            target_ips = temp_target_ips
+        return target_ips
+
+    def _get_target_ips_by_initiator_name(self, initiator):
+        initiator_dict = self.roce_info.get('initiators', {})
+        target_ips = []
+        for config_initiator in initiator_dict.keys():
+            if config_initiator == initiator:
+                target_ips = self._get_target_ip_list(initiator_dict[config_initiator], target_ips)
+        return target_ips
+
+    def _get_target_ip_list(self, roce_info, target_ips):
+        for target_ip in roce_info.get('TargetIP').split():
+            if target_ip.strip():
+                target_ips.append(target_ip)
+        return target_ips
+
+
+class AddRoCEInitiatorTask(task.Task):
+    def __init__(self, client, *args, **kwargs):
+        super(AddRoCEInitiatorTask, self).__init__(*args, **kwargs)
+        self.client = client
+
+    def execute(self, initiator, host_id):
+        ini_info = self.client.get_roce_initiator(initiator)
+        if not ini_info:
+            self.client.add_roce_initiator(initiator)
+            self.client.associate_roce_initiator_to_host(initiator, host_id)
+        elif ini_info['ISFREE'] == 'true':
+            self.client.associate_roce_initiator_to_host(initiator, host_id)
+        elif ini_info['PARENTID'] != host_id:
+            msg = _("Initiator already connected to host %s." % ini_info['PARENTID'])
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+
+class CreateLunMappingHostTask(task.Task):
+    def __init__(self, client, configuration, *args, **kwargs):
+        super(CreateLunMappingHostTask, self).__init__(*args, **kwargs)
+        self.client = client
+        self.configuration = configuration
+
+    def execute(self, host_id, lun_id):
+        mapping_info = self.client.get_mapping_by_hostid_and_lunid(host_id, lun_id)
+        if not mapping_info:
+            self.client.create_hostlun_mapping(host_id, lun_id)
+        else:
+            LOG.info("Mapping between host %s and lun %s already exists.", host_id, lun_id)
+
+
+class GetLunMappingHostTask(task.Task):
+    default_provides = 'host_id'
+
+    def __init__(self, client, *args, **kwargs):
+        super(GetLunMappingHostTask, self).__init__(*args, **kwargs)
+        self.client = client
+
+    def execute(self, connector, lun_id):
+        host_key = 'host'
+        if connector is None or host_key not in connector:
+            host_info = self.client.get_mapped_host_info(lun_id)
+            if not host_info:
+                LOG.warning('No host info in connector and lun %s is not mapped to any host.', lun_id)
+                return None
+            if len(host_info) > 1:
+                LOG.warning("No host info in connector and lun %s is mapped to multiple hosts.", lun_id)
+                return None
+            host_id = host_info[0]['hostId']
+        else:
+            host_name = connector[host_key]
+            host_id = self.client.get_host_id_by_name(host_name)
+        return host_id
+
+
+class ClearLunMappingHostTask(task.Task):
+    def __init__(self, client, *args, **kwargs):
+        super(ClearLunMappingHostTask, self).__init__(*args, **kwargs)
+        self.client = client
+
+    def execute(self, host_id, lun_id):
+        if not host_id:
+            return
+        self.client.delete_hostlun_mapping(host_id, lun_id)
+        mapped_luns = self.client.get_mapped_lun_info(host_id)
+        if mapped_luns:
+            LOG.info('Host %s has other lun mapped.', host_id)
+            return
+        self._delete_host(host_id)
+
+    def _delete_host(self, host_id):
+        ini_info = self.client.get_associated_roce_initiator(host_id)
+        for initiator in ini_info:
+            self.client.remove_roce_initiator_from_host(initiator['ID'], host_id)
+        self.client.delete_host(host_id)
+
+
+class GetRoCEPropertiesTask(task.Task):
+    default_provides = 'mapping_info'
+
+    def __init__(self, client, *args, **kwargs):
+        super(GetRoCEPropertiesTask, self).__init__(*args, **kwargs)
+        self.client = client
+
+    def execute(self, target_ips, host_id, lun_id, lun_info):
+        host_lun_info = self.client.get_hostlun_info(host_id, lun_id)
+        if not host_lun_info:
+            msg = _("No hostlun information between host %(host_id)s and lun %(lun_id)s." % {
+                'host_id': host_id,
+                'lun_id': lun_id
+            })
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+        host_lun_id = host_lun_info[0]['hostLunId']
+        mapping_info = {
+            'portals': [(ip, constants.ROCE_TARGET_PORT, 'rdma') for ip in target_ips],
+            'target_luns': [host_lun_id] * len(target_ips),
+            'target_nqn': constants.ROCE_TARGET_NQN_PREFIX + self.client._login_device_id,
+            'discard': True,
+            'volume_nguid': lun_info.get('NGUID')
+        }
+        return mapping_info
+
+
 class GetFCConnectionTask(task.Task):
     default_provides = ('ini_tgt_map', 'tgt_port_wwns')
 
@@ -1823,7 +2068,8 @@ class GetFCConnectionTask(task.Task):
                 LOG.warning("Fabric %(fabric_name)s doesn't really "
                             "connect host and array: %(fabric)s.",
                             {'fabric_name': fabric_name,
-                             'fabric': fabric})
+                             'fabric': huawei_utils.mask_initiator_sensitive_info(
+                                 fabric, sensitive_keys=['initiator_port_wwn_list', 'target_port_wwn_list'])})
                 return None
 
             return set(ini_port_wwn_list), set(tgt_port_wwn_list)
@@ -1834,7 +2080,7 @@ class GetFCConnectionTask(task.Task):
             if pair:
                 valid_fabrics.append(pair)
 
-        LOG.info("Got fabric: %s.", valid_fabrics)
+        LOG.info("Got fabric: %s.", huawei_utils.mask_initiator_sensitive_info(valid_fabrics))
         return valid_fabrics
 
     def _count_port_weight(self, port):
@@ -1917,7 +2163,8 @@ class GetFCConnectionTask(task.Task):
         for wwn in wwns:
             wwn_info = self.client.get_fc_init_info(wwn)
             if not wwn_info:
-                LOG.info("%s is not found in device, ignore it.", wwn)
+                LOG.info("%s is not found in device, ignore it.",
+                         huawei_utils.mask_initiator_sensitive_info(wwn))
                 continue
 
             if wwn_info.get('RUNNINGSTATUS') == constants.FC_INIT_ONLINE:
@@ -1940,16 +2187,17 @@ class GetFCConnectionTask(task.Task):
         if invalid_wwns:
             if (self.configuration.min_fc_ini_online ==
                     constants.DEFAULT_MINIMUM_FC_INITIATOR_ONLINE):
-                msg = _("There are invalid initiators %s. If you want to "
-                        "continue to attach volume to host, configure "
-                        "MinFCIniOnline in the XML file.") % invalid_wwns
+                msg = (_("There are invalid initiators %s. If you want to "
+                         "continue to attach volume to host, configure "
+                         "MinFCIniOnline in the XML file.") %
+                       huawei_utils.mask_initiator_sensitive_info(invalid_wwns))
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
         if len(effective_wwns) < self.configuration.min_fc_ini_online:
             msg = (("The number of online fc initiator %(wwns)s less than"
                     " the set number: %(set)s.")
-                   % {"wwns": effective_wwns,
+                   % {"wwns": huawei_utils.mask_initiator_sensitive_info(effective_wwns),
                       "set": self.configuration.min_fc_ini_online})
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
@@ -1973,7 +2221,7 @@ class GetFCConnectionTask(task.Task):
             ini_tgt_map, tgt_port_wwns = self._get_fc_link(wwns, host_id)
 
         if not tgt_port_wwns:
-            msg = _('No fc connection for wwns %s.') % wwns
+            msg = _('No fc connection for wwns %s.') % huawei_utils.mask_initiator_sensitive_info(wwns)
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
@@ -1988,14 +2236,14 @@ class AddFCInitiatorTask(task.Task):
         self.configuration = configuration
 
     def _get_alua_info(self, config):
-        alua_info = {'MULTIPATHTYPE': '0'}
+        alua_info = {constants.MULTIPATHTYPE: '0'}
         if config.get('ACCESSMODE') and self.configuration.is_dorado_v6:
             return alua_info
 
         if config.get('ALUA'):
-            alua_info['MULTIPATHTYPE'] = config['ALUA']
+            alua_info[constants.MULTIPATHTYPE] = config['ALUA']
 
-        if alua_info['MULTIPATHTYPE'] == '1':
+        if alua_info[constants.MULTIPATHTYPE] == '1':
             for k in ('FAILOVERMODE', 'SPECIALMODETYPE', 'PATHTYPE'):
                 if config.get(k):
                     alua_info[k] = config[k]
@@ -2042,7 +2290,7 @@ class CreateFCPortGroupTask(task.Task):
         port_map = self._get_fc_ports()
         ports = self._get_ports_to_add(ini_tgt_map)
         for port in ports:
-            self.client.add_port_to_portgroup(portgroup_id, port_map[port])
+            self.client.add_port_to_portgroup(portgroup_id, port_map.get(port))
         return portgroup_id
 
     def revert(self, result, ini_tgt_map, **kwargs):
@@ -2052,7 +2300,7 @@ class CreateFCPortGroupTask(task.Task):
             port_map = self._get_fc_ports()
             ports = self._get_ports_to_add(ini_tgt_map)
             for port in ports:
-                self.client.remove_port_from_portgroup(result, port_map[port])
+                self.client.remove_port_from_portgroup(result, port_map.get(port))
 
 
 class GetFCPropertiesTask(task.Task):
@@ -2106,8 +2354,10 @@ class FailoverVolumeTask(task.Task):
     def _failover_normal_volumes(self, volumes):
         volumes_update = []
         for v in volumes:
-            volume_update = {'volume_id': v.id,
-                             'updates': {'status': 'error'}}
+            volume_update = {
+                'volume_id': v.id,
+                'updates': {'status': 'error'}
+            }
             volumes_update.append(volume_update)
 
         return volumes_update
@@ -2129,8 +2379,10 @@ class FailbackVolumeTask(task.Task):
     def _failback_normal_volumes(self, volumes):
         volumes_update = []
         for v in volumes:
-            volume_update = {'volume_id': v.id,
-                             'updates': {'status': 'available'}}
+            volume_update = {
+                'volume_id': v.id,
+                'updates': {'status': 'available'}
+            }
             volumes_update.append(volume_update)
 
         return volumes_update
@@ -2225,9 +2477,9 @@ def create_volume_from_snapshot(
         LunOptsCheckTask(local_cli, feature_support, configuration),
         CheckSnapshotExistTask(local_cli, inject={'snapshot': src_obj}))
 
-    if (strutils.bool_from_string(metadata.get('fastclone', False)) or
-            (metadata.get('fastclone') is None and
-             configuration.clone_mode == "fastclone")):
+    if (strutils.bool_from_string(metadata.get(constants.FASTCLONE, False)) or
+            (metadata.get(constants.FASTCLONE) is None and
+             configuration.clone_mode == constants.FASTCLONE)):
         work_flow.add(
             LunClonePreCheckTask(inject={'src_volume': src_obj}),
             CreateLunCloneTask(local_cli,
@@ -2249,10 +2501,12 @@ def create_volume_from_snapshot(
             CreateLunCopyTask(local_cli, feature_support, configuration),
             WaitLunCopyDoneTask(local_cli, configuration),)
 
-    general_params = {'local_cli': local_cli,
-                      'hypermetro_rmt_cli': hypermetro_rmt_cli,
-                      'replication_rmt_cli': replication_rmt_cli,
-                      'configuration': configuration}
+    general_params = {
+        'local_cli': local_cli,
+        'hypermetro_rmt_cli': hypermetro_rmt_cli,
+        'replication_rmt_cli': replication_rmt_cli,
+        'configuration': configuration
+    }
     return _create_volume_from_src(
         work_flow, volume, store_spec, general_params)
 
@@ -2269,9 +2523,9 @@ def create_volume_from_volume(
                           inject={'volume': src_obj}),
     )
 
-    if (strutils.bool_from_string(metadata.get('fastclone', False)) or
-            (metadata.get('fastclone') is None and
-             configuration.clone_mode == "fastclone")):
+    if (strutils.bool_from_string(metadata.get(constants.FASTCLONE, False)) or
+            (metadata.get(constants.FASTCLONE) is None and
+             configuration.clone_mode == constants.FASTCLONE)):
         work_flow.add(
             LunClonePreCheckTask(inject={'src_volume': src_obj}),
             CreateLunCloneTask(local_cli)
@@ -2297,10 +2551,12 @@ def create_volume_from_volume(
             DeleteTempSnapshotTask(local_cli),
         )
 
-    general_params = {'local_cli': local_cli,
-                      'hypermetro_rmt_cli': hypermetro_rmt_cli,
-                      'replication_rmt_cli': replication_rmt_cli,
-                      'configuration': configuration}
+    general_params = {
+        'local_cli': local_cli,
+        'hypermetro_rmt_cli': hypermetro_rmt_cli,
+        'replication_rmt_cli': replication_rmt_cli,
+        'configuration': configuration
+    }
     return _create_volume_from_src(
         work_flow, volume, store_spec, general_params)
 
@@ -2372,8 +2628,10 @@ def delete_snapshot(snapshot, local_cli):
 
 def extend_volume(volume, new_size, local_cli, hypermetro_rmt_cli,
                   replication_rmt_cli, configuration):
-    store_spec = {'volume': volume,
-                  'new_size': int(new_size) * constants.CAPACITY_UNIT}
+    store_spec = {
+        'volume': volume,
+        'new_size': int(new_size) * constants.CAPACITY_UNIT
+    }
     work_flow = linear_flow.Flow('extend_volume')
     work_flow.add(
         CheckLunExistTask(local_cli),
@@ -2501,8 +2759,10 @@ def manage_existing_snapshot(snapshot, existing_ref, local_cli):
 def create_group(group, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
                  configuration, feature_support):
     opts = huawei_utils.get_group_type_params(group, configuration.is_dorado_v6)
-    store_spec = {'group': group,
-                  'opts': opts}
+    store_spec = {
+        'group': group,
+        'opts': opts
+    }
 
     work_flow = linear_flow.Flow('create_group')
     work_flow.add(
@@ -2521,19 +2781,21 @@ def create_group(group, local_cli, hypermetro_rmt_cli, replication_rmt_cli,
 
 def initialize_iscsi_connection(lun, lun_type, connector, client,
                                 configuration):
-    store_spec = {'connector': connector,
-                  'lun': lun,
-                  'lun_type': lun_type,
-                  'initiator': connector.get('initiator', '')}
+    store_spec = {
+        'connector': connector,
+        constants.LUN: lun,
+        'lun_type': lun_type,
+        'initiator': connector.get('initiator', '')
+    }
     work_flow = linear_flow.Flow('initialize_iscsi_connection')
 
     if lun_type == constants.LUN_TYPE:
-        work_flow.add(CheckLunExistTask(client, rebind={'volume': 'lun'}))
+        work_flow.add(CheckLunExistTask(client, rebind={'volume': constants.LUN}))
     else:
         work_flow.add(
             CheckSnapshotExistTask(
                 client, provides=('lun_info', 'lun_id'),
-                rebind={'snapshot': 'lun'}))
+                rebind={'snapshot': constants.LUN}))
 
     work_flow.add(
         CreateHostTask(client, configuration.iscsi_info, configuration),
@@ -2552,17 +2814,19 @@ def initialize_iscsi_connection(lun, lun_type, connector, client,
 
 def initialize_remote_iscsi_connection(hypermetro_id, connector,
                                        client, configuration):
-    store_spec = {'connector': connector,
-                  'lun_type': constants.LUN_TYPE,
-                  'initiator': connector.get('initiator', '')}
+    store_spec = {
+        'connector': connector,
+        'lun_type': constants.LUN_TYPE,
+        'initiator': connector.get('initiator', '')
+    }
     work_flow = linear_flow.Flow('initialize_remote_iscsi_connection')
 
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
-        CreateHostTask(client, configuration.hypermetro['iscsi_info'],
+        CreateHostTask(client, configuration.hypermetro[constants.ISCSI_INFO],
                        configuration),
-        GetISCSIConnectionTask(client, configuration.hypermetro['iscsi_info']),
-        AddISCSIInitiatorTask(client, configuration.hypermetro['iscsi_info'],
+        GetISCSIConnectionTask(client, configuration.hypermetro[constants.ISCSI_INFO]),
+        AddISCSIInitiatorTask(client, configuration.hypermetro[constants.ISCSI_INFO],
                               configuration),
         CreateHostGroupTask(client),
         CreateLunGroupTask(client, configuration),
@@ -2577,19 +2841,21 @@ def initialize_remote_iscsi_connection(hypermetro_id, connector,
 
 def terminate_iscsi_connection(lun, lun_type, connector, client,
                                configuration):
-    store_spec = {'connector': connector,
-                  'lun': lun,
-                  'lun_type': lun_type}
+    store_spec = {
+        'connector': connector,
+        constants.LUN: lun,
+        'lun_type': lun_type
+    }
     work_flow = linear_flow.Flow('terminate_iscsi_connection')
 
     if lun_type == constants.LUN_TYPE:
         work_flow.add(
-            GetLunIDTask(client, rebind={'volume': 'lun'}),
+            GetLunIDTask(client, rebind={'volume': constants.LUN}),
         )
     else:
         work_flow.add(
             GetSnapshotIDTask(
-                client, provides='lun_id', rebind={'snapshot': 'lun'}),
+                client, provides='lun_id', rebind={'snapshot': constants.LUN}),
         )
 
     work_flow.add(
@@ -2619,21 +2885,23 @@ def terminate_remote_iscsi_connection(hypermetro_id, connector, client,
 
 def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
                              configuration):
-    store_spec = {'connector': connector,
-                  'lun': lun,
-                  'lun_type': lun_type,
-                  'initiator': huawei_utils.convert_connector_wwns(
-                      connector.get('wwpns', [])
-                  )}
+    store_spec = {
+        'connector': connector,
+        constants.LUN: lun,
+        'lun_type': lun_type,
+        'initiator': huawei_utils.convert_connector_wwns(
+            connector.get('wwpns', [])
+        )
+    }
     work_flow = linear_flow.Flow('initialize_fc_connection')
 
     if lun_type == constants.LUN_TYPE:
-        work_flow.add(CheckLunExistTask(client, rebind={'volume': 'lun'}))
+        work_flow.add(CheckLunExistTask(client, rebind={'volume': constants.LUN}))
     else:
         work_flow.add(
             CheckSnapshotExistTask(
                 client, provides=('lun_info', 'lun_id'),
-                rebind={'snapshot': 'lun'}))
+                rebind={'snapshot': constants.LUN}))
 
     work_flow.add(
         CreateHostTask(client, configuration.fc_info, configuration),
@@ -2653,11 +2921,13 @@ def initialize_fc_connection(lun, lun_type, connector, fc_san, client,
 
 def initialize_remote_fc_connection(hypermetro_id, connector, fc_san, client,
                                     configuration):
-    store_spec = {'connector': connector,
-                  'lun_type': constants.LUN_TYPE,
-                  'initiator': huawei_utils.convert_connector_wwns(
-                      connector.get('wwpns', [])
-                  )}
+    store_spec = {
+        'connector': connector,
+        'lun_type': constants.LUN_TYPE,
+        'initiator': huawei_utils.convert_connector_wwns(
+            connector.get('wwpns', [])
+        )
+    }
     work_flow = linear_flow.Flow('initialize_remote_fc_connection')
 
     work_flow.add(
@@ -2681,19 +2951,21 @@ def initialize_remote_fc_connection(hypermetro_id, connector, fc_san, client,
 
 def terminate_fc_connection(lun, lun_type, connector, fc_san, client,
                             configuration):
-    store_spec = {'connector': connector,
-                  'lun': lun,
-                  'lun_type': lun_type}
+    store_spec = {
+        'connector': connector,
+        constants.LUN: lun,
+        'lun_type': lun_type
+    }
     work_flow = linear_flow.Flow('terminate_fc_connection')
 
     if lun_type == constants.LUN_TYPE:
         work_flow.add(
-            GetLunIDTask(client, rebind={'volume': 'lun'}),
+            GetLunIDTask(client, rebind={'volume': constants.LUN}),
         )
     else:
         work_flow.add(
             GetSnapshotIDTask(
-                client, provides='lun_id', rebind={'snapshot': 'lun'}),
+                client, provides='lun_id', rebind={'snapshot': constants.LUN}),
         )
 
     work_flow.add(
@@ -2723,6 +2995,104 @@ def terminate_remote_fc_connection(hypermetro_id, connector, fc_san, client,
     engine.run()
 
     return engine.storage.fetch('ini_tgt_map')
+
+
+def initialize_roce_connection(lun, lun_type, connector, client,
+                                configuration):
+    lun_key = 'lun'
+    store_spec = {
+        'connector': connector,
+        lun_key: lun,
+        'lun_type': lun_type,
+        'initiator': connector.get('nqn', ''),
+        'host_name': connector.get('host', '')
+    }
+    work_flow = linear_flow.Flow('initialize_roce_connection')
+    if lun_type == constants.LUN_TYPE:
+        work_flow.add(CheckLunExistTask(client, rebind={'volume': lun_key}))
+    else:
+        work_flow.add(
+            CheckSnapshotExistTask(
+                client, provides=('lun_info', 'lun_id'),
+                rebind={'snapshot': lun_key}))
+
+    work_flow.add(
+        GetRoCEConnectionTask(client, configuration),
+        CreateHostTask(client, configuration.roce_info, configuration),
+        AddRoCEInitiatorTask(client),
+        CreateLunMappingHostTask(client, configuration),
+        GetRoCEPropertiesTask(client),
+    )
+
+    engine = taskflow.engines.load(work_flow, store=store_spec)
+    engine.run()
+    return engine.storage.fetch('mapping_info')
+
+
+def initialize_remote_roce_connection(hypermetro_id, connector,
+                                       client, configuration):
+    store_spec = {
+        'connector': connector,
+        'lun_type': constants.LUN_TYPE,
+        'initiator': connector.get('nqn', ''),
+        'host_name': connector.get('host', '')
+    }
+    work_flow = linear_flow.Flow('initialize_remote_iscsi_connection')
+
+    work_flow.add(
+        GetHyperMetroRemoteLunTask(client, hypermetro_id),
+        GetRoCEConnectionTask(client, configuration),
+        CreateHostTask(client, configuration.hypermetro['roce_info'], configuration),
+        AddRoCEInitiatorTask(client),
+        CreateLunMappingHostTask(client, configuration),
+        GetRoCEPropertiesTask(client),
+    )
+
+    engine = taskflow.engines.load(work_flow, store=store_spec)
+    engine.run()
+    return engine.storage.fetch('mapping_info')
+
+
+def terminate_roce_connection(lun, lun_type, connector, client):
+    lun_key = 'lun'
+    store_spec = {
+        'connector': connector,
+        lun_key: lun,
+        'lun_type': lun_type
+    }
+    work_flow = linear_flow.Flow('terminate_roce_connection')
+
+    if lun_type == constants.LUN_TYPE:
+        work_flow.add(
+            GetLunIDTask(client, rebind={'volume': lun_key}),
+        )
+    else:
+        work_flow.add(
+            GetSnapshotIDTask(
+                client, provides='lun_id', rebind={'snapshot': 'lun'}),
+        )
+
+    work_flow.add(
+        GetLunMappingHostTask(client),
+        ClearLunMappingHostTask(client),
+    )
+
+    engine = taskflow.engines.load(work_flow, store=store_spec)
+    engine.run()
+
+
+def terminate_remote_roce_connection(hypermetro_id, connector, client):
+    store_spec = {'connector': connector}
+    work_flow = linear_flow.Flow('terminate_remote_roce_connection')
+
+    work_flow.add(
+        GetHyperMetroRemoteLunTask(client, hypermetro_id),
+        GetLunMappingHostTask(client),
+        ClearLunMappingHostTask(client),
+    )
+
+    engine = taskflow.engines.load(work_flow, store=store_spec)
+    engine.run()
 
 
 def failover(volumes, local_cli, replication_rmt_cli, configuration):

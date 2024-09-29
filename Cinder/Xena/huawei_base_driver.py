@@ -1,4 +1,4 @@
-# Copyright (c) 2016 Huawei Technologies Co., Ltd.
+# Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -12,19 +12,18 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
+import json
 import re
-import six
 import uuid
+
+import six
 
 from oslo_config import cfg
 from oslo_log import log as logging
-
 from cinder import exception
 from cinder.i18n import _
 from cinder import objects
 from cinder.objects import fields
-
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_conf
 from cinder.volume.drivers.huawei import huawei_flow
@@ -55,7 +54,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.6.RC3"
+    VERSION = "2.7.2"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -75,19 +74,35 @@ class HuaweiBaseDriver(object):
         self.support_capability = {}
         self.configuration.is_dorado_v6 = False
 
+    @staticmethod
+    def _get_disk_type_by_storage_pool(pool_info):
+        """
+        The method for storage pool to obtain the disk type is as follows:
+        If disk type information exists in 'TIER0CAPACITY','TIER1CAPACITY', 'TIER2CAPACITY',
+        separate them with commas ',' and return them.
+        """
+        pool_disks = []
+        for i, x in enumerate(constants.TIER_DISK_TYPES):
+            if (pool_info.get('TIER%dCAPACITY' % i) and
+                    pool_info.get('TIER%dCAPACITY' % i) != '0'):
+                pool_disks.append(x)
+
+        return ','.join(pool_disks) if pool_disks else None
+
     def do_setup(self, context):
         self.conf.update_config_value()
 
         config_dict = {
-                'san_address': self.configuration.san_address,
-                'san_user': self.configuration.san_user,
-                'san_password': self.configuration.san_password,
-                'vstore_name': self.configuration.vstore_name,
-                'ssl_cert_verify': self.configuration.ssl_cert_verify,
-                'ssl_cert_path': self.configuration.ssl_cert_path,
-                'in_band_or_not': self.configuration.in_band_or_not,
-                'storage_sn': self.configuration.storage_sn
-            }
+            'san_address': self.configuration.san_address,
+            'san_user': self.configuration.san_user,
+            'san_password': self.configuration.san_password,
+            'vstore_name': self.configuration.vstore_name,
+            'ssl_cert_verify': self.configuration.ssl_cert_verify,
+            'ssl_cert_path': self.configuration.ssl_cert_path,
+            'in_band_or_not': self.configuration.in_band_or_not,
+            'storage_sn': self.configuration.storage_sn,
+            constants.SEMAPHORE: self.configuration.semaphore
+        }
         self.local_cli = rest_client.RestClient(config_dict)
         self.local_cli.login()
         self.configuration.is_dorado_v6 = huawei_utils.is_support_clone_pair(
@@ -97,11 +112,17 @@ class HuaweiBaseDriver(object):
             self.support_capability[c] = False
 
         if self.configuration.hypermetro:
+            self.configuration.hypermetro.update(
+                {constants.SEMAPHORE: self.configuration.semaphore}
+            )
             self.hypermetro_rmt_cli = rest_client.RestClient(
                 self.configuration.hypermetro)
             self.hypermetro_rmt_cli.login()
 
         if self.configuration.replication:
+            self.configuration.replication.update(
+                {constants.SEMAPHORE: self.configuration.semaphore}
+            )
             self.replication_rmt_cli = rest_client.RestClient(
                 self.configuration.replication)
             self.replication_rmt_cli.login()
@@ -109,10 +130,11 @@ class HuaweiBaseDriver(object):
     def check_for_setup_error(self):
         def _check_storage_pools(client, config_pools):
             pools = client.get_all_pools()
-            pool_names = [p['NAME'] for p in pools if
-                          p.get('USAGETYPE', constants.BLOCK_POOL_TYPE) in
-                          (constants.BLOCK_POOL_TYPE,
-                           constants.DORADO_V6_POOL_TYPE)]
+            pool_names = []
+            for pool in pools:
+                usage_pool = pool.get('USAGETYPE', constants.BLOCK_POOL_TYPE)
+                if usage_pool in (constants.BLOCK_POOL_TYPE, constants.DORADO_V6_POOL_TYPE):
+                    pool_names.append(pool.get('NAME'))
 
             for pool_name in config_pools:
                 if pool_name not in pool_names:
@@ -168,16 +190,13 @@ class HuaweiBaseDriver(object):
 
     def _get_disk_type(self, pool_info):
         """Get disk type of the pool."""
-        pool_disks = []
-        for i, x in enumerate(constants.TIER_DISK_TYPES):
-            if (pool_info.get('TIER%dCAPACITY' % i) and
-                    pool_info.get('TIER%dCAPACITY' % i) != '0'):
-                pool_disks.append(x)
 
-        if len(pool_disks) > 1:
-            pool_disks = ['mix']
-
-        return pool_disks[0] if pool_disks else None
+        if not self.configuration.is_dorado_v6:
+            disk_type = self._get_disk_type_by_storage_pool(pool_info)
+        else:
+            disk_type = self._get_disk_type_by_disk_pool(pool_info)
+        LOG.info("The disk type is %s", disk_type)
+        return disk_type
 
     def _get_smarttier(self, disk_type):
         return disk_type is not None and disk_type == 'mix'
@@ -193,7 +212,7 @@ class HuaweiBaseDriver(object):
 
         pool['total_capacity_gb'] = total_capacity
         pool['free_capacity_gb'] = free_capacity
-        pool['smarttier'] = (self.support_capability['SmartTier'] and
+        pool['smarttier'] = (self.support_capability.get('SmartTier') and
                              tier_support)
         pool['provisioned_capacity_gb'] = provisioned_capacity
         if disk_type:
@@ -211,25 +230,25 @@ class HuaweiBaseDriver(object):
                 'max_over_subscription_ratio':
                     self.configuration.max_over_subscription_ratio,
                 'smartpartition':
-                    self.support_capability['SmartPartition'],
-                'smartcache': self.support_capability['SmartCache'],
-                'QoS_support': self.support_capability['SmartQoS'],
+                    self.support_capability.get('SmartPartition'),
+                'smartcache': self.support_capability.get('SmartCache'),
+                'QoS_support': self.support_capability.get('SmartQoS'),
                 'thin_provisioning_support':
-                    self.support_capability['SmartThin'],
+                    self.support_capability.get('SmartThin'),
                 'thick_provisioning_support': True,
-                'hypermetro': self.support_capability['HyperMetro'],
+                'hypermetro': self.support_capability.get('HyperMetro'),
                 'consistentcygroup_support': True,
                 'consistent_group_snapshot_enabled':
-                    self.support_capability['HyperSnap'],
+                    self.support_capability.get('HyperSnap'),
                 'location_info': self.local_cli.device_id,
                 'replication_enabled':
-                    self.support_capability['HyperReplication'],
+                    self.support_capability.get('HyperReplication'),
                 'replication_type': ['sync', 'async'],
                 'multiattach': True,
-                'dedup': [self.support_capability['SmartDedupe[\s\S]*LUN'],
+                'dedup': [self.support_capability.get('SmartDedupe[\s\S]*LUN'),
                           False],
                 'compression':
-                    [self.support_capability['SmartCompression[\s\S]*LUN'],
+                    [self.support_capability.get('SmartCompression[\s\S]*LUN'),
                      False],
                 'huawei_controller': True,
                 'huawei_application_type': False,
@@ -248,23 +267,23 @@ class HuaweiBaseDriver(object):
     def _update_hypermetro_capability(self):
         if self.hypermetro_rmt_cli:
             feature_status = self.hypermetro_rmt_cli.get_feature_status()
-            if (feature_status.get('HyperMetro') not in
+            if (feature_status.get(constants.HYPERMETRO_UPPER) not in
                     constants.AVAILABLE_FEATURE_STATUS):
-                self.support_capability['HyperMetro'] = False
+                self.support_capability[constants.HYPERMETRO_UPPER] = False
         else:
-            self.support_capability['HyperMetro'] = False
+            self.support_capability[constants.HYPERMETRO_UPPER] = False
 
     def _update_replication_capability(self):
-        self.support_capability['RemoteHyperReplication'] = False
+        self.support_capability[constants.REMOTEHYPERREPLICATION] = False
         if self.replication_rmt_cli:
             feature_status = self.replication_rmt_cli.get_feature_status()
-            if (feature_status.get('HyperReplication') in
+            if (feature_status.get(constants.HYPERREPLICATION) in
                     constants.AVAILABLE_FEATURE_STATUS):
-                self.support_capability['RemoteHyperReplication'] = True
+                self.support_capability[constants.REMOTEHYPERREPLICATION] = True
 
-        self.support_capability['HyperReplication'] = (
-            self.support_capability['RemoteHyperReplication'] and
-            self.support_capability['HyperReplication'])
+        self.support_capability[constants.HYPERREPLICATION] = (
+            self.support_capability[constants.REMOTEHYPERREPLICATION] and
+            self.support_capability.get(constants.HYPERREPLICATION))
 
     def _update_support_capability(self):
         feature_status = self.local_cli.get_feature_status()
@@ -281,7 +300,7 @@ class HuaweiBaseDriver(object):
                     self.support_capability[c] = self.local_cli.check_feature(
                         constants.CHECK_FEATURES[c])
 
-        if (self.support_capability["Effective Capacity"] or
+        if (self.support_capability.get("Effective Capacity") or
                 self.configuration.is_dorado_v6):
             self.support_capability["SmartDedupe[\s\S]*LUN"] = True
             self.support_capability["SmartCompression[\s\S]*LUN"] = True
@@ -302,8 +321,8 @@ class HuaweiBaseDriver(object):
         self._stats['driver_version'] = self.VERSION
         self._stats['vendor_name'] = 'Huawei'
         self._stats['replication_enabled'] = (
-            self.support_capability['RemoteHyperReplication'] and
-            self.support_capability['HyperReplication'])
+            self.support_capability.get('RemoteHyperReplication') and
+            self.support_capability.get('HyperReplication'))
         if self._stats['replication_enabled']:
             self._stats['replication_targets'] = (
                 [self.configuration.replication['backend_id']])
@@ -325,6 +344,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def delete_volume(self, volume):
@@ -412,6 +432,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def create_cloned_volume(self, volume, src_vref):
@@ -426,6 +447,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def extend_volume(self, volume, new_size):
@@ -517,6 +539,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def manage_existing_snapshot_get_size(self, snapshot, existing_ref):
@@ -570,12 +593,14 @@ class HuaweiBaseDriver(object):
             snapshots = []
             for src_vol in source_vols:
                 vol_kwargs = {
-                    'id': src_vol.id,
+                    constants.ID: src_vol.id,
                     'provider_location': src_vol.provider_location,
                 }
-                snapshot_kwargs = {'id': six.text_type(uuid.uuid4()),
-                                   'volume': objects.Volume(**vol_kwargs),
-                                   'volume_size': src_vol.size}
+                snapshot_kwargs = {
+                    constants.ID: six.text_type(uuid.uuid4()),
+                    'volume': objects.Volume(**vol_kwargs),
+                    'volume_size': src_vol.size
+                }
                 snapshot = objects.Snapshot(**snapshot_kwargs)
                 snapshots.append(snapshot)
 
@@ -592,7 +617,7 @@ class HuaweiBaseDriver(object):
                     snapshot = snapshots[i]
                     vol_model_update = self.create_volume_from_snapshot(
                         vol, snapshot)
-                    vol_model_update.update({'id': vol.id})
+                    vol_model_update.update({constants.ID: vol.id})
                     volumes_model_update.append(vol_model_update)
             finally:
                 if delete_snapshots:
@@ -619,16 +644,16 @@ class HuaweiBaseDriver(object):
                 self.configuration)
             replication_mgr.delete_group(group.id, volumes)
 
-        model_update = {'status': fields.GroupStatus.DELETED}
+        model_update = {constants.STATUS: fields.GroupStatus.DELETED}
 
         volumes_model_update = []
         for volume in volumes:
             update = {'id': volume.id}
             try:
                 self.delete_volume(volume)
-                update['status'] = 'deleted'
+                update[constants.STATUS] = 'deleted'
             except Exception:
-                update['status'] = 'error_deleting'
+                update[constants.STATUS] = 'error_deleting'
             finally:
                 volumes_model_update.append(update)
 
@@ -724,8 +749,10 @@ class HuaweiBaseDriver(object):
         for snapshot in snapshots:
             try:
                 self.delete_snapshot(snapshot)
-                snapshot_model = {'id': snapshot.id,
-                                  'status': fields.SnapshotStatus.DELETED}
+                snapshot_model = {
+                    'id': snapshot.id,
+                    'status': fields.SnapshotStatus.DELETED
+                }
                 snapshots_model_update.append(snapshot_model)
             except Exception:
                 LOG.exception("Failed to delete snapshot %s of group.",
@@ -744,16 +771,16 @@ class HuaweiBaseDriver(object):
                 self.configuration)
             secondary_id = ''
         elif secondary_id in (
-                None, self.configuration.replication['backend_id']):
+                None, self.configuration.replication[constants.BACKEND_ID]):
             if (self.active_backend_id ==
-                    self.configuration.replication['backend_id']):
+                    self.configuration.replication[constants.BACKEND_ID]):
                 # Already failover, return success
                 return self.active_backend_id, [], []
 
             volumes_update = huawei_flow.failover(
                 volumes, self.local_cli, self.replication_rmt_cli,
                 self.configuration)
-            secondary_id = self.configuration.replication['backend_id']
+            secondary_id = self.configuration.replication[constants.BACKEND_ID]
         else:
             msg = "Invalid secondary id %s." % secondary_id
             raise exception.InvalidReplicationTarget(reason=msg)
@@ -765,7 +792,8 @@ class HuaweiBaseDriver(object):
 
     def _switch_replication_clients(self):
         self.local_cli, self.replication_rmt_cli = (
-            self.replication_rmt_cli, self.local_cli)
+            self.replication_rmt_cli, self.local_cli
+        )
         (self.configuration.iscsi_info,
          self.configuration.replication['iscsi_info']) = (
             self.configuration.replication['iscsi_info'],
@@ -776,8 +804,8 @@ class HuaweiBaseDriver(object):
         loc_aval_host_lun_ids = local_mapping.get('aval_host_lun_ids', [])
         rmt_aval_host_lun_ids = remote_mapping.get('aval_host_lun_ids', [])
 
-        if local_mapping['hostlun_id'] == remote_mapping['hostlun_id']:
-            return local_mapping['hostlun_id']
+        if local_mapping[constants.HOSTLUN_ID] == remote_mapping[constants.HOSTLUN_ID]:
+            return local_mapping[constants.HOSTLUN_ID]
 
         for i in range(1, 512):
             if i in loc_aval_host_lun_ids and i in rmt_aval_host_lun_ids:
@@ -802,10 +830,10 @@ class HuaweiBaseDriver(object):
     def _merge_iscsi_mapping(self, local_mapping, remote_mapping,
                              same_host_lun_id):
         local_mapping['target_iqns'].extend(remote_mapping['target_iqns'])
-        local_mapping['target_portals'].extend(
-            remote_mapping['target_portals'])
+        local_mapping[constants.TARGET_PORTALS].extend(
+            remote_mapping[constants.TARGET_PORTALS])
         local_mapping['target_luns'] = [same_host_lun_id] * len(
-            local_mapping['target_portals'])
+            local_mapping[constants.TARGET_PORTALS])
         return local_mapping
 
     def _merge_fc_mapping(self, local_mapping, remote_mapping,
@@ -827,8 +855,35 @@ class HuaweiBaseDriver(object):
                 1 for a in attachments if a.connector == connector) > 1:
             LOG.info("Volume is multi-attach and attached to the same host"
                      " multiple times")
-            return
+            return True
+        return False
 
     def revert_to_snapshot(self, context, volume, snapshot):
         huawei_flow.revert_to_snapshot(snapshot, self.local_cli,
                                        self.configuration.rollback_speed)
+
+    def _merge_roce_mapping(self, local_mapping, remote_mapping):
+        local_mapping['portals'].extend(remote_mapping['portals'])
+        local_mapping['target_luns'].extend(remote_mapping['target_luns'])
+        return local_mapping
+
+    def _get_disk_type_by_disk_pool(self, pool_info):
+        """
+        The method for disk pool to obtain the disk type is as follows:
+        Check whether diskTypeList contains disk type information.
+        If diskTypeList contains disk type information, separate disk types with commas ','.
+        If diskTypeList does not contain disk type information,
+        use the disk type returned by TIER0DISKTYPE.
+        """
+        pool_disks = []
+        disk_pool_info = self.local_cli.get_disk_pool_by_id(pool_info.get('PARENTID'))
+        if disk_pool_info.get('diskTypeList'):
+            for disk_type in json.loads(disk_pool_info.get('diskTypeList')):
+                if constants.HUAWEI_DISK_DICT.get(disk_type):
+                    pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_type))
+
+        if not pool_disks:
+            pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_pool_info.get('TIER0DISKTYPE')))
+            return pool_disks[0]
+
+        return ','.join(pool_disks) if pool_disks else None

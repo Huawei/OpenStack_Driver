@@ -82,8 +82,8 @@ class HuaweiHyperMetro(object):
                 self.rmt_client.delete_lun(remote_lun_id)
                 msg = _('Create hypermetro error. %s.') % err
                 raise exception.VolumeBackendAPIException(data=msg)
-        except exception.VolumeBackendAPIException:
-            raise
+        except exception.VolumeBackendAPIException as err:
+            raise err
 
     def delete_hypermetro(self, volume):
         """Delete hypermetro."""
@@ -110,13 +110,15 @@ class HuaweiHyperMetro(object):
     def _create_hypermetro_pair(self, domain_id, lun_id, remote_lun_id,
                                 is_sync=False):
         """Create a HyperMetroPair."""
-        hcp_param = {"DOMAINID": domain_id,
-                     "HCRESOURCETYPE": '1',
-                     "ISFIRSTSYNC": False,
-                     "LOCALOBJID": lun_id,
-                     "RECONVERYPOLICY": '1',
-                     "REMOTEOBJID": remote_lun_id,
-                     "SPEED": self.configuration.hyper_sync_speed}
+        hcp_param = {
+            "DOMAINID": domain_id,
+            "HCRESOURCETYPE": '1',
+            "ISFIRSTSYNC": False,
+            "LOCALOBJID": lun_id,
+            "RECONVERYPOLICY": '1',
+            "REMOTEOBJID": remote_lun_id,
+            "SPEED": self.configuration.hyper_sync_speed
+        }
         if is_sync:
             hcp_param.update({"ISFIRSTSYNC": True})
 
@@ -163,7 +165,7 @@ class HuaweiHyperMetro(object):
         LOG.info(
             'initialize_connection_fc, initiator: %(wwpns)s,'
             'volume id: %(id)s.',
-            {'wwpns': wwns,
+            {'wwpns': huawei_utils.mask_initiator_sensitive_info(list(wwns)),
              'id': volume.id})
 
         lun_id, _ = huawei_utils.get_volume_lun_id(self.rmt_client, volume)
@@ -183,17 +185,15 @@ class HuaweiHyperMetro(object):
         if len(wwns) < self.configuration.min_fc_ini_online:
             msg = (("The number of online fc initiator %(wwns)s less than"
                     " the set %(set)s number.") % {
-                "wwns": wwns,
+                "wwns": huawei_utils.mask_initiator_sensitive_info(list(wwns)),
                 "set": self.configuration.min_fc_ini_online})
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
         for wwn in wwns:
-            self.rmt_client.ensure_fc_initiator_added(wwn, host_id,
-                                                      connector['host'])
+            self.rmt_client.ensure_fc_initiator_added(wwn, host_id, connector['host'])
 
-        (tgt_port_wwns, init_targ_map) = (
-            self.rmt_client.get_init_targ_map(wwns))
+        (tgt_port_wwns, init_targ_map) = (self.rmt_client.get_init_targ_map(wwns))
 
         # Add host into hostgroup.
         hostgroup_id = self.rmt_client.add_host_to_hostgroup(host_id)
@@ -208,14 +208,17 @@ class HuaweiHyperMetro(object):
         host_lun_id = self.rmt_client.get_host_lun_id(host_id, lun_info)
 
         # Return FC properties.
-        fc_info = {'driver_volume_type': 'fibre_channel',
-                   'data': {'target_lun': int(host_lun_id),
-                            'target_discovered': True,
-                            'target_wwn': tgt_port_wwns,
-                            'volume_id': volume.id,
-                            'initiator_target_map': init_targ_map,
-                            'map_info': map_info},
-                   }
+        fc_info = {
+            'driver_volume_type': 'fibre_channel',
+            'data': {
+                'target_lun': int(host_lun_id),
+                'target_discovered': True,
+                'target_wwn': tgt_port_wwns,
+                'volume_id': volume.id,
+                'initiator_target_map': init_targ_map,
+                'map_info': map_info
+            },
+        }
 
         LOG.info('Remote return FC info is: %s.', fc_info)
 
@@ -412,12 +415,12 @@ class HuaweiHyperMetro(object):
                     metro_running_status == constants.RUNNING_SYNC)):
                 self.client.stop_hypermetro(metro_id)
 
-    def _get_metro_group_id(self, id):
-        group_name = huawei_utils.encode_name(id)
+    def _get_metro_group_id(self, group_id):
+        group_name = huawei_utils.encode_name(group_id)
         metrogroup_id = self.client.get_metrogroup_by_name(group_name)
 
         if not metrogroup_id:
-            group_name = huawei_utils.old_encode_name(id)
+            group_name = huawei_utils.old_encode_name(group_id)
             metrogroup_id = self.client.get_metrogroup_by_name(group_name)
 
         return metrogroup_id

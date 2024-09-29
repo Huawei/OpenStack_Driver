@@ -30,6 +30,7 @@ import six
 from cinder import exception
 from cinder.i18n import _
 from cinder import utils
+from cinder.volume.drivers.huawei import cipher
 from cinder.volume.drivers.huawei import constants
 
 LOG = logging.getLogger(__name__)
@@ -46,21 +47,22 @@ class HuaweiConf(object):
         return tree, xml_root
 
     def _encode_authentication(self, tree, xml_root):
+        node_start_text = '!$$$'
         need_encode = False
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
         vstore_node = xml_root.find('Storage/vStoreName')
         if (name_node is not None
-                and not name_node.text.startswith('!$$$')):
-            name_node.text = '!$$$' + base64.b64encode(name_node.text.encode()).decode()
+                and not name_node.text.startswith(node_start_text)):
+            name_node.text = node_start_text + base64.b64encode(name_node.text.encode()).decode()
             need_encode = True
         if (pwd_node is not None
-                and not pwd_node.text.startswith('!$$$')):
-            pwd_node.text = '!$$$' + base64.b64encode(pwd_node.text.encode()).decode()
+                and not pwd_node.text.startswith(node_start_text)):
+            pwd_node.text = node_start_text + base64.b64encode(pwd_node.text.encode()).decode()
             need_encode = True
         if (vstore_node is not None
-                and not vstore_node.text.startswith('!$$$')):
-            vstore_node.text = '!$$$' + base64.b64encode(vstore_node.text.encode()).decode()
+                and not vstore_node.text.startswith(node_start_text)):
+            vstore_node.text = node_start_text + base64.b64encode(vstore_node.text.encode()).decode()
             need_encode = True
 
         if need_encode:
@@ -74,36 +76,39 @@ class HuaweiConf(object):
         tree, xml_root = self.get_xml_info()
         self._encode_authentication(tree, xml_root)
 
-        set_attr_funcs = (self._san_address,
-                          self._san_user,
-                          self._san_password,
-                          self._vstore_name,
-                          self._san_product,
-                          self._san_protocol,
-                          self._lun_type,
-                          self._lun_ready_wait_interval,
-                          self._lun_copy_wait_interval,
-                          self._lun_timeout,
-                          self._lun_write_type,
-                          self._lun_prefetch,
-                          self._storage_pools,
-                          self._force_delete_volume,
-                          self._iscsi_default_target_ip,
-                          self._iscsi_info,
-                          self._roce_info,
-                          self._fc_info,
-                          self._ssl_cert_path,
-                          self._ssl_cert_verify,
-                          self._lun_copy_speed,
-                          self._lun_copy_mode,
-                          self._hyper_pair_sync_speed,
-                          self._replication_pair_sync_speed,
-                          self._get_local_minimum_fc_initiator,
-                          self._hyper_enforce_multipath,
-                          self._get_local_in_band_or_not,
-                          self._get_local_storage_sn,
-                          self._rollback_speed,
-                          self._set_qos_ignored_param)
+        set_attr_funcs = (
+            self._san_address,
+            self._san_user,
+            self._san_password,
+            self._vstore_name,
+            self._san_product,
+            self._san_protocol,
+            self._lun_type,
+            self._lun_ready_wait_interval,
+            self._lun_copy_wait_interval,
+            self._lun_timeout,
+            self._lun_write_type,
+            self._lun_prefetch,
+            self._storage_pools,
+            self._force_delete_volume,
+            self._iscsi_default_target_ip,
+            self._iscsi_info,
+            self._roce_info,
+            self._fc_info,
+            self._ssl_cert_path,
+            self._ssl_cert_verify,
+            self._lun_copy_speed,
+            self._lun_copy_mode,
+            self._hyper_pair_sync_speed,
+            self._replication_pair_sync_speed,
+            self._get_local_minimum_fc_initiator,
+            self._hyper_enforce_multipath,
+            self._get_local_in_band_or_not,
+            self._get_local_storage_sn,
+            self._rollback_speed,
+            self._set_qos_ignored_param,
+            self._get_rest_client_semaphore
+        )
 
         for f in set_attr_funcs:
             f(xml_root)
@@ -166,7 +171,7 @@ class HuaweiConf(object):
             raise exception.InvalidInput(reason=msg)
 
         pwd = base64.b64decode(text[4:]).decode()
-        setattr(self.conf, 'san_password', pwd)
+        setattr(self.conf, 'san_password', cipher.decrypt_cipher(pwd))
 
     def _vstore_name(self, xml_root):
         text = xml_root.findtext('Storage/vStoreName')
@@ -180,17 +185,19 @@ class HuaweiConf(object):
         extra_constants = {}
         if product in constants.DORADO_V6_AND_V6_PRODUCT:
             extra_constants['QOS_SPEC_KEYS'] = (
-                'maxIOPS', 'maxBandWidth', 'IOType')
+                'maxIOPS', 'maxBandWidth', 'IOType'
+            )
             extra_constants['QOS_IOTYPES'] = ('2',)
-            extra_constants['SUPPORT_LUN_TYPES'] = ('Thin',)
-            extra_constants['DEFAULT_LUN_TYPE'] = 'Thin'
+            extra_constants['SUPPORT_LUN_TYPES'] = (constants.THIN,)
+            extra_constants['DEFAULT_LUN_TYPE'] = constants.THIN
             extra_constants['SUPPORT_CLONE_MODE'] = ('fastclone', 'luncopy')
         else:
             extra_constants['QOS_SPEC_KEYS'] = (
                 'maxIOPS', 'minIOPS', 'minBandWidth',
-                'maxBandWidth', 'latency', 'IOType')
+                'maxBandWidth', 'latency', 'IOType'
+            )
             extra_constants['QOS_IOTYPES'] = ('0', '1', '2')
-            extra_constants['SUPPORT_LUN_TYPES'] = ('Thick', 'Thin')
+            extra_constants['SUPPORT_LUN_TYPES'] = ('Thick', constants.THIN)
             extra_constants['DEFAULT_LUN_TYPE'] = 'Thick'
             extra_constants['SUPPORT_CLONE_MODE'] = ('luncopy',)
 
@@ -401,11 +408,11 @@ class HuaweiConf(object):
 
     def _check_hostname_regex_config(self, info):
         for ini in info:
-            if ini.get("HostName"):
+            if ini.get(constants.HOSTNAME):
                 try:
-                    if ini.get("HostName") == '*':
+                    if ini.get(constants.HOSTNAME) == '*':
                         continue
-                    re.compile(ini['HostName'])
+                    re.compile(ini[constants.HOSTNAME])
                 except Exception as err:
                     msg = _('Invalid initiator configuration. '
                             'Reason: %s.') % err
@@ -441,8 +448,9 @@ class HuaweiConf(object):
 
         # Step 5, make initiators configure dict, convert to:
         # [{'TargetPortGroup': 'xxx', 'Name': 'xxx'},
-        #  {'Name': 'xxx', 'CHAPinfo': 'mm-usr#mm-pwd'}]
-        get_opts = lambda x: x.split(':', 1)
+        # {'Name': 'xxx', 'CHAPinfo': 'mm-usr#mm-pwd'}]
+        def get_opts(x):
+            return x.split(':', 1)
         initiator_infos = map(lambda x: dict(map(get_opts, x)),
                               initiator_infos)
         # Convert generator to list for py3 compatibility.
@@ -467,7 +475,7 @@ class HuaweiConf(object):
             dev_config = {}
             dev_config['san_address'] = dev['san_address'].split(';')
             dev_config['san_user'] = dev['san_user']
-            dev_config['san_password'] = dev['san_password']
+            dev_config['san_password'] = cipher.decrypt_cipher(dev['san_password'])
             dev_config['vstore_name'] = dev.get('vstore_name')
             dev_config['metro_domain'] = dev['metro_domain']
             dev_config['storage_pools'] = dev['storage_pool'].split(';')
@@ -477,16 +485,16 @@ class HuaweiConf(object):
                 dev.get('fc_info'))
             dev_config['roce_info'] = self._parse_rmt_iscsi_info(
                 dev.get('roce_info'))
-            dev_config['iscsi_default_target_ip'] = (
-                dev['iscsi_default_target_ip'].split(';')
-                if 'iscsi_default_target_ip' in dev
+            dev_config[constants.ISCSI_DEFAULT_TARGET_IP] = (
+                dev[constants.ISCSI_DEFAULT_TARGET_IP].split(';')
+                if constants.ISCSI_DEFAULT_TARGET_IP in dev
                 else [])
-            dev_config['metro_sync_completed'] = (
-                dev['metro_sync_completed']
-                if 'metro_sync_completed' in dev else "True")
-            dev_config['in_band_or_not'] = (
-                dev['in_band_or_not'].lower() == 'true'
-                if 'in_band_or_not' in dev else False)
+            dev_config[constants.METRO_SYNC_COMPLETED] = (
+                dev[constants.METRO_SYNC_COMPLETED]
+                if constants.METRO_SYNC_COMPLETED in dev else "True")
+            dev_config[constants.IN_BAND_OR_NOT] = (
+                dev[constants.IN_BAND_OR_NOT].lower() == 'true'
+                if constants.IN_BAND_OR_NOT in dev else False)
             dev_config['storage_sn'] = dev.get('storage_sn')
             devs_config.append(dev_config)
 
@@ -503,7 +511,7 @@ class HuaweiConf(object):
             dev_config['backend_id'] = dev['backend_id']
             dev_config['san_address'] = dev['san_address'].split(';')
             dev_config['san_user'] = dev['san_user']
-            dev_config['san_password'] = dev['san_password']
+            dev_config['san_password'] = cipher.decrypt_cipher(dev['san_password'])
             dev_config['vstore_name'] = dev.get('vstore_name')
             dev_config['storage_pools'] = dev['storage_pool'].split(';')
             dev_config['iscsi_info'] = self._parse_rmt_iscsi_info(
@@ -512,13 +520,13 @@ class HuaweiConf(object):
                 dev.get('fc_info'))
             dev_config['roce_info'] = self._parse_rmt_iscsi_info(
                 dev.get('roce_info'))
-            dev_config['iscsi_default_target_ip'] = (
-                dev['iscsi_default_target_ip'].split(';')
-                if 'iscsi_default_target_ip' in dev
+            dev_config[constants.ISCSI_DEFAULT_TARGET_IP] = (
+                dev[constants.ISCSI_DEFAULT_TARGET_IP].split(';')
+                if constants.ISCSI_DEFAULT_TARGET_IP in dev
                 else [])
-            dev_config['in_band_or_not'] = (
-                dev['in_band_or_not'].lower() == 'true'
-                if 'in_band_or_not' in dev else False)
+            dev_config[constants.IN_BAND_OR_NOT] = (
+                dev[constants.IN_BAND_OR_NOT].lower() == 'true'
+                if constants.IN_BAND_OR_NOT in dev else False)
             dev_config['storage_sn'] = dev.get('storage_sn')
             devs_config.append(dev_config)
 
@@ -685,6 +693,18 @@ class HuaweiConf(object):
             qos_ignored_params = text.split(';')
             qos_ignored_params = list(set(x.strip() for x in qos_ignored_params if x.strip()))
         setattr(constants, 'QOS_IGNORED_PARAMS', qos_ignored_params)
+
+    def _get_rest_client_semaphore(self, xml_root):
+        semaphore = xml_root.findtext('Storage/Semaphore')
+        if not semaphore or not semaphore.strip():
+            setattr(self.conf, 'semaphore', constants.DEFAULT_SEMAPHORE)
+        elif semaphore.isdigit() and int(semaphore) > 0:
+            setattr(self.conf, 'semaphore', int(semaphore))
+        else:
+            msg = _("Semaphore configured error. The semaphore must be an "
+                    "integer and must be greater than zero")
+            LOG.error(msg)
+            raise exception.InvalidInput(reason=msg)
 
     def _roce_info(self, xml_root):
         nodes = xml_root.findall('RoCE/Initiator')
