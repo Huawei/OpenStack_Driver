@@ -14,12 +14,13 @@
 #    under the License.
 
 import json
-import netaddr
 import re
-import requests
-import six
 import threading
 import time
+
+import requests
+import six
+import netaddr
 
 from oslo_concurrency import lockutils
 from oslo_log import log as logging
@@ -30,6 +31,7 @@ from requests.adapters import HTTPAdapter
 from cinder import exception
 from cinder.i18n import _
 from cinder import utils
+from cinder.volume.drivers.huawei import cipher
 from cinder.volume.drivers.huawei import constants
 from cinder.volume.drivers.huawei import huawei_utils
 
@@ -65,7 +67,7 @@ class RestClient(object):
         self.metro_domain = kwargs.get('metro_domain', None)
         self.metro_sync_completed = strutils.bool_from_string(
             kwargs.get('metro_sync_completed'))
-        self.semaphore = threading.Semaphore(20)
+        self.semaphore = threading.Semaphore(self.configuration.semaphore)
         self.call_lock = lockutils.ReaderWriterLock()
         self.session = None
         self.url = None
@@ -76,6 +78,7 @@ class RestClient(object):
         self.storage_sn = kwargs.get('storage_sn',
                                      self.configuration.storage_sn)
         self.is_dorado_v6 = False
+        self.device_id = None
 
         if self.in_band_or_not and not self.storage_sn:
             msg = _("'Storagesn' is must be set if 'InBandOrNot' is True,"
@@ -90,20 +93,35 @@ class RestClient(object):
             requests.packages.urllib3.disable_warnings(
                 requests.packages.urllib3.exceptions.InsecurePlatformWarning)
 
+    @staticmethod
+    def _get_disk_type_by_storage_pool(pool_info):
+        """
+        The method for the storage pool to obtain the disk type is as follows:
+        If disk type information exists in 'TIER0CAPACITY','TIER1CAPACITY', 'TIER2CAPACITY',
+        separate them with commas ',' and return them.
+        """
+        pool_disk = []
+        for i, x in enumerate(['ssd', 'sas', 'nl_sas']):
+            if (pool_info.get('TIER%dCAPACITY' % i) and
+                    pool_info.get('TIER%dCAPACITY' % i) != '0'):
+                pool_disk.append(x)
+
+        return ','.join(pool_disk) if pool_disk else None
+
     def init_http_head(self):
         self.url = None
         self.session = requests.Session()
         session_headers = {
             "Connection": "keep-alive",
-            "Content-Type": "application/json"}
+            "Content-Type": "application/json"
+        }
         if self.in_band_or_not:
             session_headers["IBA-Target-Array"] = self.storage_sn
         self.session.headers.update(session_headers)
 
         self.session.verify = self.ssl_cert_path if self.ssl_cert_verify else False
 
-    def do_call(self, url=None, data=None, method=None,
-                calltimeout=constants.SOCKET_TIMEOUT, filter_flag=False):
+    def do_call(self, url=None, data=None, method=None, **kwargs):
         """Send requests to Huawei storage server.
 
         Send HTTPS call, get response in JSON.
@@ -112,37 +130,28 @@ class RestClient(object):
         if self.url:
             url = self.url + url
 
-        kwargs = {'timeout': calltimeout}
+        sensitive_info = {} if kwargs.get('sensitive_info') is None else kwargs.get('sensitive_info')
+        sensitive_keys = sensitive_info.get('sensitive_keys')
+        request_kwargs = {'timeout': kwargs.get('calltimeout')}
         if data:
-            kwargs['data'] = json.dumps(data)
+            request_kwargs[constants.DATA] = json.dumps(data)
 
-        if method in (None, 'POST'):
-            func = self.session.post
-        elif method in ('PUT',):
-            func = self.session.put
-        elif method in ('GET',):
-            func = self.session.get
-        elif method in ('DELETE',):
-            func = self.session.delete
-        else:
-            msg = _("Request method %s is invalid.") % method
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
+        func = self._get_func(method)
 
         self.semaphore.acquire()
 
         try:
-            res = func(url, **kwargs)
+            res = func(url, **request_kwargs)
         except Exception as exc:
             if "BadStatusLine" in six.text_type(exc):
-                return {"error": {
-                    "code": constants.ERROR_BAD_STATUS_LINE,
-                    "description": "BadStatusLine."}}
+                return {constants.ERROR: {
+                    constants.CODE: constants.ERROR_BAD_STATUS_LINE,
+                    constants.DESCRIPTION: "BadStatusLine."}}
             LOG.exception('Bad response from server: %(url)s.'
                           ' Error: %(err)s',
-                          {'url': url, 'err': six.text_type(exc)})
-            return {"error": {"code": constants.ERROR_CONNECT_TO_SERVER,
-                              "description": "Connect to server error."}
+                          {constants.URL: sensitive_info.get(constants.URL, url), 'err': six.text_type(exc)})
+            return {constants.ERROR: {constants.CODE: constants.ERROR_CONNECT_TO_SERVER,
+                                      constants.DESCRIPTION: "Connect to server error."}
                     }
         finally:
             self.semaphore.release()
@@ -150,20 +159,22 @@ class RestClient(object):
         try:
             res.raise_for_status()
         except requests.HTTPError as exc:
-            return {"error": {"code": exc.response.status_code,
-                              "description": six.text_type(exc)}
+            return {constants.ERROR: {constants.CODE: exc.response.status_code,
+                                      constants.DESCRIPTION: six.text_type(exc)}
                     }
 
         res_json = res.json()
-        if not filter_flag:
-            LOG.info('\nRequest URL: %(url)s\n'
-                     'Call Method: %(method)s\n'
-                     'Request Data: %(data)s\n'
-                     'Response Data:%(res)s',
-                     {'url': url,
+        response_time = res.elapsed.total_seconds()
+        if not kwargs.get('filter_flag'):
+            LOG.info('Request URL: %(url)s, Call Method: %(method)s,'
+                     'Request Data: %(data)s, Response Data:%(res)s,'
+                     'Response Time:%(res_time)s',
+                     {constants.URL: sensitive_info.get(constants.URL, url),
                       'method': method,
-                      'data': data,
-                      'res': res_json})
+                      constants.DATA: sensitive_info.get(constants.DATA, data),
+                      'res': res_json if not sensitive_keys else huawei_utils.mask_initiator_sensitive_info(
+                          res_json, sensitive_keys=sensitive_keys),
+                      'res_time': response_time})
 
         return res_json
 
@@ -172,9 +183,11 @@ class RestClient(object):
         device_id = None
         for item_url in self.san_address:
             url = item_url + "xx/sessions"
-            data = {"username": self.san_user,
-                    "password": self.san_password,
-                    "scope": "0"}
+            data = {
+                "username": self.san_user,
+                "password": self.san_password,
+                "scope": "0"
+            }
             if self.vstore_name:
                 data['vstorename'] = self.vstore_name
             self.init_http_head()
@@ -183,18 +196,18 @@ class RestClient(object):
                                   calltimeout=constants.LOGIN_SOCKET_TIMEOUT,
                                   filter_flag=True)
 
-            if (result['error']['code'] != 0) or ("data" not in result):
+            if (result.get('error', {}).get('code') != 0) or (constants.DATA not in result):
                 LOG.error("Login error. URL: %(url)s\n"
                           "Reason: %(reason)s.",
                           {"url": item_url, "reason": result})
                 continue
 
             LOG.info('Login success: %(url)s', {'url': item_url})
-            device_id = result['data']['deviceid']
+            device_id = result[constants.DATA]['deviceid']
             self.device_id = device_id
             self.url = item_url + device_id
-            self.session.headers['iBaseToken'] = result['data']['iBaseToken']
-            if (result['data']['accountstate']
+            self.session.headers['iBaseToken'] = result[constants.DATA]['iBaseToken']
+            if (result[constants.DATA]['accountstate']
                     in constants.PWD_EXPIRED_OR_INITIAL):
                 self.logout()
                 msg = _("Password has expired or initial, "
@@ -255,7 +268,7 @@ class RestClient(object):
             LOG.info('Relogin has been successed by other thread.')
         return True
 
-    def call(self, url, data=None, method=None, filter_flag=False):
+    def call(self, url, data=None, method=None, filter_flag=False, sensitive_info=None):
         """Send requests to server.
 
         If fail, try another RestURL.
@@ -263,27 +276,30 @@ class RestClient(object):
         with self.call_lock.read_lock():
             if self.url:
                 old_token = self.session.headers.get('iBaseToken')
-                result = self.do_call(url, data, method,
-                                      filter_flag=filter_flag)
+                result = self.do_call(
+                    url, data, method, filter_flag=filter_flag, sensitive_info=sensitive_info)
             else:
                 old_token = None
-                result = {"error": {
-                    "code": constants.ERROR_UNAUTHORIZED_TO_SERVER,
-                    "description": "unauthorized."}}
+                result = {
+                    constants.ERROR: {
+                        constants.CODE: constants.ERROR_UNAUTHORIZED_TO_SERVER,
+                        "description": "unauthorized."
+                    }
+                }
 
-        error_code = result['error']['code']
+        error_code = result[constants.ERROR][constants.CODE]
         if error_code in constants.RELOGIN_ERROR_CODE:
             LOG.error("Can't open the recent url, relogin.")
             with self.call_lock.write_lock():
                 relogin_result = self.relogin(old_token)
             if relogin_result:
                 with self.call_lock.read_lock():
-                    result = self.do_call(url, data, method,
-                                          filter_flag=filter_flag)
-                if result['error']['code'] in constants.RELOGIN_ERROR_PASS:
+                    result = self.do_call(
+                        url, data, method, filter_flag=filter_flag, sensitive_info=sensitive_info)
+                if result[constants.ERROR][constants.CODE] in constants.RELOGIN_ERROR_PASS:
                     LOG.warning('This operation maybe successed first time')
-                    result['error']['code'] = 0
-                elif result['error']['code'] == 0:
+                    result[constants.ERROR][constants.CODE] = 0
+                elif result[constants.ERROR][constants.CODE] == 0:
                     LOG.info('Successed in the second time.')
                 else:
                     LOG.info('Failed in the second time, Reason: %s', result)
@@ -336,12 +352,12 @@ class RestClient(object):
         lun_params['MIRRORPOLICY'] = '1'
         url = "/lun"
         result = self.call(url, lun_params)
-        if result['error']['code'] == constants.ERROR_VOLUME_ALREADY_EXIST:
+        if result.get('error', {}).get('code') == constants.ERROR_VOLUME_ALREADY_EXIST:
             lun_id = self.get_lun_id_by_name(lun_params['NAME'])
             if lun_id:
                 return self.get_lun_info(lun_id)
 
-        if result['error']['code'] == constants.ERROR_VOLUME_TIMEOUT:
+        if result.get('error', {}).get('code') == constants.ERROR_VOLUME_TIMEOUT:
             try_times = 2
             while try_times:
                 time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
@@ -357,12 +373,12 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']
+        return result.get('data')
 
     def check_lun_exist(self, lun_id, lun_wwn=None):
-        url = "/lun/" + lun_id
+        url = "/lun/%s" % lun_id
         result = self.call(url, None, "GET")
-        error_code = result['error']['code']
+        error_code = result.get('error', {}).get('code')
         if error_code != 0:
             if error_code == constants.ERROR_LUN_NOT_EXIST:
                 LOG.warning("Can't find LUN %s on the array.", lun_id)
@@ -372,7 +388,7 @@ class RestClient(object):
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
-        if lun_wwn and result['data']['WWN'] != lun_wwn:
+        if lun_wwn and result.get('data', {}).get('WWN') != lun_wwn:
             LOG.debug("LUN ID %(id)s with WWN %(wwn)s does not exist on "
                       "the array.", {"id": lun_id, "wwn": lun_wwn})
             return False
@@ -380,11 +396,10 @@ class RestClient(object):
         return True
 
     def delete_lun(self, lun_id):
-        url = "/lun/" + lun_id
-        data = {"TYPE": "11",
-                "ID": lun_id}
+        url = "/lun/%s" % lun_id
+        data = {"TYPE": "11", "ID": lun_id}
         result = self.call(url, data, "DELETE")
-        if result['error']['code'] == constants.ERROR_LUN_NOT_EXIST:
+        if result.get('error', {}).get('code') == constants.ERROR_LUN_NOT_EXIST:
             return
         self._assert_rest_result(result, _('Delete lun error.'))
 
@@ -394,7 +409,7 @@ class RestClient(object):
         msg = _('Query resource pool error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
-        return result['data']
+        return result.get('data')
 
     def get_pool_by_name(self, pool_name):
         url = "/storagepool?filter=NAME::%s" % pool_name
@@ -402,16 +417,17 @@ class RestClient(object):
         msg = _('Query pool info by name error.')
         self._assert_rest_result(result, msg)
         if result.get('data'):
-            return result['data'][0]
+            return result.get('data')[0]
+        return None
 
     @staticmethod
     def _get_capacity_info(info, pool):
         info['CAPACITY'] = pool.get('DATASPACE', pool['USERFREECAPACITY'])
         info['TOTALCAPACITY'] = pool['USERTOTALCAPACITY']
         if 'totalSizeWithoutSnap' in pool:
-            info['LUNCONFIGEDCAPACITY'] = pool['totalSizeWithoutSnap']
-        elif 'LUNCONFIGEDCAPACITY' in pool:
-            info['LUNCONFIGEDCAPACITY'] = pool['LUNCONFIGEDCAPACITY']
+            info[constants.LUNCONFIGEDCAPACITY] = pool['totalSizeWithoutSnap']
+        elif constants.LUNCONFIGEDCAPACITY in pool:
+            info[constants.LUNCONFIGEDCAPACITY] = pool[constants.LUNCONFIGEDCAPACITY]
         return info
 
     def get_pool_info(self, pool_name=None, pools=None):
@@ -430,6 +446,7 @@ class RestClient(object):
             info['TIER0CAPACITY'] = pool.get('TIER0CAPACITY')
             info['TIER1CAPACITY'] = pool.get('TIER1CAPACITY')
             info['TIER2CAPACITY'] = pool.get('TIER2CAPACITY')
+            info['PARENTID'] = pool.get('PARENTID')
             self._get_capacity_info(info, pool)
 
         return info
@@ -450,13 +467,14 @@ class RestClient(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        return pool_info['ID']
+        return pool_info.get('ID')
 
     def _get_id_from_result(self, result, name, key):
         if 'data' in result:
             for item in result['data']:
                 if name == item.get(key):
                     return item['ID']
+        return None
 
     def _get_result_id(self, result):
         if result.get('data'):
@@ -466,7 +484,7 @@ class RestClient(object):
 
     def get_lun_id_by_name(self, name):
         if not name:
-            return
+            return None
 
         url = "/lun?filter=NAME::%s&range=[0-100]" % name
         result = self.call(url, None, "GET")
@@ -484,18 +502,20 @@ class RestClient(object):
 
     def create_snapshot(self, lun_id, snapshot_name, snapshot_description):
         url = "/snapshot"
-        data = {"TYPE": "27",
-                "NAME": snapshot_name,
-                "PARENTTYPE": "11",
-                "DESCRIPTION": snapshot_description,
-                "PARENTID": lun_id}
+        data = {
+            "TYPE": "27",
+            "NAME": snapshot_name,
+            "PARENTTYPE": "11",
+            "DESCRIPTION": snapshot_description,
+            "PARENTID": lun_id
+        }
         result = self.call(url, data)
-        if result['error']['code'] == constants.ERROR_VOLUME_ALREADY_EXIST:
+        if result.get('error', {}).get('code') == constants.ERROR_VOLUME_ALREADY_EXIST:
             snapshot_id = self.get_snapshot_id_by_name(snapshot_name)
             if snapshot_id:
                 return self.get_snapshot_info(snapshot_id)
 
-        if result['error']['code'] == constants.ERROR_VOLUME_TIMEOUT:
+        if result.get('error', {}).get('code') == constants.ERROR_VOLUME_TIMEOUT:
             try_times = 2
             while try_times:
                 time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
@@ -511,7 +531,7 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']
+        return result.get('data')
 
     def get_lun_id(self, volume, volume_name):
         metadata = huawei_utils.get_lun_metadata(volume)
@@ -529,7 +549,7 @@ class RestClient(object):
     def check_snapshot_exist(self, snapshot_id, snapshot_wwn=None):
         url = "/snapshot/%s" % snapshot_id
         result = self.call(url, None, "GET")
-        error_code = result['error']['code']
+        error_code = result.get('error', {}).get('code')
         if error_code != 0:
             if error_code == constants.ERROR_SNAPSHOT_NOT_EXIST:
                 return False
@@ -538,7 +558,7 @@ class RestClient(object):
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
         if snapshot_wwn:
-            if snapshot_wwn != result['data']['WWN']:
+            if snapshot_wwn != result.get('data', {}).get('WWN'):
                 return False
 
         return True
@@ -553,39 +573,38 @@ class RestClient(object):
         url = "/snapshot/%s" % snapshotid
         data = {"TYPE": "27", "ID": snapshotid}
         result = self.call(url, data, "DELETE")
-        if result['error']['code'] == constants.ERROR_SNAPSHOT_NOT_EXIST:
+        if result.get('error', {}).get('code') == constants.ERROR_SNAPSHOT_NOT_EXIST:
             return
         self._assert_rest_result(result, _('Delete snapshot error.'))
 
     def get_snapshot_id_by_name(self, name):
         if not name:
-            return
+            return None
 
         url = "/snapshot?filter=NAME::%s&range=[0-100]" % name
         description = 'The snapshot license file is unavailable.'
         result = self.call(url, None, "GET")
         if 'error' in result:
             if description == result['error']['description']:
-                return
+                return None
             self._assert_rest_result(result, _('Get snapshot id error.'))
 
         return self._get_id_from_result(result, name, 'NAME')
 
     def create_luncopy(self, srclunid, tgtlunid, copyspeed):
-        data = {"NAME": 'LUNCopy_%s_%s' % (srclunid, tgtlunid),
-                "COPYSPEED": copyspeed,
-                "SOURCELUN": ("INVALID;%s;INVALID;INVALID;INVALID"
-                              % srclunid),
-                "TARGETLUN": ("INVALID;%s;INVALID;INVALID;INVALID"
-                              % tgtlunid),
-                }
+        data = {
+            "NAME": 'LUNCopy_%s_%s' % (srclunid, tgtlunid),
+            "COPYSPEED": copyspeed,
+            "SOURCELUN": ("INVALID;%s;INVALID;INVALID;INVALID" % srclunid),
+            "TARGETLUN": ("INVALID;%s;INVALID;INVALID;INVALID" % tgtlunid),
+        }
         result = self.call("/luncopy", data)
 
         msg = _('Create luncopy error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def add_host_to_hostgroup(self, host_id):
         """Associate host to hostgroup.
@@ -608,15 +627,18 @@ class RestClient(object):
 
         msg = _('Find portgroup error.')
         self._assert_rest_result(result, msg)
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def _associate_portgroup_to_view(self, view_id, portgroup_id):
         url = "/MAPPINGVIEW/CREATE_ASSOCIATE"
-        data = {"ASSOCIATEOBJTYPE": "257",
-                "ASSOCIATEOBJID": portgroup_id,
-                "TYPE": "245",
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": "257",
+            "ASSOCIATEOBJID": portgroup_id,
+            "TYPE": "245",
+            "ID": view_id
+        }
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('Associate portgroup to mapping '
                                  'view error.'))
@@ -726,23 +748,23 @@ class RestClient(object):
                 'create_hostgroup_with_check. '
                 'hostgroup name: %(name)s, '
                 'hostgroup id: %(id)s',
-                {'name': hostgroup_name,
+                {constants.NAME: hostgroup_name,
                  'id': hostgroup_id})
             return hostgroup_id
 
         try:
             hostgroup_id = self._create_hostgroup(hostgroup_name)
-        except Exception:
+        except Exception as err:
             LOG.info(
                 'Failed to create hostgroup: %(name)s. '
                 'Please check if it exists on the array.',
-                {'name': hostgroup_name})
+                {constants.NAME: hostgroup_name})
             hostgroup_id = self.find_hostgroup(hostgroup_name)
             if hostgroup_id is None:
                 err_msg = (_(
                     'Failed to create hostgroup: %(name)s. '
-                    'Check if it exists on the array.')
-                    % {'name': hostgroup_name})
+                    'Check if it exists on the array, err:%(error)s.')
+                           % {constants.NAME: hostgroup_name, 'error': err})
                 LOG.error(err_msg)
                 raise exception.VolumeBackendAPIException(data=err_msg)
 
@@ -751,7 +773,7 @@ class RestClient(object):
             'Create hostgroup success. '
             'hostgroup name: %(name)s, '
             'hostgroup id: %(id)s',
-            {'name': hostgroup_name,
+            {constants.NAME: hostgroup_name,
              'id': hostgroup_id})
         return hostgroup_id
 
@@ -764,24 +786,26 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def _create_lungroup(self, lungroup_name):
         url = "/lungroup"
-        data = {"DESCRIPTION": lungroup_name,
-                "APPTYPE": '0',
-                "GROUPTYPE": '0',
-                "NAME": lungroup_name}
+        data = {
+            "DESCRIPTION": lungroup_name,
+            "APPTYPE": '0',
+            "GROUPTYPE": '0',
+            "NAME": lungroup_name
+        }
         result = self.call(url, data)
 
         msg = _('Create lungroup error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def delete_lungroup(self, lungroup_id):
-        url = "/LUNGroup/" + lungroup_id
+        url = "/LUNGroup/%s" % lungroup_id
         result = self.call(url, None, "DELETE")
         self._assert_rest_result(result, _('Delete lungroup error.'))
 
@@ -833,8 +857,9 @@ class RestClient(object):
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Find host in hostgroup error.'))
 
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def add_host_with_check(self, host_name, is_dorado_v6, initiator):
         self.is_dorado_v6 = is_dorado_v6
@@ -849,7 +874,7 @@ class RestClient(object):
                 'add_host_with_check. '
                 'host name: %(name)s, '
                 'host id: %(id)s',
-                {'name': host_name,
+                {constants.NAME: host_name,
                  'id': host_id})
             self._update_host(host_id, new_alua_info)
             return host_id
@@ -858,16 +883,16 @@ class RestClient(object):
 
         try:
             host_id = self._add_host(encoded_name, host_name, new_alua_info)
-        except Exception:
+        except Exception as err:
             LOG.info(
                 'Failed to create host: %(name)s. '
                 'Check if it exists on the array.',
-                {'name': encoded_name})
+                {constants.NAME: encoded_name})
             host_id = self.get_host_id_by_name(encoded_name)
             if not host_id:
                 msg = _('Failed to create host: %(name)s. '
-                        'Please check if it exists on the array.'
-                        ) % {'name': encoded_name}
+                        'Please check if it exists on the array, err:%(error)s'
+                        ) % {constants.NAME: encoded_name, 'error': err}
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
@@ -876,29 +901,32 @@ class RestClient(object):
             'create host success. '
             'host name: %(name)s, '
             'host id: %(id)s',
-            {'name': encoded_name,
+            {constants.NAME: encoded_name,
              'id': host_id})
         return host_id
 
     def _add_host(self, hostname, host_name_before_hash, info):
         """Add a new host."""
         url = "/host"
-        data = {"TYPE": "21",
-                "NAME": hostname,
-                "OPERATIONSYSTEM": "0",
-                "DESCRIPTION": host_name_before_hash}
+        data = {
+            "TYPE": "21",
+            "NAME": hostname,
+            "OPERATIONSYSTEM": "0",
+            "DESCRIPTION": host_name_before_hash
+        }
         data.update(info)
         result = self.call(url, data)
         self._assert_rest_result(result, _('Add new host error.'))
 
         if 'data' in result:
             return result['data']['ID']
+        return None
 
     def _update_host(self, host_id, data):
         """Update a host."""
-        url = "/host/" + host_id
+        url = "/host/%s" % host_id
         result = self.call(url, data, "PUT")
-        if result['error']['code'] == constants.HOST_NOT_EXIST:
+        if result.get('error', {}).get('code') == constants.HOST_NOT_EXIST:
             return
         self._assert_rest_result(result, _('Update host error.'))
 
@@ -933,13 +961,15 @@ class RestClient(object):
 
     def _associate_host_to_hostgroup(self, hostgroup_id, host_id):
         url = "/hostgroup/associate"
-        data = {"TYPE": "14",
-                "ID": hostgroup_id,
-                "ASSOCIATEOBJTYPE": "21",
-                "ASSOCIATEOBJID": host_id}
+        data = {
+            "TYPE": "14",
+            "ID": hostgroup_id,
+            "ASSOCIATEOBJTYPE": "21",
+            "ASSOCIATEOBJID": host_id
+        }
 
         result = self.call(url, data)
-        if result['error']['code'] == constants.HOST_ALREADY_IN_HOSTGROUP:
+        if result.get('error', {}).get('code') == constants.HOST_ALREADY_IN_HOSTGROUP:
             return
         self._assert_rest_result(result, _('Associate host to hostgroup '
                                  'error.'))
@@ -948,13 +978,15 @@ class RestClient(object):
             self, lungroup_id, lun_id, lun_type=constants.LUN_TYPE, is_associated_host=False):
         """Associate lun to lungroup."""
         url = "/lungroup/associate"
-        data = {"ID": lungroup_id,
-                "ASSOCIATEOBJTYPE": lun_type,
-                "ASSOCIATEOBJID": lun_id}
+        data = {
+            "ID": lungroup_id,
+            "ASSOCIATEOBJTYPE": lun_type,
+            "ASSOCIATEOBJID": lun_id
+        }
         if is_associated_host and self.is_dorado_v6:
             data["startHostLunId"] = 1
         result = self.call(url, data)
-        if result['error']['code'] == constants.LUN_ALREADY_IN_LUNGROUP:
+        if result.get('error', {}).get('code') == constants.LUN_ALREADY_IN_LUNGROUP:
             return
         self._assert_rest_result(result, _('Associate lun to lungroup error.'))
 
@@ -971,10 +1003,14 @@ class RestClient(object):
     def _initiator_is_added_to_array(self, ininame):
         """Check whether the initiator is already added on the array."""
         url = "/iscsi_initiator/%s" % ininame
-        result = self.call(url, None, "GET")
+        sensitive_info = {
+            'url': '/'.join([self.url, 'iscsi_initiator', huawei_utils.mask_initiator_sensitive_info(ininame)]),
+            'sensitive_keys': ['ID'],
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
         err_str = _('Check initiator added to array error.')
 
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             self._assert_initiator_exist(result, err_str)
             return False
 
@@ -985,10 +1021,14 @@ class RestClient(object):
     def is_initiator_associated_to_host(self, ininame, host_id):
         """Check whether the initiator is associated to the host."""
         url = "/iscsi_initiator/%s" % ininame
-        result = self.call(url, None, "GET")
+        sensitive_info = {
+            'url': '/'.join([self.url, 'iscsi_initiator', huawei_utils.mask_initiator_sensitive_info(ininame)]),
+            'sensitive_keys': ['ID'],
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
         err_str = _('Check initiator associated to host error.')
 
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             self._assert_initiator_exist(result, err_str)
             return True
 
@@ -1000,7 +1040,7 @@ class RestClient(object):
                 return True
             else:
                 msg = (_("Initiator %(ini)s has been added to host "
-                         "%(host)s.") % {"ini": ininame,
+                         "%(host)s.") % {"ini": huawei_utils.mask_initiator_sensitive_info(ininame),
                                          "host": item['PARENTNAME']})
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
@@ -1009,10 +1049,14 @@ class RestClient(object):
     def is_initiator_used_chap(self, ininame):
         """Check whether the initiator is associated to the host."""
         url = "/iscsi_initiator/%s" % ininame
-        result = self.call(url, None, "GET")
+        sensitive_info = {
+            'url': '/'.join([self.url, 'iscsi_initiator', huawei_utils.mask_initiator_sensitive_info(ininame)]),
+            'sensitive_keys': ['ID'],
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
         err_str = _('Check initiator associated to host error.')
 
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             self._assert_initiator_exist(result, err_str)
             return False
 
@@ -1025,21 +1069,33 @@ class RestClient(object):
     def _add_initiator_to_array(self, initiator_name):
         """Add a new initiator to storage device."""
         url = "/iscsi_initiator"
-        data = {"TYPE": "222",
-                "ID": initiator_name,
-                "USECHAP": "false"}
-        result = self.call(url, data, "POST")
-        self._assert_rest_result(result,
-                                 _('Add initiator to array error.'))
+        data = {
+            "TYPE": "222",
+            constants.ID_UPPER: initiator_name,
+            "USECHAP": "false"
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=[constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER],
+        }
+        result = self.call(url, data, "POST", sensitive_info=sensitive_info)
+        self._assert_rest_result(result, _('Add initiator to array error.'))
 
     def _add_initiator_to_host(self, initiator_name, host_id):
-        url = "/iscsi_initiator/" + initiator_name
-        data = {"TYPE": "222",
-                "ID": initiator_name,
-                "USECHAP": "false",
-                "PARENTTYPE": "21",
-                "PARENTID": host_id}
-        result = self.call(url, data, "PUT")
+        url = "/iscsi_initiator/%s" % initiator_name
+        data = {
+            "TYPE": "222",
+            "ID": initiator_name,
+            "USECHAP": "false",
+            "PARENTTYPE": "21",
+            "PARENTID": host_id
+        }
+        sensitive_info = {
+            'url': '/'.join([self.url, 'iscsi_initiator', huawei_utils.mask_initiator_sensitive_info(
+                initiator_name)]),
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID']),
+        }
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(result,
                                  _('Associate initiator to host error.'))
 
@@ -1061,18 +1117,18 @@ class RestClient(object):
         for ini in iscsi_info:
             if ini.get("Name") == initiator_name:
                 find_initiator_flag = True
-                if 'CHAPinfo' in ini:
-                    chapinfo = ini['CHAPinfo']
+                if constants.CHAPINFO in ini:
+                    chapinfo = ini[constants.CHAPINFO]
                     break
 
         tmp_chap_info = None
         if not find_initiator_flag:
             for info in iscsi_info:
-                if info.get('HostName'):
-                    if info.get('HostName') == '*':
-                        tmp_chap_info = info.get('CHAPinfo')
-                    elif re.search(info.get('HostName'), host_name):
-                        chapinfo = info.get('CHAPinfo')
+                if info.get(constants.HOSTNAME):
+                    if info.get(constants.HOSTNAME) == '*':
+                        tmp_chap_info = info.get(constants.CHAPINFO)
+                    elif re.search(info.get(constants.HOSTNAME), host_name):
+                        chapinfo = info.get(constants.CHAPINFO)
                         break
 
         if chapinfo is None and tmp_chap_info:
@@ -1086,14 +1142,16 @@ class RestClient(object):
                     (isinstance(initiator_name, list) and
                      ini.get('Name') in initiator_name)):
                 return ini
+        return None
 
     @staticmethod
     def _find_hostname_info(config, host_name):
         for info in config:
-            if info.get('HostName') and (info.get('HostName') == '*' or
-                                         re.search(info.get('HostName'),
-                                                   host_name)):
+            if info.get(constants.HOSTNAME) and (info.get(constants.HOSTNAME) == '*' or
+                                                 re.search(info.get(constants.HOSTNAME),
+                                                           host_name)):
                 return info
+        return None
 
     def _find_name_or_hostname_info(self, config, initiator_name, host_name):
         find_info = self._find_name_info(config, initiator_name)
@@ -1104,23 +1162,23 @@ class RestClient(object):
 
     def _find_alua_info(self, config, initiator_name, host_name):
         """Find ALUA info from xml."""
-        alua_info = {'ALUA': '0'}
+        alua_info = {constants.ALUA: '0'}
         find_info = self._find_name_or_hostname_info(
             config, initiator_name, host_name)
 
         if find_info:
             if 'ACCESSMODE' in find_info and self.is_dorado_v6:
                 return alua_info
-            if 'ALUA' in find_info:
-                alua_info['ALUA'] = find_info['ALUA']
+            if constants.ALUA in find_info:
+                alua_info[constants.ALUA] = find_info[constants.ALUA]
 
-            if alua_info['ALUA'] not in ('0', '1'):
+            if alua_info[constants.ALUA] not in ('0', '1'):
                 msg = _(
                     'Invalid ALUA value. ALUA value must be 1 or 0.')
                 LOG.error(msg)
                 raise exception.InvalidInput(msg)
 
-            if alua_info['ALUA'] == '1':
+            if alua_info[constants.ALUA] == '1':
                 for k in ('FAILOVERMODE', 'SPECIALMODETYPE', 'PATHTYPE'):
                     if k in find_info:
                         alua_info[k] = find_info[k]
@@ -1145,16 +1203,18 @@ class RestClient(object):
 
     def _use_chap(self, chapinfo, initiator_name, host_id):
         """Use CHAP when adding initiator to host."""
-        (chap_username, chap_password) = chapinfo.split(";")
+        (chap_username, chap_password) = chapinfo.split(";", 1)
 
-        url = "/iscsi_initiator/" + initiator_name
-        data = {"TYPE": "222",
-                "USECHAP": "true",
-                "CHAPNAME": chap_username,
-                "CHAPPASSWORD": chap_password,
-                "ID": initiator_name,
-                "PARENTTYPE": "21",
-                "PARENTID": host_id}
+        url = "/iscsi_initiator/%s" % initiator_name
+        data = {
+            "TYPE": "222",
+            "USECHAP": "true",
+            "CHAPNAME": chap_username,
+            "CHAPPASSWORD": cipher.decrypt_cipher(chap_password),
+            "ID": initiator_name,
+            "PARENTTYPE": "21",
+            "PARENTID": host_id
+        }
         result = self.call(url, data, "PUT", filter_flag=True)
         msg = _('Use CHAP to associate initiator to host error. '
                 'Please check the CHAP username and password.')
@@ -1163,21 +1223,31 @@ class RestClient(object):
     def _use_iscsi_alua(self, initiator_name, alua_info):
         """Use ALUA when adding initiator to host."""
         url = "/iscsi_initiator"
-        data = {"ID": initiator_name,
-                'MULTIPATHTYPE': alua_info.pop('ALUA')}
+        data = {
+            "ID": initiator_name,
+            'MULTIPATHTYPE': alua_info.pop('ALUA')
+        }
         data.update(alua_info)
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID']),
+        }
 
-        result = self.call(url, data, "PUT")
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(
             result, _('Use ALUA to associate initiator to host error.'))
 
     def remove_chap(self, initiator_name):
         """Remove CHAP when terminate connection."""
         url = "/iscsi_initiator"
-        data = {"USECHAP": "false",
-                "MULTIPATHTYPE": "0",
-                "ID": initiator_name}
-        result = self.call(url, data, "PUT")
+        data = {
+            "USECHAP": "false",
+            "MULTIPATHTYPE": "0",
+            "ID": initiator_name
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID']),
+        }
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
 
         self._assert_rest_result(result, _('Remove CHAP error.'))
 
@@ -1191,8 +1261,9 @@ class RestClient(object):
         msg = _('Find mapping view error.')
         self._assert_rest_result(result, msg)
 
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def _add_mapping_view(self, name):
         if not name:
@@ -1202,16 +1273,18 @@ class RestClient(object):
         result = self.call(url, data)
         self._assert_rest_result(result, _('Add mapping view error.'))
 
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def _associate_hostgroup_to_view(self, view_id, hostgroup_id):
         url = "/MAPPINGVIEW/CREATE_ASSOCIATE"
-        data = {"ASSOCIATEOBJTYPE": "14",
-                "ASSOCIATEOBJID": hostgroup_id,
-                "TYPE": "245",
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": "14",
+            "ASSOCIATEOBJID": hostgroup_id,
+            "TYPE": "245",
+            "ID": view_id
+        }
         result = self.call(url, data, "PUT")
-        if (result['error']['code'] ==
+        if (result.get('error', {}).get('code') ==
                 constants.HOSTGROUP_ALREADY_IN_MAPPINGVIEW):
             return
         self._assert_rest_result(result, _('Associate host to mapping view '
@@ -1219,13 +1292,15 @@ class RestClient(object):
 
     def _associate_lungroup_to_view(self, view_id, lungroup_id):
         url = "/MAPPINGVIEW/CREATE_ASSOCIATE"
-        data = {"ASSOCIATEOBJTYPE": "256",
-                "ASSOCIATEOBJID": lungroup_id,
-                "TYPE": "245",
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": "256",
+            "ASSOCIATEOBJID": lungroup_id,
+            "TYPE": "245",
+            "ID": view_id
+        }
 
         result = self.call(url, data, "PUT")
-        if (result['error']['code'] ==
+        if (result.get('error', {}).get('code') ==
                 constants.LUNGROUP_ALREADY_IN_MAPPINGVIEW):
             return
         self._assert_rest_result(
@@ -1234,10 +1309,12 @@ class RestClient(object):
     def delete_lungroup_mapping_view(self, view_id, lungroup_id):
         """Remove lungroup associate from the mapping view."""
         url = "/mappingview/REMOVE_ASSOCIATE"
-        data = {"ASSOCIATEOBJTYPE": "256",
-                "ASSOCIATEOBJID": lungroup_id,
-                "TYPE": "245",
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": "256",
+            "ASSOCIATEOBJID": lungroup_id,
+            "TYPE": "245",
+            "ID": view_id
+        }
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('Delete lungroup from mapping view '
                                  'error.'))
@@ -1245,10 +1322,12 @@ class RestClient(object):
     def delete_hostgoup_mapping_view(self, view_id, hostgroup_id):
         """Remove hostgroup associate from the mapping view."""
         url = "/mappingview/REMOVE_ASSOCIATE"
-        data = {"ASSOCIATEOBJTYPE": "14",
-                "ASSOCIATEOBJID": hostgroup_id,
-                "TYPE": "245",
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": "14",
+            "ASSOCIATEOBJID": hostgroup_id,
+            "TYPE": "245",
+            "ID": view_id
+        }
 
         result = self.call(url, data, "PUT")
         self._assert_rest_result(
@@ -1257,10 +1336,12 @@ class RestClient(object):
     def delete_portgroup_mapping_view(self, view_id, portgroup_id):
         """Remove portgroup associate from the mapping view."""
         url = "/mappingview/REMOVE_ASSOCIATE"
-        data = {"ASSOCIATEOBJTYPE": "257",
-                "ASSOCIATEOBJID": portgroup_id,
-                "TYPE": "245",
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": "257",
+            "ASSOCIATEOBJID": portgroup_id,
+            "TYPE": "245",
+            "ID": view_id
+        }
 
         result = self.call(url, data, "PUT")
         self._assert_rest_result(
@@ -1268,7 +1349,7 @@ class RestClient(object):
 
     def delete_mapping_view(self, view_id):
         """Remove mapping view from the storage."""
-        url = "/mappingview/" + view_id
+        url = "/mappingview/%s" % view_id
         result = self.call(url, None, "DELETE")
         self._assert_rest_result(result, _('Delete mapping view error.'))
 
@@ -1332,13 +1413,14 @@ class RestClient(object):
     def _get_capacity(self, pool_name, result):
         """Get free capacity and total capacity of the pool."""
         pool_info = self.get_pool_info(pool_name, result)
-        pool_capacity = {'total_capacity': 0.0,
-                         'free_capacity': 0.0,
-                         }
+        pool_capacity = {
+            'total_capacity': 0.0,
+            'free_capacity': 0.0,
+        }
 
         if pool_info:
-            total = float(pool_info['TOTALCAPACITY']) / constants.CAPACITY_UNIT
-            free = float(pool_info['CAPACITY']) / constants.CAPACITY_UNIT
+            total = float(pool_info.get('TOTALCAPACITY')) / constants.CAPACITY_UNIT
+            free = float(pool_info.get('CAPACITY')) / constants.CAPACITY_UNIT
             pool_capacity['total_capacity'] = total
             pool_capacity['free_capacity'] = free
 
@@ -1356,16 +1438,12 @@ class RestClient(object):
         if not pool_info:
             return None
 
-        pool_disk = []
-        for i, x in enumerate(['ssd', 'sas', 'nl_sas']):
-            if (pool_info['TIER%dCAPACITY' % i] and
-                    pool_info['TIER%dCAPACITY' % i] != '0'):
-                pool_disk.append(x)
-
-        if len(pool_disk) > 1:
-            pool_disk = ['mix']
-
-        return pool_disk[0] if pool_disk else None
+        if not self.is_dorado_v6:
+            disk_type = self._get_disk_type_by_storage_pool(pool_info)
+        else:
+            disk_type = self._get_disk_type_by_disk_pool(pool_info)
+        LOG.info("The disk type is %s", disk_type)
+        return disk_type
 
     def _get_smarttier(self, disk_type):
         return disk_type is not None and disk_type == 'mix'
@@ -1377,11 +1455,11 @@ class RestClient(object):
         self._assert_rest_result(result, _('Get LUNcopy information error.'))
 
         luncopyinfo = {}
-        if 'data' in result:
-            luncopyinfo['name'] = result['data']['NAME']
-            luncopyinfo['id'] = result['data']['ID']
-            luncopyinfo['state'] = result['data']['HEALTHSTATUS']
-            luncopyinfo['status'] = result['data']['RUNNINGSTATUS']
+        if constants.DATA in result:
+            luncopyinfo['name'] = result[constants.DATA]['NAME']
+            luncopyinfo['id'] = result[constants.DATA]['ID']
+            luncopyinfo['state'] = result[constants.DATA]['HEALTHSTATUS']
+            luncopyinfo['status'] = result[constants.DATA]['RUNNINGSTATUS']
         return luncopyinfo
 
     def delete_luncopy(self, luncopy_id):
@@ -1404,58 +1482,54 @@ class RestClient(object):
                     tgt_port_wwns.append(tgtwwpn)
 
         if not tgt_port_wwns:
-            err_msg = (_('Get FC target wwpns error, tgt_port_wwns: '
-                         '%(tgt_port_wwns)s, init_targ_map: %(init_targ_map)s')
-                       % {'tgt_port_wwns': tgt_port_wwns,
-                          'init_targ_map': init_targ_map})
+            err_msg = ("There is no tgt_port_wwns found of wwns:%s in storage" %
+                       huawei_utils.mask_initiator_sensitive_info(wwns))
             LOG.error(err_msg)
             raise exception.VolumeBackendAPIException(data=err_msg)
 
-        return (tgt_port_wwns, init_targ_map)
-
-    def _get_free_wwns(self, start, end, params):
-        url = ("/fc_initiator?ISFREE=true&range=[%(start)s-%(end)s]"
-               % {"start": six.text_type(start), "end": six.text_type(end)})
-        result = self.call(url, None, "GET")
-        msg = _('Get connected free FC wwn error.')
-        self._assert_rest_result(result, msg)
-        return result.get('data', [])
-
-    def get_online_free_wwns(self):
-        """Get online free WWNs.
-
-        If no new ports connected, return an empty list.
-        """
-        wwns_list = self._get_info_by_range(self._get_free_wwns)
-
-        wwns = []
-        for item in wwns_list:
-            if item['RUNNINGSTATUS'] == constants.FC_INIT_ONLINE:
-                wwns.append(item['ID'])
-
-        return wwns
+        return tgt_port_wwns, init_targ_map
 
     def _use_fc_alua(self, wwn, alua_info):
-        url = "/fc_initiator/" + wwn
-        data = {"ID": wwn,
-                "MULTIPATHTYPE": alua_info.pop('ALUA')}
+        url = "/fc_initiator/%s" % wwn
+        data = {
+            "ID": wwn,
+            "MULTIPATHTYPE": alua_info.pop('ALUA')
+        }
         data.update(alua_info)
+        sensitive_info = {
+            'url': '/'.join([self.url, 'fc_initiator', huawei_utils.mask_initiator_sensitive_info(wwn)]),
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID']),
+        }
 
-        result = self.call(url, data, "PUT")
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(result, _('Set ALUA for fc initiator error.'))
 
     def add_fc_port_to_host(self, host_id, wwn):
         """Add a FC port to the host."""
-        url = "/fc_initiator/" + wwn
-        data = {"ID": wwn,
-                "PARENTTYPE": 21,
-                "PARENTID": host_id}
-        result = self.call(url, data, "PUT")
+        url = "/fc_initiator/%s" % wwn
+        data = {
+            "ID": wwn,
+            "PARENTTYPE": 21,
+            "PARENTID": host_id
+        }
+        sensitive_info = {
+            'url': '/'.join([self.url, 'fc_initiator', huawei_utils.mask_initiator_sensitive_info(wwn)]),
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID']),
+        }
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(result, _('Add FC port to host error.'))
 
     def get_fc_target_wwpns(self, wwn):
-        url = ("/host_link?INITIATOR_TYPE=223&INITIATOR_PORT_WWN=" + wwn)
-        result = self.call(url, None, "GET")
+        url = "/host_link?INITIATOR_TYPE=223&INITIATOR_PORT_WWN=%s" % wwn
+        sensitive_info = {
+            'url': "%s/host_link?INITIATOR_TYPE=223&INITIATOR_PORT_WWN=%s" % (
+                self.url, huawei_utils.mask_initiator_sensitive_info(wwn)),
+            'sensitive_keys': [
+                constants.DATA, 'INITIATOR_PORT_WWN', 'INITIATOR_ID', 'INITIATOR_NODE_WWN',
+                'TARGET_PORT_WWN', 'TARGET_NODE_WWN', 'TARGET_ID'
+            ],
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
 
         msg = _('Get FC target wwpn error.')
         self._assert_rest_result(result, msg)
@@ -1470,15 +1544,19 @@ class RestClient(object):
 
     def get_fc_init_info(self, wwn):
         """Get wwn info by wwn_id and judge is error need to be raised"""
-        url = "/fc_initiator/" + wwn
-        result = self.call(url, None, "GET")
-        error_code = result['error']['code']
+        url = "/fc_initiator/%s" % wwn
+        sensitive_info = {
+            'url': '/'.join([self.url, 'fc_initiator', huawei_utils.mask_initiator_sensitive_info(wwn)]),
+            'sensitive_keys': ['ID']
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
+        error_code = result.get('error', {}).get('code')
 
         if error_code != 0:
             if error_code not in (constants.FC_INITIATOR_NOT_EXIST,
                                   constants.ERROR_PARAMETER_ERROR):
                 msg = (_('Get fc initiator %(initiator)s on array error. '
-                         'result: %(res)s.') % {'initiator': wwn,
+                         'result: %(res)s.') % {'initiator': huawei_utils.mask_initiator_sensitive_info(wwn),
                                                 'res': result})
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
@@ -1508,8 +1586,7 @@ class RestClient(object):
                 smarttier=tier_support
             ))
             if capacity.get('provisioned_capacity') is not None:
-                pool['provisioned_capacity_gb'] = capacity[
-                    'provisioned_capacity']
+                pool['provisioned_capacity_gb'] = capacity.get('provisioned_capacity')
             if disk_type:
                 pool['disk_type'] = disk_type
 
@@ -1534,10 +1611,12 @@ class RestClient(object):
                 raise exception.VolumeBackendAPIException(data=err_msg)
 
     def _update_qos_policy_lunlist(self, lun_list, policy_id):
-        url = "/ioclass/" + policy_id
-        data = {"TYPE": "230",
-                "ID": policy_id,
-                "LUNLIST": lun_list}
+        url = "/ioclass/%s" % policy_id
+        data = {
+            "TYPE": "230",
+            "ID": policy_id,
+            "LUNLIST": lun_list
+        }
 
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('Update QoS policy error.'))
@@ -1554,13 +1633,13 @@ class RestClient(object):
 
         if 'data' in result:
             for item in result['data']:
-                if ((item['IPV4ADDR'] or item['IPV6ADDR'])
-                   and item['HEALTHSTATUS'] == constants.STATUS_HEALTH
-                   and item['RUNNINGSTATUS'] == constants.STATUS_RUNNING):
-                    if item['IPV4ADDR']:
-                        target_ips.append(item['IPV4ADDR'])
-                    if item['IPV6ADDR']:
-                        target_ips.append(item['IPV6ADDR'])
+                if item['HEALTHSTATUS'] != constants.STATUS_HEALTH or \
+                        item['RUNNINGSTATUS'] != constants.STATUS_RUNNING:
+                    continue
+                if item[constants.IPV4ADDR]:
+                    target_ips.append(item[constants.IPV4ADDR])
+                if item[constants.IPV6ADDR]:
+                    target_ips.append(item[constants.IPV6ADDR])
         LOG.info('_get_tgt_ip_from_portgroup: Get ip: %s.', target_ips)
 
         return target_ips
@@ -1571,18 +1650,18 @@ class RestClient(object):
         for ini in self.iscsi_info:
             if ini.get("Name") == initiator_name:
                 find_initiator_flag = True
-                if 'TargetPortGroup' in ini:
-                    portgroup = ini['TargetPortGroup']
+                if constants.TARGETPORTGROUP in ini:
+                    portgroup = ini[constants.TARGETPORTGROUP]
                     break
 
         tmp_portgroup = None
         if not find_initiator_flag:
             for info in self.iscsi_info:
-                if info.get('HostName'):
-                    if info.get('HostName') == '*':
-                        tmp_portgroup = info.get('TargetPortGroup')
-                    elif re.search(info.get('HostName'), host_name):
-                        portgroup = info.get('TargetPortGroup')
+                if info.get(constants.HOSTNAME):
+                    if info.get(constants.HOSTNAME) == '*':
+                        tmp_portgroup = info.get(constants.TARGETPORTGROUP)
+                    elif re.search(info.get(constants.HOSTNAME), host_name):
+                        portgroup = info.get(constants.TARGETPORTGROUP)
                         break
 
         if portgroup is None and tmp_portgroup:
@@ -1666,21 +1745,18 @@ class RestClient(object):
         for ini in self.iscsi_info:
             if ini.get("Name") == initiator:
                 find_initiator_flag = True
-                if ini.get('TargetIP'):
-                    target_ips = [ip.strip() for ip in ini['TargetIP'].split()
-                                  if ip.strip()]
+                if ini.get(constants.TARGETIP):
+                    target_ips = [ip.strip() for ip in ini[constants.TARGETIP].split() if ip.strip()]
 
         tmp_target_ips = []
         if not find_initiator_flag:
             for info in self.iscsi_info:
-                if info.get('HostName'):
-                    if info.get('HostName') == '*':
-                        tmp_target_ips = [ip.strip() for ip in info.get(
-                            'TargetIP').split() if ip.strip()]
-                    elif re.search(info.get('HostName'), host_name):
-                        if info.get('TargetIP'):
-                            target_ips = [ip.strip() for ip in info.get(
-                                'TargetIP').split() if ip.strip()]
+                if info.get(constants.HOSTNAME):
+                    if info.get(constants.HOSTNAME) == '*':
+                        tmp_target_ips = [ip.strip() for ip in info.get(constants.TARGETIP).split() if ip.strip()]
+                    elif re.search(info.get(constants.HOSTNAME), host_name):
+                        if info.get(constants.TARGETIP):
+                            target_ips = [ip.strip() for ip in info.get(constants.TARGETIP).split() if ip.strip()]
                             break
 
         if not target_ips and tmp_target_ips:
@@ -1696,7 +1772,7 @@ class RestClient(object):
                 msg = (_(
                     'get_iscsi_params: Failed to get target IP '
                     'for initiator %(ini)s, please check config file.')
-                    % {'ini': initiator})
+                    % {'ini': huawei_utils.mask_initiator_sensitive_info(initiator)})
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
@@ -1707,18 +1783,18 @@ class RestClient(object):
         result = self.call(url, None, "GET")
         info_list = []
         target_ips = []
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             LOG.warning("Can't find target port info from rest.")
             return target_ips
 
-        elif not result['data']:
+        elif not result.get(constants.DATA):
             msg = (_(
                 "Can't find valid IP from rest, please check it on storage."))
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        if 'data' in result:
-            for item in result['data']:
+        if constants.DATA in result:
+            for item in result[constants.DATA]:
                 info_list.append(item['ID'])
 
         if not info_list:
@@ -1736,7 +1812,7 @@ class RestClient(object):
         result = self.call(url, None, "GET")
 
         target_iqn = None
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             LOG.warning("Can't find target iqn from rest.")
             return target_iqn
 
@@ -1769,27 +1845,28 @@ class RestClient(object):
         # Package QoS name.
         qos_name = constants.QOS_NAME_PREFIX + lun_id + '_' + localtime
 
-        data = {"TYPE": "230",
-                "NAME": qos_name,
-                "LUNLIST": ["%s" % lun_id],
-                "CLASSTYPE": "1",
-                "SCHEDULEPOLICY": "2",
-                "SCHEDULESTARTTIME": "1410969600",
-                "STARTTIME": "08:00",
-                "DURATION": "86400",
-                "CYCLESET": "[1,2,3,4,5,6,0]",
-                }
+        data = {
+            "TYPE": "230",
+            "NAME": qos_name,
+            "LUNLIST": ["%s" % lun_id],
+            "CLASSTYPE": "1",
+            "SCHEDULEPOLICY": "2",
+            "SCHEDULESTARTTIME": "1410969600",
+            "STARTTIME": "08:00",
+            "DURATION": "86400",
+            "CYCLESET": "[1,2,3,4,5,6,0]",
+        }
         data.update(qos)
         url = "/ioclass/"
 
         result = self.call(url, data)
         self._assert_rest_result(result, _('Create QoS policy error.'))
 
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def delete_qos_policy(self, qos_id):
         """Delete a QoS policy."""
-        url = "/ioclass/" + qos_id
+        url = "/ioclass/%s" % qos_id
         data = {"TYPE": "230", "ID": qos_id}
 
         result = self.call(url, data, 'DELETE')
@@ -1801,21 +1878,23 @@ class RestClient(object):
         enablestatus: true (activate)
         enbalestatus: false (deactivate)
         """
-        url = "/ioclass/active/" + qos_id
-        data = {"TYPE": 230,
-                "ID": qos_id,
-                "ENABLESTATUS": enablestatus}
+        url = "/ioclass/active/%s" % qos_id
+        data = {
+            "TYPE": 230,
+            "ID": qos_id,
+            "ENABLESTATUS": enablestatus
+        }
         result = self.call(url, data, "PUT")
         self._assert_rest_result(
             result, _('Activate or deactivate QoS error.'))
 
     def get_qos_info(self, qos_id):
         """Get QoS information."""
-        url = "/ioclass/" + qos_id
+        url = "/ioclass/%s" % qos_id
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get QoS information error.'))
 
-        return result['data']
+        return result.get('data')
 
     def get_lun_list_in_qos(self, qos_id, qos_info):
         """Get the lun list in QoS."""
@@ -1823,18 +1902,20 @@ class RestClient(object):
         lun_string = qos_info['LUNLIST'][1:-1]
 
         for lun in lun_string.split(","):
-            str = lun[1:-1]
-            lun_list.append(str)
+            str_lun = lun[1:-1]
+            lun_list.append(str_lun)
 
         return lun_list
 
     def remove_lun_from_qos(self, lun_id, lun_list, qos_id):
         """Remove lun from QoS."""
         lun_list = [i for i in lun_list if i != lun_id]
-        url = "/ioclass/" + qos_id
-        data = {"LUNLIST": lun_list,
-                "TYPE": 230,
-                "ID": qos_id}
+        url = "/ioclass/%s" % qos_id
+        data = {
+            "LUNLIST": lun_list,
+            "TYPE": 230,
+            "ID": qos_id
+        }
         result = self.call(url, data, "PUT")
 
         msg = _('Remove lun from QoS error.')
@@ -1843,20 +1924,24 @@ class RestClient(object):
 
     def change_lun_priority(self, lun_id):
         """Change lun priority to high."""
-        url = "/lun/" + lun_id
-        data = {"TYPE": "11",
-                "ID": lun_id,
-                "IOPRIORITY": "3"}
+        url = "/lun/%s" % lun_id
+        data = {
+            "TYPE": "11",
+            "ID": lun_id,
+            "IOPRIORITY": "3"
+        }
 
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('Change lun priority error.'))
 
     def change_lun_smarttier(self, lunid, smarttier_policy):
         """Change lun smarttier policy."""
-        url = "/lun/" + lunid
-        data = {"TYPE": "11",
-                "ID": lunid,
-                "DATATRANSFERPOLICY": smarttier_policy}
+        url = "/lun/%s" % lunid
+        data = {
+            "TYPE": "11",
+            "ID": lunid,
+            "DATATRANSFERPOLICY": smarttier_policy
+        }
 
         result = self.call(url, data, "PUT")
         self._assert_rest_result(
@@ -1864,11 +1949,11 @@ class RestClient(object):
 
     def get_qosid_by_lunid(self, lun_id):
         """Get QoS id by lun id."""
-        url = "/lun/" + lun_id
+        url = "/lun/%s" % lun_id
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get QoS id by lun id error.'))
 
-        return result['data']['IOCLASSID']
+        return result.get('data', {}).get('IOCLASSID')
 
     def get_lungroupids_by_lunid(self, lun_id, lun_type=constants.LUN_TYPE):
         """Get lungroup ids by lun id."""
@@ -1894,37 +1979,41 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']
+        return result.get('data')
 
     def get_snapshot_info(self, snapshot_id):
-        url = "/snapshot/" + snapshot_id
+        url = "/snapshot/%s" % snapshot_id
         result = self.call(url, None, "GET")
 
         msg = _('Get snapshot error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']
+        return result.get('data')
 
     def extend_lun(self, lun_id, new_volume_size):
         url = "/lun/expand"
-        data = {"TYPE": 11, "ID": lun_id,
-                "CAPACITY": new_volume_size}
+        data = {
+            "TYPE": 11, "ID": lun_id,
+            "CAPACITY": new_volume_size
+        }
         result = self.call(url, data, 'PUT')
 
         msg = _('Extend volume error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
 
-        return result['data']
+        return result.get('data')
 
     def create_lun_migration(self, src_id, dst_id, speed=2):
         url = "/LUN_MIGRATION"
-        data = {"TYPE": '253',
-                "PARENTID": src_id,
-                "TARGETLUNID": dst_id,
-                "SPEED": speed,
-                "WORKMODE": 0}
+        data = {
+            "TYPE": '253',
+            "PARENTID": src_id,
+            "TARGETLUNID": dst_id,
+            "SPEED": speed,
+            "WORKMODE": 0
+        }
 
         result = self.call(url, data, "POST")
         msg = _('Create lun migration error.')
@@ -1946,7 +2035,7 @@ class RestClient(object):
         return lun_migration_task
 
     def delete_lun_migration(self, src_id, dst_id):
-        url = '/LUN_MIGRATION/' + src_id
+        url = '/LUN_MIGRATION/%s' % src_id
         result = self.call(url, None, "DELETE")
         msg = _('Delete lun migration error.')
         self._assert_rest_result(result, msg)
@@ -1961,24 +2050,26 @@ class RestClient(object):
 
     def get_partition_info_by_id(self, partition_id):
 
-        url = '/cachepartition/' + partition_id
+        url = '/cachepartition/%s' % partition_id
         result = self.call(url, None, "GET")
         self._assert_rest_result(result,
                                  _('Get partition by partition id error.'))
 
-        return result['data']
+        return result.get('data')
 
     def add_lun_to_partition(self, lun_id, partition_id):
         url = "/lun/associate/cachepartition"
-        data = {"ID": partition_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id}
+        data = {
+            "ID": partition_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id
+        }
         result = self.call(url, data, "POST")
         self._assert_rest_result(result, _('Add lun to partition error.'))
 
     def remove_lun_from_partition(self, lun_id, partition_id):
-        url = ('/lun/associate/cachepartition?ID=' + partition_id
-               + '&ASSOCIATEOBJTYPE=11&ASSOCIATEOBJID=' + lun_id)
+        url = ('/lun/associate/cachepartition?ID=%(partition_id)s&ASSOCIATEOBJTYPE=11&ASSOCIATEOBJID=%(lun_id)s'
+               % {'partition_id': partition_id, 'lun_id': lun_id})
 
         result = self.call(url, None, "DELETE")
         self._assert_rest_result(result, _('Remove lun from partition error.'))
@@ -1991,22 +2082,23 @@ class RestClient(object):
         return self._get_id_from_result(result, name, 'NAME')
 
     def get_cache_info_by_id(self, cacheid):
-        url = "/SMARTCACHEPARTITION/" + cacheid
-        data = {"TYPE": "273",
-                "ID": cacheid}
+        url = "/SMARTCACHEPARTITION/%s" % cacheid
+        data = {"TYPE": "273", "ID": cacheid}
 
         result = self.call(url, data, "GET")
         self._assert_rest_result(
             result, _('Get smartcache by cache id error.'))
 
-        return result['data']
+        return result.get('data')
 
     def remove_lun_from_cache(self, lun_id, cache_id):
         url = "/SMARTCACHEPARTITION/REMOVE_ASSOCIATE"
-        data = {"ID": cache_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id,
-                "TYPE": 273}
+        data = {
+            "ID": cache_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id,
+            "TYPE": 273
+        }
 
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('Remove lun from cache error.'))
@@ -2019,7 +2111,7 @@ class RestClient(object):
 
     def add_lun_to_qos(self, qos_id, lun_id, lun_list):
         """Add lun to QoS."""
-        url = "/ioclass/" + qos_id
+        url = "/ioclass/%s" % qos_id
         new_lun_list = []
         lun_list_string = lun_list[1:-1]
         for lun_string in lun_list_string.split(","):
@@ -2029,9 +2121,11 @@ class RestClient(object):
 
         new_lun_list.append(lun_id)
 
-        data = {"LUNLIST": new_lun_list,
-                "TYPE": 230,
-                "ID": qos_id}
+        data = {
+            "LUNLIST": new_lun_list,
+            "TYPE": 230,
+            "ID": qos_id
+        }
         result = self.call(url, data, "PUT")
         msg = _('Associate lun to QoS error.')
         self._assert_rest_result(result, msg)
@@ -2039,10 +2133,12 @@ class RestClient(object):
 
     def add_lun_to_cache(self, lun_id, cache_id):
         url = "/SMARTCACHEPARTITION/CREATE_ASSOCIATE"
-        data = {"ID": cache_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id,
-                "TYPE": 273}
+        data = {
+            "ID": cache_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id,
+            "TYPE": 273
+        }
         result = self.call(url, data, "PUT")
 
         self._assert_rest_result(result, _('Add lun to cache error.'))
@@ -2073,55 +2169,50 @@ class RestClient(object):
 
     def remove_iscsi_from_host(self, initiator):
         url = "/iscsi_initiator/remove_iscsi_from_host"
-        data = {"TYPE": '222',
-                "ID": initiator}
-        result = self.call(url, data, "PUT")
+        data = {"TYPE": '222', "ID": initiator}
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID']),
+        }
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(result, _('Remove iscsi from host error.'))
-
-    def get_host_online_fc_initiators(self, host_id):
-        url = "/fc_initiator?PARENTTYPE=21&PARENTID=%s" % host_id
-        result = self.call(url, None, "GET")
-
-        initiators = []
-        if 'data' in result:
-            for item in result['data']:
-                if (('PARENTID' in item) and (item['PARENTID'] == host_id)
-                   and (item['RUNNINGSTATUS'] == constants.FC_INIT_ONLINE)):
-                    initiators.append(item['ID'])
-
-        return initiators
 
     def get_host_fc_initiators(self, host_id):
         url = "/fc_initiator?PARENTTYPE=21&PARENTID=%s" % host_id
-        result = self.call(url, None, "GET")
+        sensitive_info = {
+            'sensitive_keys': [constants.DATA, constants.ID_UPPER]
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
 
         initiators = []
-        if 'data' in result:
-            for item in result['data']:
+        if constants.DATA in result:
+            for item in result[constants.DATA]:
                 if (('PARENTID' in item) and (item['PARENTID'] == host_id)):
-                    initiators.append(item['ID'])
+                    initiators.append(item[constants.ID_UPPER])
 
         return initiators
 
     def get_host_iscsi_initiators(self, host_id):
         url = "/iscsi_initiator?PARENTTYPE=21&PARENTID=%s" % host_id
-        result = self.call(url, None, "GET")
+        sensitive_info = {
+            'sensitive_keys': [constants.DATA, constants.ID_UPPER]
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
 
         initiators = []
-        if 'data' in result:
-            for item in result['data']:
+        if constants.DATA in result:
+            for item in result[constants.DATA]:
                 if (('PARENTID' in item) and (item['PARENTID'] == host_id)):
-                    initiators.append(item['ID'])
+                    initiators.append(item[constants.ID_UPPER])
 
         return initiators
 
     def update_lun(self, lun_id, data):
-        url = "/lun/" + lun_id
+        url = "/lun/%s" % lun_id
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('Update lun properties error.'))
 
     def rename_lun(self, lun_id, new_name, description=None):
-        url = "/lun/" + lun_id
+        url = "/lun/%s" % lun_id
         data = {"NAME": new_name}
         if description:
             data.update({"DESCRIPTION": description})
@@ -2131,7 +2222,7 @@ class RestClient(object):
         self._assert_data_in_result(result, msg)
 
     def rename_snapshot(self, snapshot_id, new_name, description=None):
-        url = "/snapshot/" + snapshot_id
+        url = "/snapshot/%s" % snapshot_id
         data = {"NAME": new_name}
         if description:
             data.update({"DESCRIPTION": description})
@@ -2142,14 +2233,20 @@ class RestClient(object):
 
     def remove_fc_from_host(self, initiator):
         url = '/fc_initiator/remove_fc_from_host'
-        data = {"TYPE": '223',
-                "ID": initiator}
-        result = self.call(url, data, "PUT")
+        data = {"TYPE": '223', constants.ID_UPPER: initiator}
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=[constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(result, _('Remove fc from host error.'))
 
     def check_fc_initiators_exist_in_host(self, host_id):
         url = "/fc_initiator?PARENTID=%s&range=[0-1]" % host_id
-        result = self.call(url, None, "GET")
+        sensitive_info = {
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
         self._assert_rest_result(result, _('Get host initiators info failed.'))
         if 'data' in result:
             return True
@@ -2158,11 +2255,15 @@ class RestClient(object):
 
     def _fc_initiator_is_added_to_array(self, ininame):
         """Check whether the fc initiator is already added on the array."""
-        url = "/fc_initiator/" + ininame
-        result = self.call(url, None, "GET")
-        err_str = _('Get fc initiator %s on array error.' % ininame)
+        url = "/fc_initiator/%s" % ininame
+        sensitive_info = {
+            'url': '/'.join([self.url, 'fc_initiator', huawei_utils.mask_initiator_sensitive_info(ininame)]),
+            'sensitive_keys': ['ID']
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
+        err_str = _('Get fc initiator %s on array error.' % huawei_utils.mask_initiator_sensitive_info(ininame))
 
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             self._assert_initiator_exist(result, err_str)
             return False
 
@@ -2171,9 +2272,12 @@ class RestClient(object):
     def _add_fc_initiator_to_array(self, ininame):
         """Add a fc initiator to storage device."""
         url = '/fc_initiator/'
-        data = {"TYPE": '223',
-                "ID": ininame}
-        result = self.call(url, data)
+        data = {"TYPE": '223', constants.ID_UPPER: ininame}
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=[constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.call(url, data, sensitive_info=sensitive_info)
         self._assert_rest_result(result, _('Add fc initiator to array error.'))
 
     def ensure_fc_initiator_added(self, initiator_name, host_id, host_name):
@@ -2197,37 +2301,6 @@ class RestClient(object):
 
         return result.get('data', [])
 
-    def get_fc_initiator_count(self):
-        url = '/fc_initiator/count'
-        result = self.call(url, None, "GET")
-
-        msg = _('Get fc initiator count error.')
-        self._assert_rest_result(result, msg)
-        self._assert_data_in_result(result, msg)
-
-        return int(result['data']['COUNT'])
-
-    def get_fc_initiator_on_array(self):
-        count = self.get_fc_initiator_count()
-        if count <= 0:
-            return []
-
-        fc_initiators = []
-        for i in range((count - 1) / constants.MAX_QUERY_COUNT + 1):
-            url = '/fc_initiator?range=[%d-%d]' % (
-                i * constants.MAX_QUERY_COUNT,
-                (i + 1) * constants.MAX_QUERY_COUNT)
-            result = self.call(url, None, "GET")
-
-            msg = _('Get FC initiators from array error.')
-            self._assert_rest_result(result, msg)
-
-            if 'data' in result:
-                for item in result['data']:
-                    fc_initiators.append(item['ID'])
-
-        return fc_initiators
-
     def _get_hypermetro_domain(self, start, end, params):
         url = ("/HyperMetroDomain?range=[%(start)s-%(end)s]"
                % {"start": str(start), "end": str(end)})
@@ -2245,13 +2318,13 @@ class RestClient(object):
     def create_hypermetro(self, hcp_param):
         url = "/HyperMetroPair"
         result = self.call(url, hcp_param, "POST")
-        if result['error']['code'] == constants.HYPERMETRO_ALREADY_EXIST:
+        if result.get('error', {}).get('code') == constants.HYPERMETRO_ALREADY_EXIST:
             hypermetro_info = self.get_hypermetro_by_lun_id(
                 hcp_param["LOCALOBJID"])
             if hypermetro_info:
                 return hypermetro_info
 
-        if result['error']['code'] == constants.CREATE_HYPERMETRO_TIMEOUT:
+        if result.get('error', {}).get('code') == constants.CREATE_HYPERMETRO_TIMEOUT:
             try_times = 2
             while try_times:
                 time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
@@ -2267,11 +2340,11 @@ class RestClient(object):
         msg = _('create_hypermetro_pair error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
-        return result['data']
+        return result.get('data')
 
     @utils.synchronized('huawei_delete_hypermetro_pair', external=True)
     def delete_hypermetro(self, metro_id):
-        url = "/HyperMetroPair/" + metro_id
+        url = "/HyperMetroPair/%s" % metro_id
         result = self.call(url, None, "DELETE")
 
         msg = _('delete_hypermetro error.')
@@ -2280,8 +2353,7 @@ class RestClient(object):
     def sync_hypermetro(self, metro_id):
         url = "/HyperMetroPair/synchronize_hcpair"
 
-        data = {"ID": metro_id,
-                "TYPE": "15361"}
+        data = {"ID": metro_id, "TYPE": "15361"}
         result = self.call(url, data, "PUT")
 
         msg = _('sync_hypermetro error.')
@@ -2290,8 +2362,7 @@ class RestClient(object):
     def stop_hypermetro(self, metro_id):
         url = '/HyperMetroPair/disable_hcpair'
 
-        data = {"ID": metro_id,
-                "TYPE": "15361"}
+        data = {"ID": metro_id, "TYPE": "15361"}
         result = self.call(url, data, "PUT")
 
         msg = _('stop_hypermetro error.')
@@ -2303,7 +2374,8 @@ class RestClient(object):
         msg = _('get_hypermetro_by_id error.')
         self._assert_rest_result(result, msg)
         if result.get('data'):
-            return result['data'][0]
+            return result.get('data')[0]
+        return None
 
     def get_hypermetro_by_lun_name(self, lun_name):
         url = "/HyperMetroPair?filter=LOCALOBJNAME::%s" % lun_name
@@ -2311,7 +2383,8 @@ class RestClient(object):
         msg = _('Get hypermetro by local lun name %s error.') % lun_name
         self._assert_rest_result(result, msg)
         if result.get('data'):
-            return result['data'][0]
+            return result.get('data')[0]
+        return None
 
     def get_hypermetro_by_lun_id(self, lun_id):
         url = "/HyperMetroPair?filter=LOCALOBJID::%s" % lun_id
@@ -2319,19 +2392,21 @@ class RestClient(object):
         msg = _('Get hypermetro by local lun id %s error.') % lun_id
         self._assert_rest_result(result, msg)
         if result.get('data'):
-            return result['data'][0]
+            return result.get('data')[0]
+        return None
 
     def change_hostlun_id(self, map_info, hostlun_id):
         url = "/mappingview"
         view_id = six.text_type(map_info['view_id'])
         lun_id = six.text_type(map_info['lun_id'])
         hostlun_id = six.text_type(hostlun_id)
-        data = {"TYPE": 245,
-                "ID": view_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id,
-                "ASSOCIATEMETADATA": [{"LUNID": lun_id,
-                                       "hostLUNId": hostlun_id}]}
+        data = {
+            "TYPE": 245,
+            "ID": view_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id,
+            "ASSOCIATEMETADATA": [{"LUNID": lun_id, "hostLUNId": hostlun_id}]
+        }
 
         result = self.call(url, data, "PUT")
 
@@ -2339,13 +2414,14 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
 
     def find_view_by_id(self, view_id):
-        url = "/MAPPINGVIEW/" + view_id
+        url = "/MAPPINGVIEW/%s" % view_id
         result = self.call(url, None, "GET")
 
         msg = _('Change hostlun id error.')
         self._assert_rest_result(result, msg)
         if 'data' in result:
             return result["data"]["AVAILABLEHOSTLUNIDLIST"]
+        return None
 
     def get_metrogroup_by_name(self, name):
         url = "/HyperMetro_ConsistentGroup?type='15364'"
@@ -2355,40 +2431,43 @@ class RestClient(object):
         self._assert_rest_result(result, msg)
         return self._get_id_from_result(result, name, 'NAME')
 
-    def get_metrogroup_by_id(self, id):
-        url = "/HyperMetro_ConsistentGroup/" + id
+    def get_metrogroup_by_id(self, metro_group_id):
+        url = "/HyperMetro_ConsistentGroup/%s" % metro_group_id
         result = self.call(url, None, "GET")
 
         msg = _('Get hypermetro group by id error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
-        return result['data']
+        return result.get('data')
 
     def create_metrogroup(self, name, description, domain_id):
         url = "/HyperMetro_ConsistentGroup"
-        data = {"NAME": name,
-                "TYPE": "15364",
-                "DESCRIPTION": description,
-                "RECOVERYPOLICY": "1",
-                "SPEED": self.configuration.hyper_sync_speed,
-                "PRIORITYSTATIONTYPE": "0",
-                "DOMAINID": domain_id}
+        data = {
+            "NAME": name,
+            "TYPE": "15364",
+            "DESCRIPTION": description,
+            "RECOVERYPOLICY": "1",
+            "SPEED": self.configuration.hyper_sync_speed,
+            "PRIORITYSTATIONTYPE": "0",
+            "DOMAINID": domain_id
+        }
         result = self.call(url, data, "POST")
 
         msg = _('create hypermetro group error.')
         self._assert_rest_result(result, msg)
         if 'data' in result:
             return result["data"]["ID"]
+        return None
 
     def delete_metrogroup(self, metrogroup_id):
-        url = "/HyperMetro_ConsistentGroup/" + metrogroup_id
+        url = "/HyperMetro_ConsistentGroup/%s" % metrogroup_id
         result = self.call(url, None, "DELETE")
 
         msg = _('Delete hypermetro group error.')
         self._assert_rest_result(result, msg)
 
     def get_metrogroup(self, metrogroup_id):
-        url = "/HyperMetro_ConsistentGroup/" + metrogroup_id
+        url = "/HyperMetro_ConsistentGroup/%s" % metrogroup_id
         result = self.call(url, None, "GET")
 
         msg = _('Get hypermetro group error.')
@@ -2396,9 +2475,7 @@ class RestClient(object):
 
     def stop_metrogroup(self, metrogroup_id):
         url = "/HyperMetro_ConsistentGroup/stop"
-        data = {"TYPE": "15364",
-                "ID": metrogroup_id
-                }
+        data = {"TYPE": "15364", "ID": metrogroup_id}
         result = self.call(url, data, "PUT")
 
         msg = _('stop hypermetro group error.')
@@ -2406,9 +2483,7 @@ class RestClient(object):
 
     def sync_metrogroup(self, metrogroup_id):
         url = "/HyperMetro_ConsistentGroup/sync"
-        data = {"TYPE": "15364",
-                "ID": metrogroup_id
-                }
+        data = {"TYPE": "15364", "ID": metrogroup_id}
         result = self.call(url, data, "PUT")
 
         msg = _('sync hypermetro group error.')
@@ -2416,10 +2491,12 @@ class RestClient(object):
 
     def add_metro_to_metrogroup(self, metrogroup_id, metro_id):
         url = "/hyperMetro/associate/pair"
-        data = {"TYPE": "15364",
-                "ID": metrogroup_id,
-                "ASSOCIATEOBJTYPE": "15361",
-                "ASSOCIATEOBJID": metro_id}
+        data = {
+            "TYPE": "15364",
+            "ID": metrogroup_id,
+            "ASSOCIATEOBJTYPE": "15361",
+            "ASSOCIATEOBJID": metro_id
+        }
         result = self.call(url, data, "POST")
 
         msg = _('Add hypermetro to metrogroup error.')
@@ -2427,10 +2504,12 @@ class RestClient(object):
 
     def remove_metro_from_metrogroup(self, metrogroup_id, metro_id):
         url = "/hyperMetro/associate/pair"
-        data = {"TYPE": "15364",
-                "ID": metrogroup_id,
-                "ASSOCIATEOBJTYPE": "15361",
-                "ASSOCIATEOBJID": metro_id}
+        data = {
+            "TYPE": "15364",
+            "ID": metrogroup_id,
+            "ASSOCIATEOBJTYPE": "15361",
+            "ASSOCIATEOBJID": metro_id
+        }
         result = self.call(url, data, "DELETE")
 
         msg = _('Delete hypermetro from metrogroup error.')
@@ -2453,7 +2532,7 @@ class RestClient(object):
         url = ("/splitmirror?range=[%(start)s-%(end)s]"
                % {"start": six.text_type(start), "end": six.text_type(end)})
         result = self.call(url, None, "GET")
-        if result['error']['code'] == constants.NO_SPLITMIRROR_LICENSE:
+        if result.get('error', {}).get('code') == constants.NO_SPLITMIRROR_LICENSE:
             msg = _('License is unavailable.')
             raise exception.VolumeBackendAPIException(data=msg)
         msg = _('Get SplitMirror error.')
@@ -2466,9 +2545,9 @@ class RestClient(object):
 
         return split_mirrors
 
-    def get_target_luns(self, id):
+    def get_target_luns(self, parent_id):
         url = ("/SPLITMIRRORTARGETLUN/targetLUN?TYPE=228&PARENTID=%s&"
-               "PARENTTYPE=220") % id
+               "PARENTTYPE=220") % parent_id
         result = self.call(url, None, "GET")
         msg = _('Get target LUN of SplitMirror error.')
         self._assert_rest_result(result, msg)
@@ -2482,7 +2561,7 @@ class RestClient(object):
         url = ("/LUN_MIGRATION?range=[%(start)s-%(end)s]"
                % {"start": six.text_type(start), "end": six.text_type(end)})
         result = self.call(url, None, "GET")
-        if result['error']['code'] == constants.NO_MIGRATION_LICENSE:
+        if result.get('error', {}).get('code') == constants.NO_MIGRATION_LICENSE:
             msg = _('License is unavailable.')
             raise exception.VolumeBackendAPIException(data=msg)
         msg = _('Get migration task error.')
@@ -2537,8 +2616,9 @@ class RestClient(object):
                "ASSOCIATEOBJID=%s") % view_id
         result = self.call(url, None, "GET")
         self._assert_rest_result(result, _('Get port group by view error.'))
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def get_fc_ports_by_portgroup(self, portg_id):
         url = ("/fc_port/associate?ASSOCIATEOBJTYPE=257"
@@ -2553,20 +2633,25 @@ class RestClient(object):
 
     def create_portg(self, portg_name, description=""):
         url = "/PortGroup"
-        data = {"DESCRIPTION": description,
-                "NAME": portg_name,
-                "TYPE": 257}
+        data = {
+            "DESCRIPTION": description,
+            "NAME": portg_name,
+            "TYPE": 257
+        }
         result = self.call(url, data, "POST")
         self._assert_rest_result(result, _('Create port group error.'))
         if "data" in result:
             return result['data']['ID']
+        return None
 
     def add_port_to_portg(self, portg_id, port_id):
         url = "/port/associate/portgroup"
-        data = {"ASSOCIATEOBJID": port_id,
-                "ASSOCIATEOBJTYPE": 212,
-                "ID": portg_id,
-                "TYPE": 257}
+        data = {
+            "ASSOCIATEOBJID": port_id,
+            "ASSOCIATEOBJTYPE": 212,
+            "ID": portg_id,
+            "TYPE": 257
+        }
         result = self.call(url, data, "POST")
         self._assert_rest_result(result, _('Add port to port group error.'))
 
@@ -2594,9 +2679,11 @@ class RestClient(object):
         portg_info = self.get_portg_info(portg_id)
         new_description = portg_info.get('DESCRIPTION') + ',' + description
         url = "/portgroup/%s" % portg_id
-        data = {"DESCRIPTION": new_description,
-                "ID": portg_id,
-                "TYPE": 257}
+        data = {
+            "DESCRIPTION": new_description,
+            "ID": portg_id,
+            "TYPE": 257
+        }
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('Append port group description '
                                            'error.'))
@@ -2605,9 +2692,11 @@ class RestClient(object):
                         lun_type=constants.LUN_TYPE):
         cmd_type = 'lun' if lun_type == constants.LUN_TYPE else 'snapshot'
         url = ("/%s/%s" % (cmd_type, lun_id))
-        data = {"DESCRIPTION": description,
-                "ID": lun_id,
-                "TYPE": lun_type}
+        data = {
+            "DESCRIPTION": description,
+            "ID": lun_id,
+            "TYPE": lun_type
+        }
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, _('update object description '
                                            'error.'))
@@ -2637,10 +2726,10 @@ class RestClient(object):
         msg = _('Create replication error.')
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
-        return result['data']
+        return result.get('data')
 
     def get_pair_by_id(self, pair_id):
-        url = "/REPLICATIONPAIR/" + pair_id
+        url = "/REPLICATIONPAIR/%s" % pair_id
         result = self.call(url, None, "GET")
 
         msg = _('Get pair failed.')
@@ -2649,8 +2738,7 @@ class RestClient(object):
 
     def switch_pair(self, pair_id):
         url = '/REPLICATIONPAIR/switch'
-        data = {"ID": pair_id,
-                "TYPE": "263"}
+        data = {"ID": pair_id, "TYPE": "263"}
         result = self.call(url, data, "PUT")
 
         msg = _('Switch over pair error.')
@@ -2658,15 +2746,14 @@ class RestClient(object):
 
     def split_pair(self, pair_id):
         url = '/REPLICATIONPAIR/split'
-        data = {"ID": pair_id,
-                "TYPE": "263"}
+        data = {"ID": pair_id, "TYPE": "263"}
         result = self.call(url, data, "PUT")
 
         msg = _('Split pair error.')
         self._assert_rest_result(result, msg)
 
     def delete_pair(self, pair_id, force=False):
-        url = "/REPLICATIONPAIR/" + pair_id
+        url = "/REPLICATIONPAIR/%s" % pair_id
         data = None
         if force:
             data = {"ISLOCALDELETE": force}
@@ -2678,15 +2765,14 @@ class RestClient(object):
 
     def sync_pair(self, pair_id):
         url = "/REPLICATIONPAIR/sync"
-        data = {"ID": pair_id,
-                "TYPE": "263"}
+        data = {"ID": pair_id, "TYPE": "263"}
         result = self.call(url, data, "PUT")
 
         msg = _('Sync pair error.')
         self._assert_rest_result(result, msg)
 
     def check_pair_exist(self, pair_id):
-        url = "/REPLICATIONPAIR/" + pair_id
+        url = "/REPLICATIONPAIR/%s" % pair_id
         result = self.call(url, None, "GET")
         error_code = result['error']['code']
         if error_code != 0:
@@ -2699,9 +2785,8 @@ class RestClient(object):
         return True
 
     def set_pair_second_access(self, pair_id, access):
-        url = "/REPLICATIONPAIR/" + pair_id
-        data = {"ID": pair_id,
-                "SECRESACCESS": access}
+        url = "/REPLICATIONPAIR/%s" % pair_id
+        data = {"ID": pair_id, "SECRESACCESS": access}
         result = self.call(url, data, "PUT")
 
         msg = _('Set pair secondary access error.')
@@ -2723,7 +2808,7 @@ class RestClient(object):
         return None
 
     def is_host_associated_to_hostgroup(self, host_id):
-        url = "/host/" + host_id
+        url = "/host/%s" % host_id
         result = self.call(url, None, "GET")
         data = result.get('data')
         if data is not None:
@@ -2731,15 +2816,16 @@ class RestClient(object):
         return False
 
     def _get_object_count(self, obj_name):
-        url = "/" + obj_name + "/count"
+        url = "/%s/count" % obj_name
         result = self.call(url, None, "GET", filter_flag=True)
 
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             msg = 'Get obj %s count error' % obj_name
             raise exception.VolumeBackendAPIException(data=msg)
 
         if result.get("data"):
             return result.get("data").get("COUNT")
+        return None
 
     def create_replicg(self, replicg_param):
         url = '/CONSISTENTGROUP'
@@ -2763,8 +2849,7 @@ class RestClient(object):
 
     def add_replipair_to_replicg(self, replicg_id, pair_ids):
         url = '/ADD_MIRROR'
-        data = {'ID': replicg_id,
-                'RMLIST': pair_ids}
+        data = {'ID': replicg_id, 'RMLIST': pair_ids}
         result = self.call(url, data, "PUT")
         msg = (_("Add repli_pair %(pair)s to replicg %(group)s error.")
                % {'pair': pair_ids, 'group': replicg_id})
@@ -2772,8 +2857,7 @@ class RestClient(object):
 
     def remove_replipair_from_replicg(self, replicg_id, pair_ids):
         url = '/DEL_MIRROR'
-        data = {'ID': replicg_id,
-                'RMLIST': pair_ids}
+        data = {'ID': replicg_id, 'RMLIST': pair_ids}
         result = self.call(url, data, "PUT")
         msg = (_("Remove repli_pair %(pair)s from "
                  "replicg %(group)s error.")
@@ -2799,7 +2883,7 @@ class RestClient(object):
         url = '/SYNCHRONIZE_CONSISTENCY_GROUP'
         data = {'ID': replicg_id}
         result = self.call(url, data, "PUT")
-        if result['error']['code'] == constants.REPLICG_IS_EMPTY:
+        if result.get('error', {}).get('code') == constants.REPLICG_IS_EMPTY:
             LOG.warning(("Replicg %(group)s does not have "
                          "remote replications.")
                         % {'group': replicg_id})
@@ -2816,10 +2900,10 @@ class RestClient(object):
                % {'group': replicg_id})
         self._assert_rest_result(result, msg)
         self._assert_data_in_result(result, msg)
-        return result['data']
+        return result.get('data')
 
     def set_cg_second_access(self, replicg_id, access):
-        url = "/CONSISTENTGROUP/" + replicg_id
+        url = "/CONSISTENTGROUP/%s" % replicg_id
         data = {"SECRESACCESS": access}
         result = self.call(url, data, "PUT")
 
@@ -2855,7 +2939,7 @@ class RestClient(object):
     def get_license_feature_status(self):
         url = "/license/feature"
         result = self.call(url, None, "GET", filter_flag=True)
-        if result['error']['code'] != 0:
+        if result.get('error', {}).get('code') != 0:
             msg = (_("Query license status of features failed.\n"
                      "result: %(res)s.")
                    % {'res': result})
@@ -2877,7 +2961,7 @@ class RestClient(object):
 
         result = self.call('/lun', data, "POST")
         self._assert_rest_result(result, _('Create clone lun error.'))
-        return result['data']
+        return result.get('data')
 
     def split_clone_lun(self, clone_id):
         data = {
@@ -2888,7 +2972,7 @@ class RestClient(object):
         }
 
         result = self.call('/lunclone_split_switch', data, "PUT")
-        if result['error']['code'] == constants.CLONE_PAIR_SYNC_NOT_EXIST:
+        if result.get('error', {}).get('code') == constants.CLONE_PAIR_SYNC_NOT_EXIST:
             return
         self._assert_rest_result(result, _('Split clone lun error.'))
 
@@ -2900,7 +2984,7 @@ class RestClient(object):
             "SPLITSPEED": 4,
         }
         result = self.call('/lunclone_split_switch', data, "PUT")
-        if result['error']['code'] == constants.CLONE_PAIR_SYNC_COMPLETE:
+        if result.get('error', {}).get('code') == constants.CLONE_PAIR_SYNC_COMPLETE:
             LOG.info("Split lun finish, delete the clone pair %s." % clone_id)
             self.delete_clone_pair(clone_id)
             return
@@ -2914,6 +2998,7 @@ class RestClient(object):
         for item in result.get("data", []):
             if item.get("NAME") == workload_type_name:
                 return item.get("ID")
+        return None
 
     def get_workload_type_name(self, workload_type_id):
         url = "/workload_type/%s" % workload_type_id
@@ -2923,14 +3008,16 @@ class RestClient(object):
 
     def create_clone_pair(self, source_id, target_id, clone_speed):
         url = "/clonepair/relation"
-        data = {"copyRate": clone_speed,
-                "sourceID": source_id,
-                "targetID": target_id,
-                "isNeedSynchronize": "0"}
+        data = {
+            "copyRate": clone_speed,
+            "sourceID": source_id,
+            "targetID": target_id,
+            "isNeedSynchronize": "0"
+        }
         result = self.call(url, data, "POST")
         self._assert_rest_result(result, 'Create ClonePair error, source_id '
                                          'is %s.' % source_id)
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def sync_clone_pair(self, pair_id):
         url = "/clonepair/synchronize"
@@ -2953,11 +3040,10 @@ class RestClient(object):
         return result.get('data', {})
 
     def delete_clone_pair(self, pair_id, delete_dst_lun=False):
-        data = {"ID": pair_id,
-                "isDeleteDstLun": delete_dst_lun}
+        data = {"ID": pair_id, "isDeleteDstLun": delete_dst_lun}
         url = "/clonepair/%s" % pair_id
         result = self.call(url, data, "DELETE")
-        if result['error']['code'] == constants.CLONE_PAIR_NOT_EXIST:
+        if result.get('error', {}).get('code') == constants.CLONE_PAIR_NOT_EXIST:
             LOG.warning('ClonePair %s to delete not exist.', pair_id)
             return
         self._assert_rest_result(result, 'Delete ClonePair %s error.'
@@ -2981,8 +3067,7 @@ class RestClient(object):
 
     def rollback_snapshot(self, snapshot_id, speed):
         url = '/snapshot/rollback'
-        data = {'ID': snapshot_id,
-                'ROLLBACKSPEED': speed}
+        data = {'ID': snapshot_id, 'ROLLBACKSPEED': speed}
         result = self.call(url, data, "PUT")
         self._assert_rest_result(result, 'Rollback snapshot %s error.'
                                  % snapshot_id)
@@ -3010,7 +3095,7 @@ class RestClient(object):
         # if initiator was associated to another host
         if initiator.get("PARENTID") != host_id:
             msg = (_("Initiator %(ini)s has been added to another host "
-                     "%(host)s.") % {"ini": initiator_name,
+                     "%(host)s.") % {"ini": huawei_utils.mask_initiator_sensitive_info(initiator_name),
                                      "host": initiator.get('PARENTNAME')})
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
@@ -3018,33 +3103,48 @@ class RestClient(object):
     def _get_roceini_by_id(self, nqn):
         """Get RoCE initiator from array."""
         url = '/NVMe_over_RoCE_initiator/%s' % nqn
-        result = self.call(url, None, "GET")
+        mask_nqn = huawei_utils.mask_initiator_sensitive_info(nqn)
+        sensitive_info = {
+            'url': '/'.join([self.url, 'NVMe_over_RoCE_initiator', mask_nqn]),
+            'sensitive_keys': ['ID'],
+        }
+        result = self.call(url, None, "GET", sensitive_info=sensitive_info)
 
         if result.get('error', {}).get('code') == constants.FC_INITIATOR_NOT_EXIST:
-            LOG.warning('RoCE NQN %s not exist.', nqn)
+            LOG.warning('RoCE NQN %s not exist.', mask_nqn)
             return {}
-        self._assert_rest_result(result, 'get RoCE NQN %s error.' % nqn)
+        self._assert_rest_result(result, 'get RoCE NQN %s error.' % mask_nqn)
 
         return result.get("data", {})
 
     def _add_roceini_to_array(self, nqn):
         """Add a new RoCE initiator to storage device."""
         url = "/NVMe_over_RoCE_initiator"
-        data = {"ID": nqn}
-        result = self.call(url, data, "POST")
+        data = {constants.ID_UPPER: nqn}
+        mask_nqn = huawei_utils.mask_initiator_sensitive_info(nqn)
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=[constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER],
+        }
+        result = self.call(url, data, "POST", sensitive_info=sensitive_info)
         if result.get('error', {}).get('code') == constants.OBJECT_ALREADY_EXIST:
-            LOG.warning('RoCE NQN %s has already exist in array.', nqn)
+            LOG.warning('RoCE NQN %s has already exist in array.', mask_nqn)
         else:
             self._assert_rest_result(
-                result, _('Add RoCE initiator %s to array error.' % nqn))
+                result, _('Add RoCE initiator %s to array error.' % mask_nqn))
 
     def _associate_roceini_to_host(self, nqn, host_id):
         """Associate RoCE initiator with the host."""
         url = "/host/create_associate"
-        data = {"ASSOCIATEOBJTYPE": constants.NVME_ROCE_INITIATOR_TYPE,
-                "ID": host_id,
-                "ASSOCIATEOBJID": nqn}
-        result = self.call(url, data, "PUT")
+        data = {
+            "ASSOCIATEOBJTYPE": constants.NVME_ROCE_INITIATOR_TYPE,
+            "ID": host_id,
+            "ASSOCIATEOBJID": nqn
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ASSOCIATEOBJID']),
+        }
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(
             result, _("Associate RoCE initiator %(ini)s to host %(host)s "
                       "error." % {"ini": nqn, "host": host_id}))
@@ -3058,17 +3158,22 @@ class RestClient(object):
             return True
         else:
             msg = _("Initiator %(ini)s has been added to host "
-                    "%(host)s.") % {"ini": initiator_name,
+                    "%(host)s.") % {"ini": huawei_utils.mask_initiator_sensitive_info(initiator_name),
                                     "host": initiator.get('PARENTID')}
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
     def remove_roce_initiator_from_host(self, initiator_name, host_id):
         url = "/host/remove_associate"
-        data = {"ID": host_id,
-                "ASSOCIATEOBJTYPE": constants.NVME_ROCE_INITIATOR_TYPE,
-                "ASSOCIATEOBJID": initiator_name}
-        result = self.call(url, data, "PUT")
+        data = {
+            "ID": host_id,
+            "ASSOCIATEOBJTYPE": constants.NVME_ROCE_INITIATOR_TYPE,
+            "ASSOCIATEOBJID": initiator_name
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ASSOCIATEOBJID']),
+        }
+        result = self.call(url, data, "PUT", sensitive_info=sensitive_info)
         self._assert_rest_result(result,
                                  _('Remove RoCE initiator from host error.'))
 
@@ -3153,6 +3258,33 @@ class RestClient(object):
             if target_ip.strip():
                 target_ips.append(target_ip)
 
+    def get_disk_pool_by_id(self, disk_domain_id):
+        url = "/diskpool/%s" % disk_domain_id
+        result = self.call(url, None, "GET")
+        self._assert_rest_result(result, 'Get disk pool by id error')
+        return result.get('data')
+
+    def _get_disk_type_by_disk_pool(self, pool_info):
+        """
+        The method for disk pool to obtain the disk type is as follows:
+        Check whether diskTypeList contains disk type information.
+        If diskTypeList contains disk type information, separate disk types with commas ','.
+        If diskTypeList does not contain disk type information,
+        use the disk type returned by TIER0DISKTYPE.
+        """
+        pool_disks = []
+        disk_pool_info = self.get_disk_pool_by_id(pool_info.get('PARENTID'))
+        if disk_pool_info.get('diskTypeList'):
+            for disk_type in json.loads(disk_pool_info.get('diskTypeList')):
+                if constants.HUAWEI_DISK_DICT.get(disk_type):
+                    pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_type))
+
+        if not pool_disks:
+            pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_pool_info.get('TIER0DISKTYPE')))
+            return pool_disks[0]
+
+        return ','.join(pool_disks) if pool_disks else None
+
     def _get_target_ips_by_initiator_name(self, initiator):
         target_ips = []
         for info in self.roce_info:
@@ -3180,3 +3312,17 @@ class RestClient(object):
             target_ips = temp_target_ips
 
         return target_ips
+
+    def _get_func(self, method):
+        request_enum = {
+            None: self.session.post,
+            'POST': self.session.post,
+            'PUT': self.session.put,
+            'GET': self.session.get,
+            'DELETE': self.session.delete,
+        }
+        if request_enum.get(method) is None:
+            msg = _("Request method %s is invalid.") % method
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+        return request_enum.get(method)

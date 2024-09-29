@@ -15,8 +15,9 @@
 
 import hashlib
 import json
-import six
 import time
+
+import six
 
 from oslo_log import log as logging
 from oslo_service import loopingcall
@@ -33,16 +34,16 @@ from cinder.volume import qos_specs
 LOG = logging.getLogger(__name__)
 
 
-def encode_name(id):
-    encoded_name = hashlib.md5(id.encode('utf-8')).hexdigest()
-    prefix = id.split('-')[0] + '-'
+def encode_name(id_info):
+    encoded_name = hashlib.md5(id_info.encode('utf-8')).hexdigest()
+    prefix = id_info.split('-')[0] + '-'
     postfix = encoded_name[:constants.MAX_NAME_LENGTH - len(prefix)]
     return prefix + postfix
 
 
-def old_encode_name(id):
-    pre_name = id.split("-")[0]
-    vol_encoded = six.text_type(hash(id))
+def old_encode_name(id_info):
+    pre_name = id_info.split("-")[0]
+    vol_encoded = six.text_type(hash(id_info))
     if vol_encoded.startswith('-'):
         newuuid = pre_name + vol_encoded
     else:
@@ -102,9 +103,17 @@ def get_volume_metadata(volume):
     if isinstance(volume, objects.Volume):
         return volume.metadata
     if volume.get('volume_metadata'):
-        return {item['key']: item['value'] for item in
-                volume['volume_metadata']}
+        volume_metadata = {}
+        for item in volume.get('volume_metadata'):
+            volume_metadata[item.get('key')] = item.get('value')
+        return volume_metadata
     return {}
+
+
+def set_volume_lun_wwn(model_update, lun_info, volume):
+    metadata = get_volume_metadata(volume)
+    metadata['lun_wwn'] = lun_info.get('WWN')
+    model_update.update({"metadata": metadata})
 
 
 def get_admin_metadata(volume):
@@ -121,7 +130,7 @@ def get_admin_metadata(volume):
 
 
 def get_snapshot_metadata_value(snapshot):
-    if type(snapshot) is objects.Snapshot:
+    if isinstance(snapshot, objects.Snapshot):
         return snapshot.metadata
 
     if 'snapshot_metadata' in snapshot:
@@ -134,6 +143,7 @@ def get_snapshot_metadata_value(snapshot):
 def convert_connector_wwns(wwns):
     if wwns:
         return map(lambda x: x.lower(), wwns)
+    return None
 
 
 def to_string(**kwargs):
@@ -195,10 +205,10 @@ def get_volume_lun_id(client, volume):
         volume_name = old_encode_name(volume.id)
         lun_id = client.get_lun_id_by_name(volume_name)
 
-    if not lun_id and metadata.get('huawei_lun_id'):
-        if client.check_lun_exist(metadata.get('huawei_lun_id'),
+    if not lun_id and metadata.get(constants.HUAWEI_LUN_ID):
+        if client.check_lun_exist(metadata.get(constants.HUAWEI_LUN_ID),
                                   metadata.get('huawei_lun_wwn')):
-            lun_id = metadata.get('huawei_lun_id')
+            lun_id = metadata.get(constants.HUAWEI_LUN_ID)
 
     # Judge whether this volume has experienced data migration or not
     if not lun_id:
@@ -269,6 +279,7 @@ def is_support_clone_pair(client):
     version_info = array_info['PRODUCTVERSION']
     if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
         return True
+    return False
 
 
 def remove_lun_from_lungroup(client, lun_id, force_delete_volume):
@@ -367,6 +378,57 @@ def mask_dict_sensitive_info(data, secret="***"):
         out[key] = value
 
     return strutils.mask_dict_password(out)
+
+
+def mask_initiator_sensitive_info(data, sensitive_keys=None, need_mask_keys=None):
+    """Mask iscsi/fc/nvme ini sensitive info by data type"""
+    if isinstance(data, dict):
+        return mask_initiator_dict_sensitive_info(data, sensitive_keys, need_mask_keys=need_mask_keys)
+    elif isinstance(data, (list, tuple, set)):
+        return mask_initiator_array_sensitive_info(data, sensitive_keys)
+    else:
+        return mask_initiator_string_sensitive_info(data)
+
+
+def mask_initiator_dict_sensitive_info(data, sensitive_keys, need_mask_keys=None):
+    """Mask iscsi/fc/nvme ini sensitive info with a dict type data"""
+    out = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            value = mask_initiator_dict_sensitive_info(value, sensitive_keys, need_mask_keys)
+        elif key in sensitive_keys and isinstance(value, (list, tuple, set)):
+            value = mask_initiator_array_sensitive_info(value, sensitive_keys)
+        elif key in sensitive_keys:
+            value = mask_initiator_string_sensitive_info(value)
+        if need_mask_keys and key in need_mask_keys:
+            key = mask_initiator_string_sensitive_info(key)
+        out[key] = value
+
+    return out
+
+
+def mask_initiator_array_sensitive_info(data, sensitive_keys):
+    """Mask iscsi/fc/nvme ini sensitive info with a list type data"""
+    out = []
+    for sensitive_info in data:
+        if isinstance(sensitive_info, (list, tuple, set)):
+            value = mask_initiator_array_sensitive_info(sensitive_info, sensitive_keys)
+        elif isinstance(sensitive_info, dict):
+            value = mask_initiator_dict_sensitive_info(sensitive_info, sensitive_keys)
+        else:
+            value = mask_initiator_string_sensitive_info(sensitive_info)
+        out.append(value)
+    return out
+
+
+def mask_initiator_string_sensitive_info(data):
+    """Mask iscsi/fc/nvme ini sensitive info with a string type data"""
+    secret_str = "******"
+    if len(data) <= 6:
+        return secret_str
+
+    out_str = data[0:3] + secret_str + data[-3::]
+    return out_str
 
 
 def _check_and_set_qos_info(specs, qos):
