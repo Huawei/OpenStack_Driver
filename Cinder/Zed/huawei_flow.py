@@ -1992,7 +1992,7 @@ class GetRoCEPropertiesTask(task.Task):
         self.client = client
    
     @staticmethod
-    def _set_de_replicas(mapping_info):
+    def _set_dm_replicas(mapping_info):
         portals = mapping_info.get('portals')
         if len(portals) == 1:
             return
@@ -2008,15 +2008,15 @@ class GetRoCEPropertiesTask(task.Task):
             'dm_replicas': dm_replicas
         })
 
-    def execute(self, target_ips, host_id, lun_id, lun_info, lun):
+    def execute(self, target_ips, lun_info):
         mapping_info = {
-            'vol_uuid': lun.id,
+            'vol_uuid': lun_info.get('NGUID'),
             'portals': [(ip, constants.ROCE_TARGET_PORT, 'rdma') for ip in target_ips],
             'target_nqn': constants.ROCE_TARGET_NQN_PREFIX + self.client._login_device_id,
             'discard': True,
             'volume_nguid': lun_info.get('NGUID')
         }
-        self._set_de_replicas(mapping_info)
+        self._set_dm_replicas(mapping_info)
         return mapping_info
 
 
