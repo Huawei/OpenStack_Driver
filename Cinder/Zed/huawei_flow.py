@@ -1990,24 +1990,33 @@ class GetRoCEPropertiesTask(task.Task):
     def __init__(self, client, *args, **kwargs):
         super(GetRoCEPropertiesTask, self).__init__(*args, **kwargs)
         self.client = client
+   
+    @staticmethod
+    def _set_de_replicas(mapping_info):
+        portals = mapping_info.get('portals')
+        if len(portals) == 1:
+            return
 
-    def execute(self, target_ips, host_id, lun_id, lun_info):
-        host_lun_info = self.client.get_hostlun_info(host_id, lun_id)
-        if not host_lun_info:
-            msg = _("No hostlun information between host %(host_id)s and lun %(lun_id)s." % {
-                'host_id': host_id,
-                'lun_id': lun_id
+        dm_replicas = []
+        for portal in portals:
+            dm_replicas.append({
+                'target_nqn': mapping_info.get('target_nqn'),
+                'vol_uuid': mapping_info.get('vol_uuid'),
+                'portals': [portal]
             })
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
-        host_lun_id = host_lun_info[0]['hostLunId']
+        mapping_info.update({
+            'dm_replicas': dm_replicas
+        })
+
+    def execute(self, target_ips, host_id, lun_id, lun_info, lun):
         mapping_info = {
+            'vol_uuid': lun.id,
             'portals': [(ip, constants.ROCE_TARGET_PORT, 'rdma') for ip in target_ips],
-            'target_luns': [host_lun_id] * len(target_ips),
             'target_nqn': constants.ROCE_TARGET_NQN_PREFIX + self.client._login_device_id,
             'discard': True,
             'volume_nguid': lun_info.get('NGUID')
         }
+        self._set_de_replicas(mapping_info)
         return mapping_info
 
 
