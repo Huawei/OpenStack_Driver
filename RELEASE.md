@@ -1,3 +1,53 @@
+# 2.6.4
+## Mappings between Driver and OpenStack versions
+
+| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
+|Manila Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|×|
+
+
+We have tested OpenStack Newton with OceanStor Dorado V6 6.1.3
+## Version mappings among Cinder Driver, Huawei storage, and OpenStack
+| OpenStack |Huawei Storage|
+|---|---|
+|Cinder Driver|OceanStor V5 V500R007C61/V500R007C70/V500R007C71|
+| |OceanStor V6 6.1.3/6.1.5/6.1.6/6.1.7
+| |OceanStor Dorado V3 V300R002C10/V300R002C20|
+| |OceanStor Dorado V6 6.1.0/6.1.2/6.1.3/6.1.5/6.1.6/6.1.7
+
+## Version mappings among Manila Driver, Huawei storage, and OpenStack
+| OpenStack |Huawei Storage|
+|---|---|
+|Manila Driver|OceanStor V5 V500R007C61/V500R007C70|
+| |OceanStor V6 6.1.3/6.1.5/6.1.6
+| |OceanStor Dorado V6 6.1.0/6.1.2/6.1.3/6.1.5/6.1.6
+
+# 2.6.3
+## Mappings between Driver and OpenStack versions
+
+| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
+|Manila Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
+
+
+We have tested OpenStack Newton with OceanStor Dorado V6 6.1.3
+## Version mappings among Cinder Driver, Huawei storage, and OpenStack
+| OpenStack |Huawei Storage|
+|---|---|
+|Cinder Driver|OceanStor V5 V500R007C61/V500R007C70/V500R007C71|
+| |OceanStor V6 6.1.3/6.1.5/6.1.6
+| |OceanStor Dorado V3 V300R002C10/V300R002C20|
+| |OceanStor Dorado V6 6.1.0/6.1.2/6.1.3/6.1.5/6.1.6
+
+## Version mappings among Manila Driver, Huawei storage, and OpenStack
+| OpenStack |Huawei Storage|
+|---|---|
+|Manila Driver|OceanStor V5 V500R007C61/V500R007C70|
+| |OceanStor V6 6.1.3/6.1.5/6.1.6
+| |OceanStor Dorado V6 6.1.0/6.1.2/6.1.3/6.1.5/6.1.6
+
 # 2.6.2
 ## Mappings between Driver and OpenStack versions
 
