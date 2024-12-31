@@ -1,4 +1,4 @@
-# Copyright (c) 2016 Huawei Technologies Co., Ltd.
+# Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -16,15 +16,17 @@
 import functools
 import inspect
 import json
-import requests
-import six
 import sys
 import threading
 import time
 
+import requests
+import six
+
 from cinder import exception
 from cinder.i18n import _
 from cinder.volume.drivers.huawei import constants
+from cinder.volume.drivers.huawei import huawei_utils
 
 from oslo_concurrency import lockutils
 from oslo_log import log as logging
@@ -154,6 +156,7 @@ class Lun(CommonObject):
         _assert_result(result, 'Get lun info by name %s error.', name)
         if result.get('data'):
             return result['data'][0]
+        return None
 
     def update_lun(self, lun_id, data):
         result = self.put('/%(id)s', id=lun_id, data=data)
@@ -161,23 +164,29 @@ class Lun(CommonObject):
                        lun_id, data)
 
     def extend_lun(self, lun_id, new_size):
-        data = {'ID': lun_id,
-                'CAPACITY': new_size}
+        data = {
+            'ID': lun_id,
+            'CAPACITY': new_size
+        }
         result = self.put('/expand', data=data)
         _assert_result(result, 'Extend lun %s capacity error.', lun_id)
 
     def add_lun_to_partition(self, lun_id, partition_id):
-        data = {"ID": partition_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id}
+        data = {
+            "ID": partition_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id
+        }
         result = self.post('/associate/cachepartition', data=data)
         _assert_result(result, 'Add lun %s to partition %s error.',
                        lun_id, partition_id)
 
     def remove_lun_from_partition(self, lun_id, partition_id):
-        data = {"ID": partition_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id}
+        data = {
+            "ID": partition_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id
+        }
         result = self.delete('/associate/cachepartition', data=data)
         _assert_result(result, 'Remove lun %s from partition %s error.',
                        lun_id, partition_id)
@@ -207,6 +216,7 @@ class Lun(CommonObject):
         _assert_result(result, 'Get lun info filter id %s error.', lun_id)
         if result.get('data'):
             return result['data'][0]
+        return None
 
     def get_lun_host_lun_id(self, host_id, lun_info):
         result = self.get(
@@ -221,6 +231,7 @@ class Lun(CommonObject):
             if lun_info['ID'] == item['ID']:
                 metadata = json.loads(item['ASSOCIATEMETADATA'])
                 return metadata['HostLUNID']
+        return None
 
     def is_host_associate_inband_lun(self, host_id):
         result = self.get("/associate?ASSOCIATEOBJTYPE=21"
@@ -253,6 +264,7 @@ class StoragePool(CommonObject):
                        pool_name)
         if result.get('data'):
             return result['data'][0]['ID']
+        return None
 
     def get_pool_by_name(self, pool_name):
         result = self.get('?filter=NAME::%(name)s', name=pool_name,
@@ -261,6 +273,17 @@ class StoragePool(CommonObject):
                        pool_name)
         if result.get('data'):
             return result['data'][0]
+        return None
+
+
+class DiskPool(CommonObject):
+    _obj_url = '/diskpool'
+
+    def get_disk_pool_by_id(self, disk_domain_id):
+        url = "/%s" % disk_domain_id
+        result = self.get(url)
+        _assert_result(result, 'Get disk pool by id error')
+        return result['data']
 
 
 class Snapshot(CommonObject):
@@ -275,9 +298,11 @@ class Snapshot(CommonObject):
         _assert_result(result, 'Activate snapshots %s error.', snapshot_ids)
 
     def create_snapshot(self, lun_id, snapshot_name, snapshot_description):
-        data = {"NAME": snapshot_name,
-                "DESCRIPTION": snapshot_description,
-                "PARENTID": lun_id}
+        data = {
+            "NAME": snapshot_name,
+            "DESCRIPTION": snapshot_description,
+            "PARENTID": lun_id
+        }
         result = self.post(data=data)
         if result['error']['code'] == constants.ERROR_VOLUME_ALREADY_EXIST:
             snapshot_info = self.get_snapshot_info_by_name(snapshot_name)
@@ -315,8 +340,9 @@ class Snapshot(CommonObject):
     def get_snapshot_info_by_name(self, name):
         result = self.get('?filter=NAME::%(name)s&range=[0-100]', name=name)
         _assert_result(result, 'Get snapshot info by name %s error.', name)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]
+        return None
 
     def get_snapshot_info_by_id(self, snapshot_id):
         result = self.get('/%(id)s', id=snapshot_id)
@@ -345,10 +371,13 @@ class Snapshot(CommonObject):
             if snap_id == item['ID']:
                 metadata = json.loads(item['ASSOCIATEMETADATA'])
                 return metadata['HostLUNID']
+        return None
 
     def rollback_snapshot(self, snapshot_id, speed):
-        data = {'ID': snapshot_id,
-                'ROLLBACKSPEED': speed}
+        data = {
+            'ID': snapshot_id,
+            'ROLLBACKSPEED': speed
+        }
         result = self.put('/rollback', data=data)
         _assert_result(result, 'Rollback snapshot %s error.', snapshot_id)
 
@@ -363,10 +392,12 @@ class LunCopy(CommonObject):
 
     def create_luncopy(self, luncopyname, srclunid, tgtlunid, copy_speed):
         param_format = "INVALID;%s;INVALID;INVALID;INVALID"
-        data = {"NAME": luncopyname,
-                "COPYSPEED": copy_speed,
-                "SOURCELUN": param_format % srclunid,
-                "TARGETLUN": param_format % tgtlunid}
+        data = {
+            "NAME": luncopyname,
+            "COPYSPEED": copy_speed,
+            "SOURCELUN": param_format % srclunid,
+            "TARGETLUN": param_format % tgtlunid
+        }
         result = self.post(data=data)
         _assert_result(result, 'Create luncopy %s error.', luncopyname)
 
@@ -408,11 +439,14 @@ class Host(CommonObject):
         _assert_result(result, 'Get host by name %s error.', host_name)
         if result.get('data'):
             return result['data'][0]['ID']
+        return None
 
     def create_host(self, hostname, orig_host_name, info):
-        data = {"NAME": hostname,
-                "OPERATIONSYSTEM": "0",
-                "DESCRIPTION": orig_host_name}
+        data = {
+            "NAME": hostname,
+            "OPERATIONSYSTEM": "0",
+            "DESCRIPTION": orig_host_name
+        }
         data.update(info)
         result = self.post(data=data)
         if _error_code(result) == constants.OBJECT_NAME_ALREADY_EXIST:
@@ -450,6 +484,42 @@ class Host(CommonObject):
         _assert_result(result, 'Get host by hostgroup %s error.', hostgroup_id)
         return [host.get('ID') for host in result.get("data", [])]
 
+    def associate_roce_initiator_to_host(self, host_nqn, host_id):
+        data = {
+            "ASSOCIATEOBJTYPE": constants.ROCE_INITIATOR,
+            "ID": host_id,
+            "ASSOCIATEOBJID": host_nqn
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ASSOCIATEOBJID'])
+        }
+        result = self.put('/create_associate', data=data, sensitive_info=sensitive_info)
+        _assert_result(result, 'Add initiator %s to host %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn), host_id)
+
+    def remove_roce_initiator_from_host(self, host_nqn, host_id):
+        data = {
+            "ASSOCIATEOBJTYPE": constants.ROCE_INITIATOR,
+            "ID": host_id,
+            "ASSOCIATEOBJID": host_nqn
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ASSOCIATEOBJID'])
+        }
+        result = self.put('/remove_associate', data=data, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.INITIATOR_NOT_IN_HOST:
+            LOG.warning('Initiator %s not in host %s.',
+                        huawei_utils.mask_initiator_sensitive_info(host_nqn), host_id)
+            return
+        if _error_code(result) == constants.OBJECT_NOT_EXIST:
+            LOG.warning('Initiator %s not exist.', huawei_utils.mask_initiator_sensitive_info(host_nqn))
+            return
+        if _error_code(result) == constants.HOST_NOT_EXIST:
+            LOG.warning('Host %s not exist.', host_id)
+            return
+        _assert_result(result, 'Remove initiator %s from host %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn), host_id)
+
 
 class PortGroup(CommonObject):
     _obj_url = '/portgroup'
@@ -459,8 +529,9 @@ class PortGroup(CommonObject):
                           'ASSOCIATEOBJID=%(id)s', id=view_id)
         _assert_result(result, 'Get portgroup in mappingview %s error',
                        view_id)
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def create_portgroup(self, portg_name):
         data = {"NAME": portg_name}
@@ -484,12 +555,17 @@ class PortGroup(CommonObject):
     def get_portgroup_by_name(self, portg_name):
         result = self.get('?filter=NAME::%(name)s', name=portg_name)
         _assert_result(result, 'Get portgroup by name %s error.', portg_name)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]
+        return None
 
     def get_portgroup_by_port_id(self, port_id, port_type):
+        sensitive_info = {
+            'url': "%s/associate?ASSOCIATEOBJTYPE=%s&ASSOCIATEOBJID=%s" % (
+                self._obj_url, port_type, huawei_utils.mask_initiator_sensitive_info(port_id))
+        }
         result = self.get("/associate?ASSOCIATEOBJTYPE=%(type)s&"
-                          "ASSOCIATEOBJID=%(id)s", id=port_id, type=port_type)
+                          "ASSOCIATEOBJID=%(id)s", id=port_id, type=port_type, sensitive_info=sensitive_info)
         _assert_result(result, 'Get portgroup by port %s error.', port_id)
         return [group['ID'] for group in result.get("data", [])]
 
@@ -502,13 +578,16 @@ class HostGroup(CommonObject):
                           'ASSOCIATEOBJID=%(id)s', id=view_id)
         _assert_result(result, 'Get hostgroup in mappingview %s error.',
                        view_id)
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def associate_host_to_hostgroup(self, hostgroup_id, host_id):
-        data = {"ID": hostgroup_id,
-                "ASSOCIATEOBJTYPE": "21",
-                "ASSOCIATEOBJID": host_id}
+        data = {
+            "ID": hostgroup_id,
+            "ASSOCIATEOBJTYPE": "21",
+            "ASSOCIATEOBJID": host_id
+        }
         result = self.post('/associate', data=data)
         if _error_code(result) == constants.HOST_ALREADY_IN_HOSTGROUP:
             LOG.info('Object %(id)s already in hostgroup %(group)s.',
@@ -537,8 +616,9 @@ class HostGroup(CommonObject):
     def get_hostgroup_by_name(self, name):
         result = self.get('?filter=NAME::%(name)s', name=name)
         _assert_result(result, 'Get hostgroup by %s error.', name)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]
+        return None
 
 
 class LunGroup(CommonObject):
@@ -546,9 +626,11 @@ class LunGroup(CommonObject):
 
     def associate_lun_to_lungroup(self, lungroup_id, obj_id, obj_type,
                                   is_dorado_v6=False, is_associated_host=False):
-        data = {"ID": lungroup_id,
-                "ASSOCIATEOBJTYPE": obj_type,
-                "ASSOCIATEOBJID": obj_id}
+        data = {
+            "ID": lungroup_id,
+            "ASSOCIATEOBJTYPE": obj_type,
+            "ASSOCIATEOBJID": obj_id
+        }
         if all((is_dorado_v6, is_associated_host)):
             data['startHostLunId'] = 1
         result = self.post('/associate', data=data)
@@ -577,20 +659,24 @@ class LunGroup(CommonObject):
                           'ASSOCIATEOBJID=%(id)s', id=view_id)
         _assert_result(result, 'Get lungroup in mappingview %s error.',
                        view_id)
-        if 'data' in result and result['data']:
-            return result['data'][0]['ID']
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def get_lungroup_by_name(self, lungroup_name):
         """Get the given hostgroup id."""
         result = self.get('?filter=NAME::%(name)s', name=lungroup_name)
         _assert_result(result, 'Get lungroup info by name %s error.',
                        lungroup_name)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]
+        return None
 
     def create_lungroup(self, lungroup_name):
-        data = {"APPTYPE": '0',
-                "NAME": lungroup_name}
+        data = {
+            "APPTYPE": '0',
+            "NAME": lungroup_name
+        }
         result = self.post(data=data)
         if _error_code(result) == constants.OBJECT_NAME_ALREADY_EXIST:
             LOG.info('Lungroup %s to create already exists.', lungroup_name)
@@ -624,12 +710,18 @@ class IscsiInitiator(CommonObject):
     _obj_url = '/iscsi_initiator'
 
     def add_iscsi_initiator(self, initiator):
-        data = {'ID': initiator}
-        result = self.post(data=data)
+        data = {constants.ID_UPPER: initiator}
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, [constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.post(data=data, sensitive_info=sensitive_info)
         if _error_code(result) == constants.OBJECT_ID_NOT_UNIQUE:
-            LOG.info('iscsi initiator %s already exists.', initiator)
+            LOG.info('iscsi initiator %s already exists.',
+                     huawei_utils.mask_initiator_sensitive_info(initiator))
             return
-        _assert_result(result, 'Add iscsi initiator %s error.', initiator)
+        _assert_result(result, 'Add iscsi initiator %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(initiator))
 
     def associate_iscsi_initiator_to_host(self, initiator, host_id, alua_info):
         data = {
@@ -637,47 +729,183 @@ class IscsiInitiator(CommonObject):
             "PARENTID": host_id,
         }
         data.update(alua_info)
-
-        result = self.put('/%(ini)s', data=data, ini=initiator)
+        sensitive_info = {
+            'url': '/'.join([self._obj_url, huawei_utils.mask_initiator_sensitive_info(initiator)]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.put('/%(ini)s', data=data, ini=initiator, sensitive_info=sensitive_info)
         _assert_result(result, 'Add initiator %s to host %s error.',
-                       initiator, host_id)
+                       huawei_utils.mask_initiator_sensitive_info(initiator), host_id)
 
     def update_iscsi_initiator_chap(self, initiator, chap_info):
         if chap_info:
-            data = {"USECHAP": "true",
-                    "CHAPNAME": chap_info['CHAPNAME'],
-                    "CHAPPASSWORD": chap_info['CHAPPASSWORD']}
+            data = {
+                "USECHAP": "true",
+                "CHAPNAME": chap_info['CHAPNAME'],
+                "CHAPPASSWORD": chap_info['CHAPPASSWORD']
+            }
         else:
-            data = {"USECHAP": "false",
-                    "MULTIPATHTYPE": "0"}
+            data = {
+                "USECHAP": "false",
+                "MULTIPATHTYPE": "0"
+            }
 
         result = self.put('/%(ini)s', data=data, ini=initiator, log_filter=True)
         _assert_result(result, 'Update initiator %s chap error.', initiator)
         LOG.info("Update initiator chap info successfully, "
-                 "url is /iscsi_initiator/%s, method is %s", initiator, 'put')
+                 "url is /iscsi_initiator/%s, method is %s",
+                 huawei_utils.mask_initiator_sensitive_info(initiator), 'put')
 
     def remove_iscsi_initiator_from_host(self, initiator):
         data = {"ID": initiator}
-        result = self.put('/remove_iscsi_from_host', data=data)
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, [constants.ID_UPPER])
+        }
+        result = self.put('/remove_iscsi_from_host', data=data, sensitive_info=sensitive_info)
         if _error_code(result) == constants.INITIATOR_NOT_IN_HOST:
-            LOG.warning('ISCSI initiator %s not in host.', initiator)
+            LOG.warning('ISCSI initiator %s not in host.',
+                        huawei_utils.mask_initiator_sensitive_info(initiator))
             return
         _assert_result(result, 'Remove iscsi initiator %s from host error.',
-                       initiator)
+                       huawei_utils.mask_initiator_sensitive_info(initiator))
 
     def get_host_iscsi_initiators(self, host_id):
-        result = self.get('?PARENTID=%(id)s', id=host_id)
-        _assert_result(result, 'Get iscsi initiators of host %s error.',
-                       host_id)
+        sensitive_info = {
+            'sensitive_keys': ['data', 'ID']
+        }
+        result = self.get('?PARENTID=%(id)s', id=host_id, sensitive_info=sensitive_info)
+        _assert_result(result, 'Get iscsi initiators of host %s error.', host_id)
         initiators = []
         for item in result.get('data', []):
             initiators.append(item['ID'])
         return initiators
 
     def get_iscsi_initiator(self, initiator):
-        result = self.get('/%(id)s', id=initiator)
+        sensitive_info = {
+            'url': '/'.join([self._obj_url, huawei_utils.mask_initiator_sensitive_info(initiator)]),
+            'sensitive_keys': ['ID']
+        }
+        result = self.get('/%(id)s', id=initiator, sensitive_info=sensitive_info)
         _assert_result(result, 'Get iscsi initiator %s error.', initiator)
         return result['data']
+
+
+class LogicalPort(CommonObject):
+    _obj_url = '/lif'
+
+    def get_roce_logic_ports(self, start, end):
+        result = self.get("?range=[%(start)s-%(end)s]",
+                          start=six.text_type(start), end=six.text_type(end))
+        _assert_result(result, 'Get RoCE Logic Ports error.')
+        return result.get('data', [])
+
+
+class RoCEInitiator(CommonObject):
+    _obj_url = '/NVMe_over_RoCE_initiator'
+
+    def add_roce_initiator(self, host_nqn):
+        data = {constants.ID_UPPER: host_nqn}
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=[constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.post(data=data, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.OBJECT_ID_NOT_UNIQUE:
+            LOG.info('roce initiator %s already exists.', huawei_utils.mask_initiator_sensitive_info(host_nqn))
+            return
+        _assert_result(result, 'Add roce initiator %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn))
+
+    def get_roce_initiator(self, host_nqn):
+        sensitive_info = {
+            'url': '/'.join([self._obj_url, huawei_utils.mask_initiator_sensitive_info(host_nqn)]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.get('/%(obj_id)s', obj_id=host_nqn, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.OBJECT_NOT_EXIST:
+            LOG.info('roce initiator %s does not exist.', huawei_utils.mask_initiator_sensitive_info(host_nqn))
+            return {}
+        _assert_result(result, 'Get roce initiator %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn))
+        return result['data']
+
+    def get_associated_roce_initiator(self, obj_id):
+        sensitive_info = {
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.get('/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%(obj_id)s',
+                          obj_id=obj_id, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.HOST_NOT_EXIST:
+            LOG.warning("Host %s does not exist.", obj_id)
+            return []
+        _assert_result(result, 'Get associated roce initiator of host:%s error.', obj_id)
+        return result['data']
+
+
+class HostLunInfo(CommonObject):
+    _obj_url = '/hostLunInfo'
+
+    def get_hostlun_info(self, host_id, lun_id):
+        result = self.get('?hostId=%(host_id)s&lunId=%(lun_id)s&range=[0-100]',
+                          host_id=host_id, lun_id=lun_id)
+        _assert_result(result, 'Get HostLun information for host %s and lun %s error.',
+                       host_id, lun_id)
+        return result['data']
+
+
+class Mapping(CommonObject):
+    _obj_url = '/mapping'
+
+    def get_mapping_by_hostid_and_lunid(self, host_id, lun_id):
+        result = self.get('?hostId=%(host_id)s&lunId=%(lun_id)s', host_id=host_id, lun_id=lun_id)
+        if _error_code(result) == constants.HOST_LUN_MAPPING_NOT_EXIST:
+            LOG.info('Mapping between host %s and lun %s does not exist.',
+                     host_id, lun_id)
+            return {}
+        _assert_result(result, 'Get mapping between host %s and lun %s error.',
+                       host_id, lun_id)
+        return result['data']
+
+    def get_mapped_host_info(self, obj_id):
+        result = self.get('/associate?ASSOCIATEOBJTYPE=11&ASSOCIATEOBJID=%(obj_id)s&range=[0-100]', obj_id=obj_id)
+        _assert_result(result, 'Get mapped host info error.')
+        return result['data']
+
+    def get_mapped_lun_info(self, obj_id):
+        result = self.get('/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%(obj_id)s&range=[0-100]', obj_id=obj_id)
+        if _error_code(result) == constants.HOST_NOT_EXIST:
+            LOG.warning("Host %s does not exist.", obj_id)
+            return []
+        _assert_result(result, 'Get mapped lun info error.')
+        return result['data']
+
+    def create_hostlun_mapping(self, host_id, lun_id):
+        data = {
+            'hostId': host_id,
+            'lunId': lun_id,
+            'force': True,
+            'hostLunIdStart': 1
+        }
+        result = self.post(data=data)
+        if _error_code(result) == constants.HOST_LUN_MAPPING_ALREADY_EXIST:
+            LOG.info('Mapping between host %s and lun %s already exists.',
+                     host_id, lun_id)
+            return
+        _assert_result(result, 'Create mapping between host %s and lun %s error.',
+                       host_id, lun_id)
+
+    def delete_hostlun_mapping(self, host_id, lun_id):
+        data = {
+            'hostId': host_id,
+            'lunId': lun_id
+        }
+        result = self.delete(data=data)
+        if _error_code(result) == constants.HOST_LUN_MAPPING_NOT_EXIST:
+            LOG.info('Mapping between host %s and lun %s does not exist.',
+                     host_id, lun_id)
+            return
+        _assert_result(result, 'Delete mapping between host %s and lun %s error.',
+                       host_id, lun_id)
 
 
 class MappingView(CommonObject):
@@ -686,8 +914,9 @@ class MappingView(CommonObject):
     def get_mappingview_by_name(self, name):
         result = self.get('?filter=NAME::%(name)s&range=[0-100]', name=name)
         _assert_result(result, 'Find mapping view by name %s error', name)
-        if 'data' in result and result['data']:
-            return result['data'][0]
+        if constants.DATA in result and result[constants.DATA]:
+            return result[constants.DATA][0]
+        return None
 
     def create_mappingview(self, name):
         data = {"NAME": name}
@@ -700,9 +929,11 @@ class MappingView(CommonObject):
         return result['data']['ID']
 
     def _associate_group_to_mappingview(self, view_id, group_id, group_type):
-        data = {"ASSOCIATEOBJTYPE": group_type,
-                "ASSOCIATEOBJID": group_id,
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": group_type,
+            "ASSOCIATEOBJID": group_id,
+            "ID": view_id
+        }
         result = self.put('/create_associate', data=data)
         if _error_code(result) in (constants.HOSTGROUP_ALREADY_IN_MAPPINGVIEW,
                                    constants.PORTGROUP_ALREADY_IN_MAPPINGVIEW,
@@ -725,9 +956,11 @@ class MappingView(CommonObject):
         self._associate_group_to_mappingview(view_id, portgroup_id, '257')
 
     def _remove_group_from_mappingview(self, view_id, group_id, group_type):
-        data = {"ASSOCIATEOBJTYPE": group_type,
-                "ASSOCIATEOBJID": group_id,
-                "ID": view_id}
+        data = {
+            "ASSOCIATEOBJTYPE": group_type,
+            "ASSOCIATEOBJID": group_id,
+            "ID": view_id
+        }
         result = self.put('/remove_associate', data=data)
         if _error_code(result) in (constants.HOSTGROUP_NOT_IN_MAPPINGVIEW,
                                    constants.PORTGROUP_NOT_IN_MAPPINGVIEW,
@@ -757,12 +990,16 @@ class MappingView(CommonObject):
         _assert_result(result, 'Delete mappingview %s error.', view_id)
 
     def change_hostlun_id(self, view_id, lun_id, hostlun_id):
-        data = {"ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id,
-                "ASSOCIATEMETADATA": [
-                    {"LUNID": lun_id,
-                     "hostLUNId": six.text_type(hostlun_id)}]
+        data = {
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id,
+            "ASSOCIATEMETADATA": [
+                {
+                    "LUNID": lun_id,
+                    "hostLUNId": six.text_type(hostlun_id)
                 }
+            ]
+        }
         result = self.put('/%(id)s', id=view_id, data=data)
         _assert_result(result, 'Change hostlun id for lun %s in mappingview '
                                '%s error.', lun_id, view_id)
@@ -791,48 +1028,22 @@ class MappingView(CommonObject):
 class FCInitiator(CommonObject):
     _obj_url = '/fc_initiator'
 
-    def get_fc_initiator_count(self):
-        result = self.get("/count")
-        _assert_result(result, 'Get FC initiator count error.')
-        return int(result['data']['COUNT'])
-
-    def _get_fc_initiator(self, start, end):
-        result = self.get("?range=[%(start)s-%(end)s]", start=start, end=end)
-        _assert_result(result, 'Get online free FC wwn error.')
-
-        totals = []
-        frees = []
-        for item in result.get('data', []):
-            totals.append(item['ID'])
-            if item['RUNNINGSTATUS'] == '27' and item['ISFREE'] == 'true':
-                frees.append(item['ID'])
-        return totals, frees
-
-    def get_fc_initiators(self):
-        fc_initiator_count = self.get_fc_initiator_count()
-        totals = []
-        frees = []
-        range_start = 0
-
-        while fc_initiator_count > 0:
-            range_end = range_start + constants.GET_PATCH_NUM
-            _totals, _frees = self._get_fc_initiator(range_start, range_end)
-            totals += _totals
-            frees += _frees
-            fc_initiator_count -= constants.GET_PATCH_NUM
-            range_start += constants.GET_PATCH_NUM
-        return totals, frees
-
     def get_fc_init_info(self, wwn):
         """Get wwn info by wwn_id and judge is error need to be raised"""
-        result = self.get("/%(wwn)s", wwn=wwn)
+        sensitive_info = {
+            'url': '/'.join([self._obj_url, huawei_utils.mask_initiator_sensitive_info(wwn)]),
+            'sensitive_keys': ['ID']
+        }
+        result = self.get("/%(wwn)s", wwn=wwn, sensitive_info=sensitive_info)
 
         if _error_code(result) != 0:
             if _error_code(result) not in (constants.FC_INITIATOR_NOT_EXIST,
                                            constants.ERROR_PARAMETER_ERROR):
                 msg = (_('Get fc initiator %(initiator)s on array error. '
-                         'result: %(res)s.') % {'initiator': wwn,
-                                                'res': result})
+                         'result: %(res)s.') % {
+                    'initiator': huawei_utils.mask_initiator_sensitive_info(wwn),
+                    'res': result
+                })
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
             else:
@@ -841,12 +1052,17 @@ class FCInitiator(CommonObject):
         return result.get('data', {})
 
     def add_fc_initiator(self, initiator):
-        data = {'ID': initiator}
-        result = self.post(data=data)
+        data = {constants.ID_UPPER: initiator}
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=[constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.post(data=data, sensitive_info=sensitive_info)
         if _error_code(result) == constants.OBJECT_ID_NOT_UNIQUE:
-            LOG.info('FC initiator %s already exists.', initiator)
+            LOG.info('FC initiator %s already exists.', huawei_utils.mask_initiator_sensitive_info(initiator))
             return
-        _assert_result(result, 'Add FC initiator %s error.', initiator)
+        _assert_result(result, 'Add FC initiator %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(initiator))
 
     def associate_fc_initiator_to_host(self, host_id, wwn, alua_info):
         data = {
@@ -854,41 +1070,51 @@ class FCInitiator(CommonObject):
             "PARENTID": host_id,
         }
         data.update(alua_info)
-
-        result = self.put('/%(id)s', data=data, id=wwn)
-        _assert_result(result, 'Add FC initiator %s to host %s error.',
-                       wwn, host_id)
+        sensitive_info = {
+            'url': '/'.join([self._obj_url, huawei_utils.mask_initiator_sensitive_info(wwn)]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.put('/%(id)s', data=data, id=wwn, sensitive_info=sensitive_info)
+        _assert_result(result, 'Add FC initiator %s to host %s error.', wwn, host_id)
 
     def get_host_fc_initiators(self, host_id):
-        result = self.get('?PARENTID=%(id)s', id=host_id)
-        _assert_result(result, 'Get FC initiators of host %s error.',
-                       host_id)
+        sensitive_info = {
+            'sensitive_keys': ['data', 'ID']
+        }
+        result = self.get('?PARENTID=%(id)s', id=host_id, sensitive_info=sensitive_info)
+        _assert_result(result, 'Get FC initiators of host %s error.', host_id)
         return [item['ID'] for item in result.get('data', [])]
 
     def remove_fc_initiator_from_host(self, initiator):
         data = {"ID": initiator}
-        result = self.put('/remove_fc_from_host', data=data)
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID'])
+        }
+        result = self.put('/remove_fc_from_host', data=data, sensitive_info=sensitive_info)
         if _error_code(result) == constants.INITIATOR_NOT_IN_HOST:
-            LOG.warning('FC initiator %s not in host.', initiator)
+            LOG.warning('FC initiator %s not in host.', huawei_utils.mask_initiator_sensitive_info(initiator))
             return
         _assert_result(result, 'Remove fc initiator %s from host error.',
-                       initiator)
+                       huawei_utils.mask_initiator_sensitive_info(initiator))
 
 
 class HostLink(CommonObject):
     _obj_url = '/host_link'
 
     def get_fc_target_wwpns(self, ini):
+        sensitive_info = {
+            'url': '%s?INITIATOR_TYPE=223&INITIATOR_PORT_WWN=%s' % (
+                self._obj_url, huawei_utils.mask_initiator_sensitive_info(ini)),
+            'sensitive_keys': [
+                'data', 'INITIATOR_PORT_WWN', 'INITIATOR_ID', 'INITIATOR_NODE_WWN',
+                'TARGET_PORT_WWN', 'TARGET_NODE_WWN', 'TARGET_ID'
+            ]
+        }
         result = self.get('?INITIATOR_TYPE=223&INITIATOR_PORT_WWN=%(wwn)s',
-                          wwn=ini)
+                          wwn=ini, sensitive_info=sensitive_info)
         _assert_result(result, 'Get FC target wwn for initiator %s error.',
-                       ini)
+                       huawei_utils.mask_initiator_sensitive_info(ini))
         return [fc['TARGET_PORT_WWN'] for fc in result.get('data', [])]
-
-    def get_host_link(self, host_id):
-        result = self.get('?INITIATOR_TYPE=223&PARENTID=%(id)s', id=host_id)
-        _assert_result(result, 'Get host link for host %s error.', host_id)
-        return result.get('data', [])
 
 
 class IOClass(CommonObject):
@@ -898,15 +1124,16 @@ class IOClass(CommonObject):
         localtime = time.strftime('%Y%m%d%H%M%S', time.localtime())
         qos_name = constants.QOS_NAME_PREFIX + lun_id + '_' + localtime
 
-        data = {"NAME": qos_name,
-                "LUNLIST": [lun_id],
-                "CLASSTYPE": "1",
-                "SCHEDULEPOLICY": "2",
-                "SCHEDULESTARTTIME": "1410969600",
-                "STARTTIME": "08:00",
-                "DURATION": "86400",
-                "CYCLESET": "[1,2,3,4,5,6,0]",
-                }
+        data = {
+            "NAME": qos_name,
+            "LUNLIST": [lun_id],
+            "CLASSTYPE": "1",
+            "SCHEDULEPOLICY": "2",
+            "SCHEDULESTARTTIME": "1410969600",
+            "STARTTIME": "08:00",
+            "DURATION": "86400",
+            "CYCLESET": "[1,2,3,4,5,6,0]",
+        }
         data.update(qos)
 
         result = self.post(data=data)
@@ -923,8 +1150,10 @@ class IOClass(CommonObject):
         enablestatus: true (activate)
         enbalestatus: false (deactivate)
         """
-        data = {"ID": qos_id,
-                "ENABLESTATUS": enablestatus}
+        data = {
+            "ID": qos_id,
+            "ENABLESTATUS": enablestatus
+        }
         result = self.put('/active', data=data)
         _assert_result(result, 'Change QoS %s to status %s error.',
                        qos_id, enablestatus)
@@ -971,10 +1200,12 @@ class LunMigration(CommonObject):
     _obj_url = '/lun_migration'
 
     def create_lun_migration(self, src_id, dst_id):
-        data = {"PARENTID": src_id,
-                "TARGETLUNID": dst_id,
-                "SPEED": '2',
-                "WORKMODE": 0}
+        data = {
+            "PARENTID": src_id,
+            "TARGETLUNID": dst_id,
+            "SPEED": '2',
+            "WORKMODE": 0
+        }
 
         result = self.post(data=data)
         _assert_result(result, 'Create migration from %s to %s error.',
@@ -1000,8 +1231,9 @@ class CachePartition(CommonObject):
     def get_partition_id_by_name(self, name):
         result = self.get('?filter=NAME::%(name)s', name=name)
         _assert_result(result, 'Get partition by name %s error.', name)
-        if 'data' in result and len(result['data']) > 0:
-            return result['data'][0]['ID']
+        if constants.DATA in result and len(result[constants.DATA]) > 0:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def get_partition_info_by_id(self, partition_id):
         result = self.get('/%(id)s', id=partition_id)
@@ -1017,8 +1249,9 @@ class SmartCachePartition(CommonObject):
         result = self.get('?filter=NAME::%(name)s', name=name)
         _assert_result(result, 'Get smartcachepartition by name %s error.',
                        name)
-        if 'data' in result and len(result['data']) > 0:
-            return result['data'][0]['ID']
+        if constants.DATA in result and len(result[constants.DATA]) > 0:
+            return result[constants.DATA][0]['ID']
+        return None
 
     def get_cache_info_by_id(self, cacheid):
         result = self.get('/%(id)s', id=cacheid)
@@ -1027,18 +1260,22 @@ class SmartCachePartition(CommonObject):
         return result['data']
 
     def remove_lun_from_cache(self, lun_id, cache_id):
-        data = {"ID": cache_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id}
+        data = {
+            "ID": cache_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id
+        }
 
         result = self.put('/remove_associate', data=data)
         _assert_result(result, 'Remove lun %s from smartcachepartition '
                                '%s error.', lun_id, cache_id)
 
     def add_lun_to_cache(self, lun_id, cache_id):
-        data = {"ID": cache_id,
-                "ASSOCIATEOBJTYPE": 11,
-                "ASSOCIATEOBJID": lun_id}
+        data = {
+            "ID": cache_id,
+            "ASSOCIATEOBJTYPE": 11,
+            "ASSOCIATEOBJID": lun_id
+        }
         result = self.put('/create_associate', data=data)
         _assert_result(result, 'Add lun %s to smartcachepartition '
                                '%s error.', lun_id, cache_id)
@@ -1048,15 +1285,20 @@ class FCPort(CommonObject):
     _obj_url = '/fc_port'
 
     def get_fc_ports(self):
-        result = self.get()
+        sensitive_info = {
+            'sensitive_keys': ['data', 'WWN']
+        }
+        result = self.get(sensitive_info=sensitive_info)
         _assert_result(result, 'Get FC ports from array error.')
         return result.get('data', [])
 
     def get_fc_ports_in_portgroup(self, portgroup_id):
+        sensitive_info = {
+            'sensitive_keys': ['data', 'WWN']
+        }
         result = self.get('/associate?ASSOCIATEOBJTYPE=257'
-                          '&ASSOCIATEOBJID=%(id)s', id=portgroup_id)
-        _assert_result(result, 'Get FC ports in portgroup %s error.',
-                       portgroup_id)
+                          '&ASSOCIATEOBJID=%(id)s', id=portgroup_id, sensitive_info=sensitive_info)
+        _assert_result(result, 'Get FC ports in portgroup %s error.', portgroup_id)
         return result.get("data", [])
 
 
@@ -1126,6 +1368,7 @@ class HyperMetroPair(CommonObject):
         _assert_result(result, 'Get hypermetro by id %s error.', metro_id)
         if result.get('data'):
             return result['data'][0]
+        return None
 
     def get_hypermetro_by_lun_name(self, lun_name):
         result = self.get('?filter=LOCALOBJNAME::%(name)s', name=lun_name)
@@ -1133,6 +1376,7 @@ class HyperMetroPair(CommonObject):
                                ' %s error.', lun_name)
         if result.get('data'):
             return result['data'][0]
+        return None
 
     def get_hypermetro_by_lun_id(self, lun_id):
         result = self.get('?filter=LOCALOBJID::%(name)s', name=lun_id)
@@ -1140,6 +1384,7 @@ class HyperMetroPair(CommonObject):
                        lun_id)
         if result.get('data'):
             return result['data'][0]
+        return None
 
 
 class HyperMetroConsistentGroup(CommonObject):
@@ -1148,8 +1393,9 @@ class HyperMetroConsistentGroup(CommonObject):
     def get_metrogroup_by_name(self, name):
         result = self.get('?filter=NAME::%(name)s', name=name)
         _assert_result(result, 'Get hypermetro group by name %s error.', name)
-        if 'data' in result and len(result['data']) > 0:
-            return result['data'][0]
+        if constants.DATA in result and len(result[constants.DATA]) > 0:
+            return result[constants.DATA][0]
+        return None
 
     def create_metrogroup(self, group_params):
         result = self.post(data=group_params)
@@ -1185,8 +1431,10 @@ class HyperMetro(CommonObject):
     _obj_url = '/hyperMetro'
 
     def add_metro_to_metrogroup(self, metrogroup_id, metro_id):
-        data = {"ID": metrogroup_id,
-                "ASSOCIATEOBJID": metro_id}
+        data = {
+            "ID": metrogroup_id,
+            "ASSOCIATEOBJID": metro_id
+        }
         result = self.post('/associate/pair', data=data)
         if _error_code(result) == constants.HYPERMETRO_ALREADY_IN_GROUP:
             LOG.warning('Hypermetro %(m_id) to add already in group %(g_id)s',
@@ -1196,8 +1444,10 @@ class HyperMetro(CommonObject):
                        metro_id, metrogroup_id)
 
     def remove_metro_from_metrogroup(self, metrogroup_id, metro_id):
-        data = {"ID": metrogroup_id,
-                "ASSOCIATEOBJID": metro_id}
+        data = {
+            "ID": metrogroup_id,
+            "ASSOCIATEOBJID": metro_id
+        }
         result = self.delete('/associate/pair', data=data)
         if _error_code(result) == constants.HYPERMETRO_NOT_IN_GROUP:
             LOG.warning('Hypermetro %(mid) to remove not in group %(gid)s',
@@ -1211,9 +1461,11 @@ class Port(CommonObject):
     _obj_url = '/port'
 
     def add_port_to_portgroup(self, portgroup_id, port_id):
-        data = {"ASSOCIATEOBJID": port_id,
-                "ASSOCIATEOBJTYPE": 212,
-                "ID": portgroup_id}
+        data = {
+            "ASSOCIATEOBJID": port_id,
+            "ASSOCIATEOBJTYPE": 212,
+            "ID": portgroup_id
+        }
         result = self.post('/associate/portgroup', data=data)
         if _error_code(result) == constants.PORT_ALREADY_IN_PORTGROUP:
             LOG.warning('Port %(pid)s already in portgroup %(gid)s.',
@@ -1243,6 +1495,7 @@ class RemoteDevice(CommonObject):
         for device in result.get('data', []):
             if device.get('WWN') == wwn:
                 return device
+        return None
 
 
 class ReplicationPair(CommonObject):
@@ -1310,8 +1563,9 @@ class ReplicationConsistencyGroup(CommonObject):
         result = self.get('?filter=NAME::%(name)s', name=group_name)
         _assert_result(result, 'Get replication group by name %s error.',
                        group_name)
-        if 'data' in result and len(result['data']) > 0:
-            return result['data'][0]
+        if constants.DATA in result and len(result[constants.DATA]) > 0:
+            return result[constants.DATA][0]
+        return None
 
     def get_replication_group_by_id(self, group_id):
         result = self.get('/%(id)s', id=group_id)
@@ -1353,10 +1607,12 @@ class ClonePair(CommonObject):
     _obj_url = '/clonepair'
 
     def create_clone_pair(self, source_id, target_id, clone_speed):
-        data = {"copyRate": clone_speed,
-                "sourceID": source_id,
-                "targetID": target_id,
-                "isNeedSynchronize": "0"}
+        data = {
+            "copyRate": clone_speed,
+            "sourceID": source_id,
+            "targetID": target_id,
+            "isNeedSynchronize": "0"
+        }
         result = self.post("/relation", data=data)
         _assert_result(result, 'Create ClonePair error, source_id is %s.',
                        source_id)
@@ -1378,8 +1634,10 @@ class ClonePair(CommonObject):
         return result.get('data', {})
 
     def delete_clone_pair(self, pair_id, delete_dst_lun=False):
-        data = {"ID": pair_id,
-                "isDeleteDstLun": delete_dst_lun}
+        data = {
+            "ID": pair_id,
+            "isDeleteDstLun": delete_dst_lun
+        }
         result = self.delete("/%(id)s", id=pair_id, data=data)
         if _error_code(result) == constants.CLONE_PAIR_NOT_EXIST:
             LOG.warning('ClonePair %s to delete not exist.', pair_id)
@@ -1399,26 +1657,25 @@ def rest_operation_wrapper(func):
     def wrapped(self, url, **kwargs):
         need_relogin = False
 
+        sensitive_info = kwargs.get('sensitive_info', {})
+        sensitive_keys = sensitive_info.get('sensitive_keys')
+
         if not kwargs.get('log_filter'):
-            LOG.info('URL: %(url)s, Method: %(method)s, Data: %(data)s,',
-                     {'url': (self._login_url or '') + url,
-                      'method': func.__name__, 'data': kwargs.get('data')})
+            LOG.info('URL: %s, Method: %s, Data: %s,', self._login_url + sensitive_info.get('url', url),
+                     func.__name__, sensitive_info.get(constants.DATA, kwargs.get(constants.DATA)))
 
         with self._session_lock.read_lock():
             if self._login_url:
-                full_url = self._login_url + url
                 old_token = self._session.headers.get('iBaseToken')
                 try:
-                    r = func(self, full_url, **kwargs)
+                    r = func(self, self._login_url + url, **kwargs)
                 except requests.RequestException as err:
                     if "BadStatusLine" in six.text_type(err):
                         need_relogin = True
                     else:
-                        LOG.exception(
-                            'Request URL: %(url)s, method: %(method)s failed '
-                            'at first time. Will switch login url and retry '
-                            'this request.',
-                            {'url': full_url, 'method': func.__name__})
+                        LOG.exception('Request URL: %s, method: %s failed at first time. '
+                                      'Will switch login url and retry this request.',
+                                      self._login_url + sensitive_info.get('url', url), func.__name__)
                         need_relogin = True
                 else:
                     r.raise_for_status()
@@ -1434,21 +1691,19 @@ def rest_operation_wrapper(func):
             self._relogin(old_token)
             try:
                 with self._session_lock.read_lock():
-                    full_url = self._login_url + url
-                    r = func(self, full_url, **kwargs)
+                    r = func(self, self._login_url + url, **kwargs)
             except requests.RequestException:
-                LOG.exception('Request URL: %(url)s, method: %(method)s '
-                              'failed again.',
-                              {'url': full_url,
-                               'method': func.__name__})
+                LOG.exception('Request URL: %s, method: %s failed again.',
+                              self._login_url + sensitive_info.get('url', url), func.__name__)
                 raise
 
         r.raise_for_status()
         result = r.json()
-        response_time = r.elapsed.total_seconds()
         if not kwargs.get('log_filter'):
             LOG.info('Response: %s, Response duration time is %s',
-                     result, response_time)
+                     huawei_utils.mask_initiator_sensitive_info(
+                         result, sensitive_keys=sensitive_keys) if sensitive_keys else result,
+                     r.elapsed.total_seconds())
         return result
 
     return wrapped
@@ -1509,15 +1764,17 @@ class RestClient(object):
         def prefilter(m):
             return inspect.isclass(m) and issubclass(m, CommonObject)
 
-        obj_classes = inspect.getmembers(sys.modules[__name__], prefilter)
+        obj_classes = inspect.getmembers(sys.modules.get(__name__), prefilter)
         for cls in obj_classes:
             self._extract_obj_method(cls[1](self))
 
     def _try_login(self, manage_url):
         url = manage_url + "xx/sessions"
-        data = {"username": self.san_user,
-                "password": self.san_password,
-                "scope": "0"}
+        data = {
+            "username": self.san_user,
+            "password": self.san_password,
+            "scope": "0"
+        }
         if self.vstore_name:
             data['vstorename'] = self.vstore_name
 
@@ -1532,12 +1789,12 @@ class RestClient(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        self._session.headers['iBaseToken'] = result['data']['iBaseToken']
-        self._login_device_id = result['data']['deviceid']
+        self._session.headers['iBaseToken'] = result[constants.DATA]['iBaseToken']
+        self._login_device_id = result[constants.DATA]['deviceid']
         self._login_url = manage_url + self._login_device_id
 
-        if result['data']['accountstate'] in constants.PWD_EXPIRED_OR_INITIAL:
-            self._session.delete(self._login_url + "/sessions")
+        if result[constants.DATA]['accountstate'] in constants.PWD_EXPIRED_OR_INITIAL:
+            self._session.delete("%(url)s/sessions" % {"url": self._login_url})
             self._login_device_id = None
             self._login_url = None
             msg = ("Storage password has been expired or initial, "
@@ -1549,7 +1806,8 @@ class RestClient(object):
         self._session = requests.Session()
         session_headers = {
             "Connection": "keep-alive",
-            "Content-Type": "application/json; charset=utf-8"}
+            "Content-Type": "application/json; charset=utf-8"
+        }
         if self.in_band_or_not:
             session_headers["IBA-Target-Array"] = self.storage_sn
         self._session.headers.update(session_headers)
@@ -1601,7 +1859,7 @@ class RestClient(object):
             return
 
         try:
-            r = self._session.delete(self._login_url + "/sessions")
+            r = self._session.delete("%s/sessions" % self._login_url)
             r.raise_for_status()
         except Exception:
             LOG.exception("Failed to logout session from URL %s.",
@@ -1646,15 +1904,19 @@ class RestClient(object):
             return self._session.delete(url, timeout=timeout)
 
     def add_pair_to_replication_group(self, group_id, pair_id):
-        data = {'ID': group_id,
-                'RMLIST': [pair_id]}
+        data = {
+            'ID': group_id,
+            'RMLIST': [pair_id]
+        }
         result = self.put('/ADD_MIRROR', data=data)
         _assert_result(result, 'Add pair %s to replication group %s error.',
                        pair_id, group_id)
 
     def remove_pair_from_replication_group(self, group_id, pair_id):
-        data = {'ID': group_id,
-                'RMLIST': [pair_id]}
+        data = {
+            'ID': group_id,
+            'RMLIST': [pair_id]
+        }
         result = self.put('/DEL_MIRROR', data=data)
         if _error_code(result) in (constants.REPLICATION_PAIR_NOT_EXIST,
                                    constants.REPLICATION_GROUP_NOT_EXIST,
@@ -1706,6 +1968,7 @@ class RestClient(object):
         for con in result.get('data', []):
             if con.get('LOCATION') == controller_name:
                 return con['ID']
+        return None
 
     def split_lunclone(self, clone_id):
         data = {
@@ -1741,6 +2004,7 @@ class RestClient(object):
         for item in result.get("data", []):
             if item.get("NAME") == workload_type_name:
                 return item.get("ID")
+        return None
 
     def get_workload_type_name(self, workload_type_id):
         url = "/workload_type/%s" % workload_type_id

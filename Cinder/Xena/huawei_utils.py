@@ -90,11 +90,63 @@ def wait_for_condition(func, interval, timeout):
     _retry_use_tenacity()
 
 
+def mask_initiator_sensitive_info(data, sensitive_keys=None, need_mask_keys=None):
+    """Mask iscsi/fc/nvme ini sensitive info by data type"""
+    if isinstance(data, dict):
+        return mask_initiator_dict_sensitive_info(data, sensitive_keys, need_mask_keys=need_mask_keys)
+    elif isinstance(data, (list, tuple, set)):
+        return mask_initiator_array_sensitive_info(data, sensitive_keys)
+    else:
+        return mask_initiator_string_sensitive_info(data)
+
+
+def mask_initiator_dict_sensitive_info(data, sensitive_keys, need_mask_keys=None):
+    """Mask iscsi/fc/nvme ini sensitive info with a dict type data"""
+    out = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            value = mask_initiator_dict_sensitive_info(value, sensitive_keys, need_mask_keys)
+        elif key in sensitive_keys and isinstance(value, (list, tuple, set)):
+            value = mask_initiator_array_sensitive_info(value, sensitive_keys)
+        elif key in sensitive_keys:
+            value = mask_initiator_string_sensitive_info(value)
+        if need_mask_keys and key in need_mask_keys:
+            key = mask_initiator_string_sensitive_info(key)
+        out[key] = value
+
+    return out
+
+
+def mask_initiator_array_sensitive_info(data, sensitive_keys):
+    """Mask iscsi/fc/nvme ini sensitive info with a list type data"""
+    out = []
+    for sensitive_info in data:
+        if isinstance(sensitive_info, (list, tuple, set)):
+            value = mask_initiator_array_sensitive_info(sensitive_info, sensitive_keys)
+        elif isinstance(sensitive_info, dict):
+            value = mask_initiator_dict_sensitive_info(sensitive_info, sensitive_keys)
+        else:
+            value = mask_initiator_string_sensitive_info(sensitive_info)
+        out.append(value)
+    return out
+
+
+def mask_initiator_string_sensitive_info(data):
+    """Mask iscsi/fc/nvme ini sensitive info with a string type data"""
+    secret_str = "******"
+    if len(data) <= 6:
+        return secret_str
+
+    out_str = data[0:3] + secret_str + data[-3::]
+    return out_str
+
+
 def _get_volume_type(volume):
     if volume.volume_type:
         return volume.volume_type
     if volume.volume_type_id:
         return volume_types.get_volume_type(None, volume.volume_type_id)
+    return None
 
 
 def get_volume_params(volume, is_dorado_v6=False):
@@ -111,14 +163,14 @@ def get_volume_type_params(volume_type, is_dorado_v6=False):
         specs = volume_type.extra_specs
 
     vol_params = get_volume_params_from_specs(specs)
-    vol_params['qos'] = None
+    vol_params[constants.QOS] = None
 
     if isinstance(volume_type, dict) and volume_type.get('qos_specs_id'):
-        vol_params['qos'] = _get_qos_specs(volume_type['qos_specs_id'],
+        vol_params[constants.QOS] = _get_qos_specs(volume_type['qos_specs_id'],
                                            is_dorado_v6)
     elif isinstance(volume_type, objects.VolumeType
                     ) and volume_type.qos_specs_id:
-        vol_params['qos'] = _get_qos_specs(volume_type.qos_specs_id,
+        vol_params[constants.QOS] = _get_qos_specs(volume_type.qos_specs_id,
                                            is_dorado_v6)
 
     LOG.info('volume opts %s.', vol_params)
@@ -151,11 +203,13 @@ def _get_bool_param(k, v):
 def _get_replication_type_param(k, v):
     words = v.split()
     if len(words) == 2 and words[0] == '<in>':
-        REPLICA_SYNC_TYPES = {'sync': constants.REPLICA_SYNC_MODEL,
-                              'async': constants.REPLICA_ASYNC_MODEL}
+        replica_sync_types = {
+            'sync': constants.REPLICA_SYNC_MODEL,
+            'async': constants.REPLICA_ASYNC_MODEL
+        }
         sync_type = words[1].lower()
-        if sync_type in REPLICA_SYNC_TYPES:
-            return REPLICA_SYNC_TYPES[sync_type]
+        if sync_type in replica_sync_types:
+            return replica_sync_types[sync_type]
 
     msg = _("replication_type spec must be specified as "
             "replication_type='<in> sync' or '<in> async'.")
@@ -372,8 +426,8 @@ def get_volume_private_data(volume):
 
     if isinstance(info, dict):
         if "huawei" in volume.provider_location:
-            info['hypermetro'] = (info.get('hypermetro_id')
-                                  or info.get('hypermetro'))
+            info[constants.HYPERMETRO] = (info.get('hypermetro_id')
+                                              or info.get(constants.HYPERMETRO))
             return info
         else:
             return {}
@@ -382,7 +436,7 @@ def get_volume_private_data(volume):
     return {'huawei_lun_id': six.text_type(info),
             'huawei_lun_wwn': volume.admin_metadata.get('huawei_lun_wwn'),
             'huawei_sn': volume.metadata.get('huawei_sn'),
-            'hypermetro': True if volume.metadata.get(
+            constants.HYPERMETRO: True if volume.metadata.get(
                 'hypermetro_id') else False,
             }
 
@@ -391,9 +445,17 @@ def get_volume_metadata(volume):
     if isinstance(volume, objects.Volume):
         return volume.metadata
     if volume.get('volume_metadata'):
-        return {item['key']: item['value'] for item in
-                volume['volume_metadata']}
+        volume_metadata = {}
+        for item in volume.get('volume_metadata'):
+            volume_metadata[item.get('key')] = item.get('value')
+        return volume_metadata
     return {}
+
+
+def set_volume_lun_wwn(model_update, lun_wwn, volume):
+    metadata = get_volume_metadata(volume)
+    metadata['lun_wwn'] = lun_wwn
+    model_update.update({"metadata": metadata})
 
 
 def get_replication_data(volume):
@@ -453,7 +515,7 @@ def get_lun_info(client, volume):
         lun_info = client.get_lun_info_by_name(volume_name)
 
     if not lun_info and metadata.get('huawei_lun_id'):
-        lun_info = client.get_lun_info_filter_id(metadata['huawei_lun_id'])
+        lun_info = client.get_lun_info_filter_id(metadata.get('huawei_lun_id'))
 
     if lun_info and ('huawei_lun_wwn' in metadata and
                      lun_info.get('WWN') != metadata['huawei_lun_wwn']):
@@ -517,20 +579,20 @@ def get_replication_group(client, group_id):
 def get_volume_model_update(volume, **kwargs):
     private_data = get_volume_private_data(volume)
 
-    if kwargs.get('hypermetro_id'):
-        private_data['hypermetro'] = True
+    if kwargs.get(constants.HYPERMETRO_ID):
+        private_data[constants.HYPERMETRO] = True
     else:
-        private_data['hypermetro'] = False
-    if 'hypermetro_id' in private_data:
-        private_data.pop('hypermetro_id')
-        private_data['hypermetro'] = False
+        private_data[constants.HYPERMETRO] = False
+    if constants.HYPERMETRO_ID in private_data:
+        private_data.pop(constants.HYPERMETRO_ID)
+        private_data[constants.HYPERMETRO] = False
 
-    if 'huawei_lun_id' in kwargs:
-        private_data['huawei_lun_id'] = kwargs['huawei_lun_id']
-    if 'huawei_lun_wwn' in kwargs:
-        private_data['huawei_lun_wwn'] = kwargs['huawei_lun_wwn']
-    if 'huawei_sn' in kwargs:
-        private_data['huawei_sn'] = kwargs['huawei_sn']
+    if constants.HUAWEI_LUN_ID in kwargs:
+        private_data[constants.HUAWEI_LUN_ID] = kwargs[constants.HUAWEI_LUN_ID]
+    if constants.HUAWEI_LUN_WWN in kwargs:
+        private_data[constants.HUAWEI_LUN_WWN] = kwargs[constants.HUAWEI_LUN_WWN]
+    if constants.HUAWEI_SN in kwargs:
+        private_data[constants.HUAWEI_SN] = kwargs[constants.HUAWEI_SN]
 
     model_update = {'provider_location': to_string(**private_data)}
 
@@ -563,8 +625,10 @@ def get_config_info_by_ini_name(ini_info, initiator):
     """
     get config ini_info by initiator name
     """
-    LOG.info("begin to get config info by ini name,"
-             "ini_info is %s, ini is %s", ini_info, initiator)
+    LOG.info("begin to get config info by ini name, ini_info is %s, ini is %s",
+             mask_initiator_sensitive_info(ini_info, sensitive_keys=['Name'],
+                                           need_mask_keys=[ini_name for ini_name in ini_info]),
+             mask_initiator_sensitive_info(initiator))
     for _, info in ini_info.items():
         ini_name = info.get('Name')
         if not ini_name:
@@ -583,8 +647,10 @@ def get_config_info_by_host_name(ini_info, host_name):
     """
     get config ini_info by host name
     """
-    LOG.info("begin to get config info by host name,"
-             "ini_info is %s, host_name is %s", ini_info, host_name)
+    LOG.info("begin to get config info by host name, ini_info is %s, host_name is %s",
+             mask_initiator_sensitive_info(ini_info, sensitive_keys=['Name'],
+                                           need_mask_keys=[ini_name for ini_name in ini_info]),
+             host_name)
     for _, info in ini_info.items():
         info_host_name = info.get('HostName')
         if not info_host_name:
@@ -623,6 +689,7 @@ def is_support_clone_pair(client):
     version_info = array_info['PRODUCTVERSION']
     if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
         return True
+    return False
 
 
 def need_migrate(volume, host, new_opts, orig_lun_info):
@@ -652,9 +719,21 @@ def remove_lun_from_lungroup(client, lun_id, force_delete_volume):
                                             constants.LUN_TYPE)
 
 
+def remove_lun_from_host(client, lun_id, force_delete_volume):
+    host_info = client.get_mapped_host_info(lun_id)
+    if not host_info:
+        return
+    if force_delete_volume:
+        for host_each in host_info:
+            client.delete_hostlun_mapping(host_each['hostId'], lun_id)
+    elif len(host_info) == 1:
+        client.delete_hostlun_mapping(host_info[0]['hostId'], lun_id)
+
+
 def get_mapping_info(client, lun_id):
     mappingview_id, lungroup_id, hostgroup_id, portgroup_id, host_id = (
-        None, None, None, None, None)
+        None, None, None, None, None
+    )
     lungroup_ids = client.get_lungroup_ids_by_lun_id(lun_id)
     if len(lungroup_ids) == 1:
         lungroup_id = lungroup_ids[0]

@@ -35,6 +35,7 @@ MAPPING_VIEW_PREFIX = 'OpenStack_Mapping_View_'
 PORTGROUP_PREFIX = 'OpenStack_PortGroup_'
 QOS_NAME_PREFIX = 'OpenStack_'
 SENSITIVE_KEYS = ['auth_password']
+SENSITIVE_INI_KEYS = ['initiator', 'wwpns', 'host_nqn', 'wwnns', 'nqn']
 
 PORTGROUP_DESCRIP_PREFIX = "Please do NOT modify this. Engine ID: "
 FC_PORT_CONNECTED = '10'
@@ -85,8 +86,10 @@ LUNGROUP_ALREADY_IN_MAPPINGVIEW = 1073804560
 HOST_NOT_EXIST = 1077937498
 
 RELOGIN_ERROR_PASS = [ERROR_VOLUME_NOT_EXIST]
-RELOGIN_ERROR_CODE = (ERROR_CONNECT_TO_SERVER, ERROR_UNAUTHORIZED_TO_SERVER,
-                      ERROR_BAD_STATUS_LINE, ERROR_DEVICE_COMMUNICATE)
+RELOGIN_ERROR_CODE = (
+    ERROR_CONNECT_TO_SERVER, ERROR_UNAUTHORIZED_TO_SERVER,
+    ERROR_BAD_STATUS_LINE, ERROR_DEVICE_COMMUNICATE
+)
 RUNNING_NORMAL = '1'
 RUNNING_SYNC = '23'
 RUNNING_STOP = '41'
@@ -104,14 +107,16 @@ MAX_VOL_DESCRIPTION = 170
 PORT_NUM_PER_CONTR = 2
 MAX_QUERY_COUNT = 100
 
-OS_TYPE = {'Linux': '0',
-           'Windows': '1',
-           'Solaris': '2',
-           'HP-UX': '3',
-           'AIX': '4',
-           'XenServer': '5',
-           'Mac OS X': '6',
-           'VMware ESX': '7'}
+OS_TYPE = {
+    'Linux': '0',
+    'Windows': '1',
+    'Solaris': '2',
+    'HP-UX': '3',
+    'AIX': '4',
+    'XenServer': '5',
+    'Mac OS X': '6',
+    'VMware ESX': '7'
+}
 
 LOWER_LIMIT_KEYS = ['MINIOPS', 'LATENCY', 'MINBANDWIDTH']
 UPPER_LIMIT_KEYS = ['MAXIOPS', 'MAXBANDWIDTH']
@@ -150,8 +155,7 @@ REPLICA_DATA_STATUS_INCOMPLETE = '3'
 SNAPSHOT_NOT_EXISTS_WARN = 'warning'
 SNAPSHOT_NOT_EXISTS_RAISE = 'raise'
 
-LUN_TYPE_MAP = {'Thick': THICK_LUNTYPE,
-                'Thin': THIN_LUNTYPE}
+LUN_TYPE_MAP = {'Thick': THICK_LUNTYPE, 'Thin': THIN_LUNTYPE}
 
 VALID_PRODUCT = ['V3', 'V5', '18000', 'Dorado', 'V6']
 VALID_PROTOCOL = ['FC', 'iSCSI', 'nvmeof']
@@ -192,14 +196,18 @@ REPLICG_HEALTH_NORMAL = '1'
 OPTIMAL_MULTIPATH_NUM = 16
 
 AVAILABLE_FEATURE_STATUS = (1, 2)
-DEDUP_FEATURES = ('SmartDedupe (for LUN)',
-                  'SmartDedupe (for LUNsAndFS)',
-                  'SmartDedupe & SmartCompression (for LUN)',
-                  'Effective Capacity')
-COMPRESSION_FEATURES = ('SmartCompression (for LUN)',
-                        'SmartCompression (for LUNsAndFS)',
-                        'SmartDedupe & SmartCompression (for LUN)',
-                        'Effective Capacity')
+DEDUP_FEATURES = (
+    'SmartDedupe (for LUN)',
+    'SmartDedupe (for LUNsAndFS)',
+    'SmartDedupe & SmartCompression (for LUN)',
+    'Effective Capacity'
+)
+COMPRESSION_FEATURES = (
+    'SmartCompression (for LUN)',
+    'SmartCompression (for LUNsAndFS)',
+    'SmartDedupe & SmartCompression (for LUN)',
+    'Effective Capacity'
+)
 
 FEATURES_DICTS = {
     "SmartPartition": "cachepartition",
@@ -233,3 +241,78 @@ SNAPSHOT_ROLLBACK_SPEED_TYPES = (
     SNAPSHOT_ROLLBACK_SPEED_HIGH,
     SNAPSHOT_ROLLBACK_SPEED_HIGHEST
 ) = ('1', '2', '3', '4')
+
+# Duplicate Field Summary
+TRUE = 'true'
+POLICY = 'policy'
+CACHENAME = 'cachename'
+PARTITIONNAME = 'partitionname'
+DATA = 'data'
+TARGETIP = 'TargetIP'
+HOSTNAME = 'HostName'
+TARGETPORTGROUP = 'TargetPortGroup'
+IPV4ADDR = 'IPV4ADDR'
+IPV6ADDR = 'IPV6ADDR'
+ALUA = 'ALUA'
+CHAPINFO = 'CHAPinfo'
+NAME = 'name'
+LUNCONFIGEDCAPACITY = 'LUNCONFIGEDCAPACITY'
+ERROR = 'error'
+CODE = 'code'
+DESCRIPTION = 'description'
+REPLICATION_TYPE = 'replication_type'
+WORKLOADTYPEID = 'WORKLOADTYPEID'
+RUNNINGSTATUS = 'RUNNINGSTATUS'
+ID = 'id'
+ID_UPPER = 'ID'
+HUAWEI_LUN_ID = 'huawei_lun_id'
+TARGET_WWN = 'target_wwn'
+TARGET_IQNS = 'target_iqns'
+TARGET_PORTALS = 'target_portals'
+TARGET_LUNS = 'target_luns'
+HOST = 'host'
+OLD_STATUS = 'old_status'
+STATUS = 'status'
+NEWSIZE = 'newsize'
+CAPABILITIES = 'capabilities'
+FASTCLONE = 'fastclone'
+APPLICATION_TYPE = 'application_type'
+DEDUP = 'dedup'
+COMPRESSION = 'compression'
+HYPERMETRO = 'hypermetro'
+THICK_PROVISIONING_SUPPORT = 'thick_provisioning_support'
+HUAWEI_APPLICATION_TYPE = 'huawei_application_type'
+SMARTTIER = 'smarttier'
+ISCSI_DEFAULT_TARGET_IP = 'iscsi_default_target_ip'
+IN_BAND_OR_NOT = 'in_band_or_not'
+METRO_SYNC_COMPLETED = 'metro_sync_completed'
+THIN = 'Thin'
+INITIATOR_TARGET_MAP = 'initiator_target_map'
+URL = 'url'
+
+HUAWEI_DISK_DICT = {
+    "-1": "",
+    "0": "fc",
+    "1": "sas",
+    "2": "sata",
+    "3": "ssd",
+    "4": "nl_sas",
+    "5": "slc_ssd",
+    "6": "mlc_ssd",
+    "7": "fc_sed",
+    "8": "sas_sed",
+    "9": "sata_sed",
+    "10": "ssd_sed",
+    "11": "nl-sas_sed",
+    "12": "slc_ssd_sed",
+    "13": "mlc_ssd_sed",
+    "14": "nvme_ssd",
+    "16": "nvme_ssd_sed",
+    "17": "scm",
+    "18": "scm_sed",
+    "19": "capacity-optimized ssd",
+    "20": "capacity-optimized ssd sed",
+    "21": "capacity-optimized ssd",
+    "22": "capacity-optimized ssd sed"
+}
+
