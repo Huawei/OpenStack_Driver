@@ -90,43 +90,45 @@ class _CreateHyperMetroTask(task.Task):
     def _is_sync_completed(self, metro_id):
         metro_info = self.client.get_hypermetro_by_id(metro_id)
         if ((metro_info['HEALTHSTATUS'] != constants.METRO_HEALTH_NORMAL) or
-                metro_info['RUNNINGSTATUS'] not in (
+                metro_info[constants.RUNNINGSTATUS] not in (
                 constants.METRO_RUNNING_NORMAL,
                 constants.METRO_RUNNING_SYNC,
                 constants.RUNNING_TO_BE_SYNC)):
             msg = _("HyperMetro pair %(id)s is not in a available status, "
                     "RunningStatus is: %(run)s, HealthStatus is: %(health)s"
                     ) % {"id": metro_id,
-                         "run": metro_info.get('RUNNINGSTATUS'),
+                         "run": metro_info.get(constants.RUNNINGSTATUS),
                          "health": metro_info.get("HEALTHSTATUS")}
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
-        if metro_info.get('RUNNINGSTATUS') == constants.METRO_RUNNING_NORMAL:
+        if metro_info.get(constants.RUNNINGSTATUS) == constants.METRO_RUNNING_NORMAL:
             return True
         return False
 
     def execute(self, domain_id, local_lun_id, remote_lun_id):
-        hypermetro_param = {"DOMAINID": domain_id,
-                            "HCRESOURCETYPE": '1',
-                            "ISFIRSTSYNC": False,
-                            "LOCALOBJID": local_lun_id,
-                            "REMOTEOBJID": remote_lun_id,
-                            "SPEED": self.hypermetro_configs['sync_speed']}
+        hypermetro_param = {
+            "DOMAINID": domain_id,
+            "HCRESOURCETYPE": '1',
+            "ISFIRSTSYNC": False,
+            "LOCALOBJID": local_lun_id,
+            "REMOTEOBJID": remote_lun_id,
+            "SPEED": self.hypermetro_configs['sync_speed']
+        }
         if self.sync:
             hypermetro_param.update({"ISFIRSTSYNC": True})
 
         hypermetro_pair = self.client.create_hypermetro(
             hypermetro_param)
         if self.sync:
-            self.client.sync_hypermetro(hypermetro_pair['ID'])
+            self.client.sync_hypermetro(hypermetro_pair[constants.ID_UPPER])
             if strutils.bool_from_string(
                     self.hypermetro_configs['metro_sync_completed']):
                 huawei_utils.wait_for_condition(
-                    lambda: self._is_sync_completed(hypermetro_pair['ID']),
+                    lambda: self._is_sync_completed(hypermetro_pair[constants.ID_UPPER]),
                     constants.DEFAULT_WAIT_INTERVAL,
                     constants.DEFAULT_WAIT_TIMEOUT)
 
-        return {'hypermetro_id': hypermetro_pair['ID']}
+        return {'hypermetro_id': hypermetro_pair[constants.ID_UPPER]}
 
 
 class HuaweiHyperMetro(object):
@@ -139,8 +141,10 @@ class HuaweiHyperMetro(object):
     def create_hypermetro(self, local_lun_id, lun_params, is_sync):
         LOG.info('To create hypermetro for local lun %s', local_lun_id)
 
-        store_spec = {'local_lun_id': local_lun_id,
-                      'lun_params': lun_params}
+        store_spec = {
+            'local_lun_id': local_lun_id,
+            'lun_params': lun_params
+        }
         work_flow = linear_flow.Flow('create_hypermetro')
         work_flow.add(_CheckCreateConditionTask(self.remote_cli, self.configs),
                       _CreateRemoteLunTask(self.remote_cli),
@@ -168,14 +172,14 @@ class HuaweiHyperMetro(object):
             if (hypermetro['RUNNINGSTATUS'] in (
                     constants.METRO_RUNNING_NORMAL,
                     constants.METRO_RUNNING_SYNC)):
-                self.local_cli.stop_hypermetro(hypermetro['ID'])
+                self.local_cli.stop_hypermetro(hypermetro[constants.ID_UPPER])
 
-            self.local_cli.delete_hypermetro(hypermetro['ID'])
+            self.local_cli.delete_hypermetro(hypermetro[constants.ID_UPPER])
             self.remote_cli.delete_lun(hypermetro['REMOTEOBJID'])
         else:
             remote_lun_info = self.remote_cli.get_lun_info_by_name(lun_name)
             if remote_lun_info:
-                self.remote_cli.delete_lun(remote_lun_info['ID'])
+                self.remote_cli.delete_lun(remote_lun_info[constants.ID_UPPER])
 
     def extend_hypermetro(self, hypermetro_id, new_size):
         LOG.info('Extend hypermetro pair %s', hypermetro_id)
@@ -199,7 +203,7 @@ class HuaweiHyperMetro(object):
             self.local_cli.extend_lun(metro_info['REMOTEOBJID'], new_size)
         finally:
             if metrogroup:
-                self.local_cli.sync_metrogroup(metrogroup['ID'])
+                self.local_cli.sync_metrogroup(metrogroup[constants.ID_UPPER])
             else:
                 self.local_cli.sync_hypermetro(hypermetro_id)
 
@@ -216,11 +220,13 @@ class HuaweiHyperMetro(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        params = {"NAME": huawei_utils.encode_name(group_id),
-                  "DESCRIPTION": group_id,
-                  "RECOVERYPOLICY": "1",
-                  "SPEED": self.configs['sync_speed'],
-                  "DOMAINID": domain_id}
+        params = {
+            "NAME": huawei_utils.encode_name(group_id),
+            "DESCRIPTION": group_id,
+            "RECOVERYPOLICY": "1",
+            "SPEED": self.configs['sync_speed'],
+            "DOMAINID": domain_id
+        }
         self.local_cli.create_metrogroup(params)
 
     def delete_consistencygroup(self, group_id, volumes):
@@ -234,8 +240,8 @@ class HuaweiHyperMetro(object):
             return
 
         self._stop_consistencygroup_if_need(metrogroup)
-        self._remove_volume_from_metrogroup(volumes, metrogroup['ID'])
-        self.local_cli.delete_metrogroup(metrogroup['ID'])
+        self._remove_volume_from_metrogroup(volumes, metrogroup[constants.ID_UPPER])
+        self.local_cli.delete_metrogroup(metrogroup[constants.ID_UPPER])
 
     def _check_metro_in_group(self, metrogroup_id, metro_id):
         metro_info = self.local_cli.get_hypermetro_by_id(metro_id)
@@ -252,8 +258,7 @@ class HuaweiHyperMetro(object):
     def _ensure_hypermetro_not_in_group(self, metrogroup_id, metro_ids):
         for metro_id in metro_ids:
             huawei_utils.wait_for_condition(
-                lambda: not self._check_metro_in_group(metrogroup_id,
-                                                       metro_id),
+                lambda: not self._check_metro_in_group(metrogroup_id, metro_id),
                 constants.DEFAULT_WAIT_INTERVAL,
                 constants.DEFAULT_WAIT_INTERVAL * 10)
             self.local_cli.sync_hypermetro(metro_id)
@@ -272,7 +277,7 @@ class HuaweiHyperMetro(object):
                             volume.id)
                 continue
 
-            metro_id = hypermetro['ID']
+            metro_id = hypermetro[constants.ID_UPPER]
             self._stop_hypermetro_if_need(metro_id)
             self.local_cli.add_metro_to_metrogroup(metrogroup_id, metro_id)
             metro_ids.append(metro_id)
@@ -293,7 +298,7 @@ class HuaweiHyperMetro(object):
                             volume.id)
                 continue
 
-            metro_id = hypermetro['ID']
+            metro_id = hypermetro[constants.ID_UPPER]
             self.local_cli.remove_metro_from_metrogroup(
                 metrogroup_id, metro_id)
             metro_ids.append(metro_id)
@@ -311,16 +316,16 @@ class HuaweiHyperMetro(object):
             raise exception.VolumeBackendAPIException(data=msg)
 
         self._stop_consistencygroup_if_need(metrogroup)
-        self._add_volume_to_metrogroup(add_volumes, metrogroup['ID'])
-        self._remove_volume_from_metrogroup(remove_volumes, metrogroup['ID'])
-        self.local_cli.sync_metrogroup(metrogroup['ID'])
+        self._add_volume_to_metrogroup(add_volumes, metrogroup[constants.ID_UPPER])
+        self._remove_volume_from_metrogroup(remove_volumes, metrogroup[constants.ID_UPPER])
+        self.local_cli.sync_metrogroup(metrogroup[constants.ID_UPPER])
 
     def _stop_consistencygroup_if_need(self, metrogroup):
         if (metrogroup['HEALTHSTATUS'] == constants.METRO_HEALTH_NORMAL and
                 metrogroup['RUNNINGSTATUS'] in
                 (constants.METRO_RUNNING_NORMAL,
                  constants.METRO_RUNNING_SYNC)):
-            self.local_cli.stop_metrogroup(metrogroup['ID'])
+            self.local_cli.stop_metrogroup(metrogroup[constants.ID_UPPER])
 
     def _stop_hypermetro_if_need(self, metro_id):
         metro_info = self.local_cli.get_hypermetro_by_id(metro_id)
@@ -341,5 +346,5 @@ class HuaweiHyperMetro(object):
 
         self._stop_consistencygroup_if_need(metrogroup)
         self._stop_hypermetro_if_need(metro_id)
-        self.local_cli.add_metro_to_metrogroup(metrogroup['ID'], metro_id)
-        self.local_cli.sync_metrogroup(metrogroup['ID'])
+        self.local_cli.add_metro_to_metrogroup(metrogroup[constants.ID_UPPER], metro_id)
+        self.local_cli.sync_metrogroup(metrogroup[constants.ID_UPPER])

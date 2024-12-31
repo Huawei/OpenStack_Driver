@@ -1,4 +1,4 @@
-# Copyright (c) 2016 Huawei Technologies Co., Ltd.
+# Copyright (c) 2024 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -26,6 +26,15 @@ MAPPING_VIEW_PREFIX = 'OpenStack_Mapping_View_'
 PORTGROUP_PREFIX = 'OpenStack_PortGroup_'
 QOS_NAME_PREFIX = 'OpenStack_'
 SENSITIVE_KEYS = ['auth_password']
+SENSITIVE_INI_KEYS = ['initiator', 'wwpns', 'host_nqn', 'wwnns', 'nqn']
+
+VALID_PROTOCOL = ['nvmeof', 'iSCSI', 'FC']
+
+ROCE_INITIATOR = '57870'
+ROCE_TARGET_NQN_PREFIX = 'nqn.2020-02.huawei.nvme:nvm-subsystem-sn-'
+ROCE_TARGET_PORT = 4420
+MAX_QUERY_COUNT = 100
+ADDRESS_FAMILY_IPV4 = '0'
 
 FC_PORT_CONNECTED = '10'
 FC_INIT_ONLINE = '27'
@@ -91,9 +100,13 @@ GET_VOLUME_WAIT_INTERVAL = 30
 CREATE_HYPERMETRO_TIMEOUT = 1077949006
 HYPERMETRO_ALREADY_EXIST = 1077674256
 ERROR_VOLUME_ALREADY_EXIST = 1077948993
+HOST_LUN_MAPPING_NOT_EXIST = 1073804587
+HOST_LUN_MAPPING_ALREADY_EXIST = 1073804588
 
-RELOGIN_ERROR_CODE = (ERROR_CONNECT_TO_SERVER, ERROR_UNAUTHORIZED_TO_SERVER,
-                      ERROR_DEVICE_COMMUNICATE)
+RELOGIN_ERROR_CODE = (
+    ERROR_CONNECT_TO_SERVER, ERROR_UNAUTHORIZED_TO_SERVER,
+    ERROR_DEVICE_COMMUNICATE
+)
 
 METRO_RUNNING_STATUS = (METRO_RUNNING_NORMAL, METRO_RUNNING_SYNC,
                         METRO_RUNNING_STOP, RUNNING_TO_BE_SYNC
@@ -102,8 +115,7 @@ METRO_HEALTH_NORMAL = '1'
 
 THICK_LUNTYPE = '0'
 THIN_LUNTYPE = '1'
-LUN_TYPE_MAP = {'Thick': THICK_LUNTYPE,
-                'Thin': THIN_LUNTYPE}
+LUN_TYPE_MAP = {'Thick': THICK_LUNTYPE, 'Thin': THIN_LUNTYPE}
 
 QOS_INACTIVATED = '45'
 LOWER_LIMIT_KEYS = ('MINIOPS', 'LATENCY', 'MINBANDWIDTH')
@@ -198,3 +210,61 @@ SNAPSHOT_ROLLBACK_SPEED_TYPES = (
 ) = ('1', '2', '3', '4')
 
 INBAND_LUN_TYPE = '5'
+
+# Duplicate Field Summary
+ID = 'id'
+DATA = 'data'
+QOS = 'qos'
+LUN = 'lun'
+POLICY = 'policy'
+ISCSI_INFO = 'iscsi_info'
+FASTCLONE = 'fastclone'
+MULTIPATH = 'multipath'
+HYPERMETRO = 'hypermetro'
+APPLICATIONNAME = 'applicationname'
+IN_BAND_OR_NOT = 'in_band_or_not'
+METRO_SYNC_COMPLETED = 'metro_sync_completed'
+STATUS = 'status'
+TARGET_PORTALS = 'target_portals'
+HUAWEI_LUN_WWN = 'huawei_lun_wwn'
+HUAWEI_SN = 'huawei_sn'
+SEMAPHORE = 'semaphore'
+HOSTLUN_ID = 'hostlun_id'
+BACKEND_ID = 'backend_id'
+HYPERMETRO_ID = 'hypermetro_id'
+HUAWEI_LUN_ID = 'huawei_lun_id'
+WORKLOADTYPEID = 'WORKLOADTYPEID'
+REMOTEHYPERREPLICATION = 'RemoteHyperReplication'
+HYPERREPLICATION = 'HyperReplication'
+HOSTNAME = 'HostName'
+MULTIPATHTYPE = 'MULTIPATHTYPE'
+RUNNINGSTATUS = 'RUNNINGSTATUS'
+THIN = 'Thin'
+HYPERMETRO_UPPER = 'HyperMetro'
+ID_UPPER = 'ID'
+
+HUAWEI_DISK_DICT = {
+    "-1": "",
+    "0": "fc",
+    "1": "sas",
+    "2": "sata",
+    "3": "ssd",
+    "4": "nl_sas",
+    "5": "slc_ssd",
+    "6": "mlc_ssd",
+    "7": "fc_sed",
+    "8": "sas_sed",
+    "9": "sata_sed",
+    "10": "ssd_sed",
+    "11": "nl-sas_sed",
+    "12": "slc_ssd_sed",
+    "13": "mlc_ssd_sed",
+    "14": "nvme_ssd",
+    "16": "nvme_ssd_sed",
+    "17": "scm",
+    "18": "scm_sed",
+    "19": "capacity-optimized ssd",
+    "20": "capacity-optimized ssd sed",
+    "21": "capacity-optimized ssd",
+    "22": "capacity-optimized ssd sed"
+}

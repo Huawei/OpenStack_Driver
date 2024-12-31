@@ -48,15 +48,19 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
     def initialize_connection(self, volume, connector):
         LOG.info('Initialize iscsi connection for volume %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': volume.id, 'conn': connector})
+                 {
+                     'id': volume.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
         metadata = huawei_utils.get_volume_private_data(volume)
         if metadata.get('hypermetro'):
-            if (not connector.get('multipath') and
+            if (not connector.get(constants.MULTIPATH) and
                     self.configuration.enforce_multipath_for_hypermetro):
                 msg = _("Mapping hypermetro volume must use multipath.")
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
-            elif (not connector.get('multipath') and
+            elif (not connector.get(constants.MULTIPATH) and
                   not self.configuration.enforce_multipath_for_hypermetro):
                 LOG.warning("Mapping hypermetro volume not use multipath,"
                             " so just mapping the local lun.")
@@ -68,7 +72,7 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
         local_mapping = huawei_flow.initialize_iscsi_connection(
             volume, constants.LUN_TYPE, connector, self.local_cli,
             self.configuration)
-        if metadata.get('hypermetro') and connector.get('multipath'):
+        if metadata.get('hypermetro') and connector.get(constants.MULTIPATH):
             hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
             if not hypermetro:
                 msg = _("Mapping hypermetro remote volume error.")
@@ -87,11 +91,11 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
             mapping_info = local_mapping
 
         mapping_info.pop('aval_host_lun_ids', None)
-        conn = {'driver_volume_type': 'iscsi',
-                'data': mapping_info}
+        conn = {'driver_volume_type': 'iscsi', 'data': mapping_info}
         LOG.info('Initialize iscsi connection successfully,'
                  'return data is: %s.',
-                 huawei_utils.mask_dict_sensitive_info(conn))
+                 huawei_utils.mask_initiator_sensitive_info(
+                     huawei_utils.mask_dict_sensitive_info(conn), sensitive_keys=['target_iqns', 'target_iqn']))
         return conn
 
     def terminate_connection(self, volume, connector, **kwargs):
@@ -106,7 +110,11 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
     def _terminate_connection_locked(self, host, volume, connector):
         LOG.info('Terminate iscsi connection for volume %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': volume.id, 'conn': connector})
+                 {
+                     'id': volume.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
         if self._is_volume_multi_attach_to_same_host(volume, connector):
             return
 
@@ -127,15 +135,19 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
     def initialize_connection_snapshot(self, snapshot, connector, **kwargs):
         LOG.info('Initialize iscsi connection for snapshot %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': snapshot.id, 'conn': connector})
+                 {
+                     'id': snapshot.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
         mapping_info = huawei_flow.initialize_iscsi_connection(
             snapshot, constants.SNAPSHOT_TYPE, connector, self.local_cli,
             self.configuration)
 
         mapping_info.pop('aval_host_lun_ids', None)
-        conn = {'driver_volume_type': 'iscsi',
-                'data': mapping_info}
-        LOG.info('Initialize iscsi connection successfully: %s.', conn)
+        conn = {'driver_volume_type': 'iscsi', 'data': mapping_info}
+        LOG.info('Initialize iscsi connection successfully: %s.', huawei_utils.mask_initiator_sensitive_info(
+                     huawei_utils.mask_dict_sensitive_info(conn), sensitive_keys=['target_iqns', 'target_iqn']))
         return conn
 
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
@@ -151,7 +163,11 @@ class HuaweiISCSIDriver(huawei_base_driver.HuaweiBaseDriver,
     def _terminate_connection_snapshot_locked(self, host, snapshot, connector):
         LOG.info('Terminate iscsi connection for snapshot %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': snapshot.id, 'conn': connector})
+                 {
+                     'id': snapshot.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
         huawei_flow.terminate_iscsi_connection(
             snapshot, constants.SNAPSHOT_TYPE, connector, self.local_cli,
             self.configuration)
@@ -176,16 +192,20 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
     def initialize_connection(self, volume, connector):
         LOG.info('Initialize FC connection for volume %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': volume.id, 'conn': connector})
+                 {
+                     'id': volume.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
 
         metadata = huawei_utils.get_volume_private_data(volume)
         if metadata.get('hypermetro'):
-            if (not connector.get('multipath') and
+            if (not connector.get(constants.MULTIPATH) and
                     self.configuration.enforce_multipath_for_hypermetro):
                 msg = _("Mapping hypermetro volume must use multipath.")
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
-            elif (not connector.get('multipath') and
+            elif (not connector.get(constants.MULTIPATH) and
                   not self.configuration.enforce_multipath_for_hypermetro):
                 LOG.warning("Mapping hypermetro volume not use multipath,"
                             " so just mapping the local lun.")
@@ -197,7 +217,7 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         local_mapping = huawei_flow.initialize_fc_connection(
             volume, constants.LUN_TYPE, connector, self.fc_san, self.local_cli,
             self.configuration)
-        if metadata.get('hypermetro') and connector.get('multipath'):
+        if metadata.get('hypermetro') and connector.get(constants.MULTIPATH):
             hypermetro = huawei_utils.get_hypermetro(self.local_cli, volume)
             if not hypermetro:
                 msg = _("Mapping hypermetro remote volume error.")
@@ -215,9 +235,13 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
             mapping_info = local_mapping
 
         mapping_info.pop('aval_host_lun_ids', None)
-        conn = {'driver_volume_type': 'fibre_channel',
-                'data': mapping_info}
-        LOG.info('Initialize FC connection successfully: %s.', conn)
+        conn = {
+            'driver_volume_type': 'fibre_channel',
+            'data': mapping_info
+        }
+        LOG.info('Initialize FC connection successfully: %s.', huawei_utils.mask_initiator_sensitive_info(
+            conn, sensitive_keys=['target_wwn'] + connector.get('wwpns', []),
+            need_mask_keys=connector.get('wwpns')))
         zm_utils.add_fc_zone(conn)
         return conn
 
@@ -233,9 +257,13 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
     def _terminate_connection_locked(self, host, volume, connector):
         LOG.info('Terminate FC connection for volume %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': volume.id, 'conn': connector})
+                 {
+                     'id': volume.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
         if self._is_volume_multi_attach_to_same_host(volume, connector):
-            return
+            return {}
 
         metadata = huawei_utils.get_volume_private_data(volume)
         if metadata.get('hypermetro'):
@@ -251,10 +279,12 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
         if metadata.get('hypermetro'):
             self._merge_ini_tgt_map(loc_ini_tgt_map, rmt_ini_tgt_map)
 
-        conn = {'driver_volume_type': 'fibre_channel',
-                'data': {'initiator_target_map': loc_ini_tgt_map},
-                }
-        LOG.info('Terminate FC connection successfully: %s.', conn)
+        conn = {
+            'driver_volume_type': 'fibre_channel',
+            'data': {'initiator_target_map': loc_ini_tgt_map},
+        }
+        LOG.info('Terminate FC connection successfully: %s.', huawei_utils.mask_initiator_sensitive_info(
+            conn, sensitive_keys=connector.get('wwpns', []), need_mask_keys=connector.get('wwpns', [])))
         zm_utils.remove_fc_zone(conn)
         return conn
 
@@ -262,15 +292,23 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
     def initialize_connection_snapshot(self, snapshot, connector, **kwargs):
         LOG.info('Initialize FC connection for snapshot %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': snapshot.id, 'conn': connector})
+                 {
+                     'id': snapshot.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
         mapping_info = huawei_flow.initialize_fc_connection(
             snapshot, constants.SNAPSHOT_TYPE, connector, self.fc_san,
             self.local_cli, self.configuration)
 
         mapping_info.pop('aval_host_lun_ids', None)
-        conn = {'driver_volume_type': 'fibre_channel',
-                'data': mapping_info}
-        LOG.info('Initialize FC connection successfully: %s.', conn)
+        conn = {
+            'driver_volume_type': 'fibre_channel',
+            'data': mapping_info
+        }
+        LOG.info('Initialize FC connection successfully: %s.', huawei_utils.mask_initiator_sensitive_info(
+            conn, sensitive_keys=['target_wwn'] + connector.get('wwpns', []),
+            need_mask_keys=connector.get('wwpns')))
         zm_utils.add_fc_zone(conn)
         return conn
 
@@ -287,14 +325,20 @@ class HuaweiFCDriver(huawei_base_driver.HuaweiBaseDriver,
     def _terminate_connection_snapshot_locked(self, host, snapshot, connector):
         LOG.info('Terminate FC connection for snapshot %(id)s, '
                  'connector info %(conn)s.',
-                 {'id': snapshot.id, 'conn': connector})
+                 {
+                     'id': snapshot.id,
+                     'conn': huawei_utils.mask_initiator_sensitive_info(
+                         connector, sensitive_keys=constants.SENSITIVE_INI_KEYS)
+                 })
         ini_tgt_map = huawei_flow.terminate_fc_connection(
             snapshot, constants.SNAPSHOT_TYPE, connector, self.fc_san,
             self.local_cli, self.configuration)
 
-        conn = {'driver_volume_type': 'fibre_channel',
-                'data': {'initiator_target_map': ini_tgt_map},
-                }
-        LOG.info('Terminate FC connection successfully: %s.', conn)
+        conn = {
+            'driver_volume_type': 'fibre_channel',
+            'data': {'initiator_target_map': ini_tgt_map},
+        }
+        LOG.info('Terminate FC connection successfully: %s.', huawei_utils.mask_initiator_sensitive_info(
+            conn, sensitive_keys=connector.get('wwpns', []), need_mask_keys=connector.get('wwpns', [])))
         zm_utils.remove_fc_zone(conn)
         return conn

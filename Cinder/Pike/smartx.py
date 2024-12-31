@@ -31,7 +31,7 @@ class SmartQos(object):
 
     def _is_high_priority(self, qos):
         """Check QoS priority."""
-        for key, value in qos.items():
+        for key in qos.keys():
             if (key.find('MIN') == 0) or (key.find('LATENCY') == 0):
                 return True
 
@@ -73,17 +73,17 @@ class SmartPartition(object):
     def add(self, opts, lun_id):
         if opts['smartpartition'] != 'true':
             return
-        if not opts['partitionname']:
+        if not opts[constants.PARTITIONNAME]:
             raise exception.InvalidInput(
                 reason=_('Partition name is None, please set '
                          'smartpartition:partitionname in key.'))
 
         partition_id = self.client.get_partition_id_by_name(
-            opts['partitionname'])
+            opts[constants.PARTITIONNAME])
         if not partition_id:
             raise exception.InvalidInput(
                 reason=(_('Can not find partition id by name %(name)s.')
-                        % {'name': opts['partitionname']}))
+                        % {'name': opts[constants.PARTITIONNAME]}))
 
         self.client.add_lun_to_partition(lun_id, partition_id)
 
@@ -95,16 +95,16 @@ class SmartCache(object):
     def add(self, opts, lun_id):
         if opts['smartcache'] != 'true':
             return
-        if not opts['cachename']:
+        if not opts[constants.CACHENAME]:
             raise exception.InvalidInput(
                 reason=_('Cache name is None, please set '
                          'smartcache:cachename in key.'))
 
-        cache_id = self.client.get_cache_id_by_name(opts['cachename'])
+        cache_id = self.client.get_cache_id_by_name(opts[constants.CACHENAME])
         if not cache_id:
             raise exception.InvalidInput(
                 reason=(_('Can not find cache id by cache name %(name)s.')
-                        % {'name': opts['cachename']}))
+                        % {'name': opts[constants.CACHENAME]}))
 
         self.client.add_lun_to_cache(lun_id, cache_id)
 
@@ -124,26 +124,26 @@ class SmartX(object):
 
     def get_smarttier_opts(self, opts):
         if opts['smarttier'] == 'true':
-            if not opts['policy']:
-                opts['policy'] = '1'
-            elif opts['policy'] not in ['0', '1', '2', '3']:
+            if not opts[constants.POLICY]:
+                opts[constants.POLICY] = '1'
+            elif opts[constants.POLICY] not in ['0', '1', '2', '3']:
                 raise exception.InvalidInput(
                     reason=(_('Illegal value specified for smarttier: '
                               'set to either 0, 1, 2, or 3.')))
         else:
-            opts['policy'] = '0'
+            opts[constants.POLICY] = '0'
 
         return opts
 
     def get_smartthin_opts(self, opts):
-        if opts['thin_provisioning_support'] == 'true':
-            if opts['thick_provisioning_support'] == 'true':
+        if opts['thin_provisioning_support'] == constants.TRUE:
+            if opts['thick_provisioning_support'] == constants.TRUE:
                 raise exception.InvalidInput(
                     reason=(_('Illegal value specified for thin: '
                               'Can not set thin and thick at the same time.')))
             else:
                 opts['LUNType'] = constants.THIN_LUNTYPE
-        if opts['thick_provisioning_support'] == 'true':
+        if opts['thick_provisioning_support'] == constants.TRUE:
             opts['LUNType'] = constants.THICK_LUNTYPE
 
         return opts

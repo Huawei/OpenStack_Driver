@@ -253,14 +253,14 @@ class ReplicaCG(object):
 
         def _replicg_ready():
             info = self.rmt_cgop.get_replicg_info(replicg_id)
-            if (info.get('RUNNINGSTATUS') in running_status_normal and
+            if (info.get(constants.RUNNINGSTATUS) in running_status_normal and
                     info.get('HEALTHSTATUS') ==
                     constants.REPLICG_HEALTH_NORMAL):
                 return True
 
-            if info.get('RUNNINGSTATUS') not in running_status_sync:
+            if info.get(constants.RUNNINGSTATUS) not in running_status_sync:
                 msg = (_('Wait synchronize failed. Running status: %s.') %
-                       info.get('RUNNINGSTATUS'))
+                       info.get(constants.RUNNINGSTATUS))
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
 
@@ -311,9 +311,9 @@ class AbsReplicaOp(object):
         return {}
 
     def _is_status(self, status_key, status, replica_info):
-        if type(status) in (list, tuple):
+        if isinstance(status, (list, tuple)):
             return replica_info.get(status_key, '') in status
-        if type(status) is str:
+        if isinstance(status, str):
             return replica_info.get(status_key, '') == status
 
         return False
@@ -368,28 +368,28 @@ class PairOp(AbsReplicaOp):
 
         return pair_info
 
-    def split(self, pair_id):
-        self.client.split_pair(pair_id)
+    def split(self, replica_id):
+        self.client.split_pair(replica_id)
 
-    def delete(self, pair_id, force=False):
-        self.client.delete_pair(pair_id, force)
+    def delete(self, replica_id, force=False):
+        self.client.delete_pair(replica_id, force)
 
-    def protect_second(self, pair_id):
-        self.client.set_pair_second_access(pair_id,
+    def protect_second(self, replica_id):
+        self.client.set_pair_second_access(replica_id,
                                            constants.REPLICA_SECOND_RO)
 
-    def unprotect_second(self, pair_id):
-        self.client.set_pair_second_access(pair_id,
+    def unprotect_second(self, replica_id):
+        self.client.set_pair_second_access(replica_id,
                                            constants.REPLICA_SECOND_RW)
 
-    def sync(self, pair_id):
-        self.client.sync_pair(pair_id)
+    def sync(self, replica_id):
+        self.client.sync_pair(replica_id)
 
-    def switch(self, pair_id):
-        self.client.switch_pair(pair_id)
+    def switch(self, replica_id):
+        self.client.switch_pair(replica_id)
 
-    def get_replica_info(self, pair_id):
-        return self.client.get_pair_by_id(pair_id)
+    def get_replica_info(self, replica_id):
+        return self.client.get_pair_by_id(replica_id)
 
     def check_pair_exist(self, pair_id):
         return self.client.check_pair_exist(pair_id)
@@ -397,12 +397,14 @@ class PairOp(AbsReplicaOp):
 
 class CGOp(AbsReplicaOp):
     def create(self, group_name, group_id, replica_model,
-               speed=constants.REPLICA_SPEED):
-        data = {'NAME': group_name,
-                'DESCRIPTION': group_id,
-                'RECOVERYPOLICY': '1',
-                'REPLICATIONMODEL': replica_model,
-                'SPEED': speed}
+               speed=constants.REPLICA_SPEED, **kwargs):
+        data = {
+            'NAME': group_name,
+            'DESCRIPTION': group_id,
+            'RECOVERYPOLICY': '1',
+            'REPLICATIONMODEL': replica_model,
+            'SPEED': speed
+        }
 
         if replica_model == constants.REPLICA_ASYNC_MODEL:
             # Synchronize type values:
@@ -414,8 +416,8 @@ class CGOp(AbsReplicaOp):
 
         self.client.create_replicg(data)
 
-    def delete(self, replicg_id):
-        self.client.delete_replicg(replicg_id)
+    def delete(self, replica_id):
+        self.client.delete_replicg(replica_id)
 
     def remove_pair_from_cg(self, replicg_id, pair_id):
         self.client.remove_replipair_from_replicg(replicg_id,
@@ -468,9 +470,11 @@ class ReplicaCommonDriver(object):
         self.wait_second_access(replica_id, constants.REPLICA_SECOND_RW)
 
     def sync(self, replica_id, wait_complete=False):
-        expect_status = (constants.REPLICA_RUNNING_STATUS_NORMAL,
-                         constants.REPLICA_RUNNING_STATUS_SYNC,
-                         constants.REPLICA_RUNNING_STATUS_INITIAL_SYNC)
+        expect_status = (
+            constants.REPLICA_RUNNING_STATUS_NORMAL,
+            constants.REPLICA_RUNNING_STATUS_SYNC,
+            constants.REPLICA_RUNNING_STATUS_INITIAL_SYNC
+        )
         info = self.op.get_replica_info(replica_id)
 
         # When running status is synchronizing or normal,
@@ -486,9 +490,11 @@ class ReplicaCommonDriver(object):
             self.wait_replica_ready(replica_id)
 
     def split(self, replica_id):
-        running_status = (constants.REPLICA_RUNNING_STATUS_SPLIT,
-                          constants.REPLICA_RUNNING_STATUS_INVALID,
-                          constants.REPLICA_RUNNING_STATUS_ERRUPTED)
+        running_status = (
+            constants.REPLICA_RUNNING_STATUS_SPLIT,
+            constants.REPLICA_RUNNING_STATUS_INVALID,
+            constants.REPLICA_RUNNING_STATUS_ERRUPTED
+        )
         info = self.op.get_replica_info(replica_id)
         if self.op.is_running_status(running_status, info):
             return
@@ -543,8 +549,10 @@ class ReplicaCommonDriver(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        sync_status_set = (constants.REPLICA_RUNNING_STATUS_SYNC,
-                           constants.REPLICA_RUNNING_STATUS_INITIAL_SYNC)
+        sync_status_set = (
+            constants.REPLICA_RUNNING_STATUS_SYNC,
+            constants.REPLICA_RUNNING_STATUS_INITIAL_SYNC
+        )
         if self.op.is_running_status(sync_status_set, info):
             self.wait_replica_ready(replica_id)
 
@@ -553,10 +561,14 @@ class ReplicaCommonDriver(object):
 
     def wait_replica_ready(self, replica_id, interval=None, timeout=None):
         LOG.debug('Wait synchronize complete.')
-        running_status_normal = (constants.REPLICA_RUNNING_STATUS_NORMAL,
-                                 constants.REPLICA_RUNNING_STATUS_SYNCED)
-        running_status_sync = (constants.REPLICA_RUNNING_STATUS_SYNC,
-                               constants.REPLICA_RUNNING_STATUS_INITIAL_SYNC)
+        running_status_normal = (
+            constants.REPLICA_RUNNING_STATUS_NORMAL,
+            constants.REPLICA_RUNNING_STATUS_SYNCED
+        )
+        running_status_sync = (
+            constants.REPLICA_RUNNING_STATUS_SYNC,
+            constants.REPLICA_RUNNING_STATUS_INITIAL_SYNC
+        )
         health_status_normal = constants.REPLICA_HEALTH_STATUS_NORMAL
 
         def _replica_ready():
@@ -673,12 +685,15 @@ class ReplicaPairManager(object):
         # Check remote device is available to use.
         # If array type is replication, 'ARRAYTYPE' == '1'.
         # If health status is normal, 'HEALTHSTATUS' == '1'.
-        if (device and device.get('ARRAYTYPE') == '1'
-                and device.get('HEALTHSTATUS') == '1'
-                and device.get('RUNNINGSTATUS') == constants.STATUS_RUNNING):
-            return True
-
-        return False
+        if not device:
+            return False
+        if device.get('ARRAYTYPE') != '1':
+            return False
+        if device.get('HEALTHSTATUS') != '1':
+            return False
+        if device.get('RUNNINGSTATUS') != constants.STATUS_RUNNING:
+            return False
+        return True
 
     def update_replica_capability(self, stats):
         is_rmt_dev_available = self.check_remote_available()
@@ -719,13 +734,13 @@ class ReplicaPairManager(object):
                 params[k] = local_lun_info[k]
 
         if local_lun_info.get("WORKLOADTYPENAME") and local_lun_info.get(
-                "WORKLOADTYPEID"):
+                constants.WORKLOADTYPEID):
             workload_type_name = self.local_client.get_workload_type_name(
-                local_lun_info['WORKLOADTYPEID'])
+                local_lun_info[constants.WORKLOADTYPEID])
             rmt_workload_type_id = self.rmt_client.get_workload_type_id(
                 workload_type_name)
             if rmt_workload_type_id:
-                params['WORKLOADTYPEID'] = rmt_workload_type_id
+                params[constants.WORKLOADTYPEID] = rmt_workload_type_id
             else:
                 msg = _("The workload type %s is not exist. Please create "
                         "it on the array") % workload_type_name
@@ -820,10 +835,12 @@ class ReplicaPairManager(object):
                 self._delete_rmt_lun(rmt_lun_id)
 
         model_update = {}
-        driver_data = {'pair_id': pair_id,
-                       'huawei_sn': rmt_dev_sn,
-                       'rmt_lun_id': rmt_lun_id,
-                       'rmt_lun_wwn': rmt_lun_info['WWN']}
+        driver_data = {
+            'pair_id': pair_id,
+            'huawei_sn': rmt_dev_sn,
+            'rmt_lun_id': rmt_lun_id,
+            'rmt_lun_wwn': rmt_lun_info['WWN']
+        }
         model_update['replication_driver_data'] = to_string(driver_data)
         model_update['replication_status'] = 'available'
         LOG.debug('Create replication, return info: %s.', model_update)
@@ -900,7 +917,8 @@ class ReplicaPairManager(object):
         running_status_set = (
             constants.REPLICA_RUNNING_STATUS_NORMAL,
             constants.REPLICA_RUNNING_STATUS_SPLIT,
-            constants.REPLICA_RUNNING_STATUS_ERRUPTED)
+            constants.REPLICA_RUNNING_STATUS_ERRUPTED
+        )
 
         volumes_update = []
         cgid_list = set()
@@ -959,9 +977,11 @@ class ReplicaPairManager(object):
                 huawei_lun_id=rmt_lun_id, huawei_sn=drv_data.get('huawei_sn'),
                 huawei_lun_wwn=drv_data.get('rmt_lun_wwn'))
 
-            v_update['updates'] = {'provider_location': location,
-                                   'replication_status': 'available',
-                                   'replication_driver_data': new_drv_data}
+            v_update['updates'] = {
+                'provider_location': location,
+                'replication_status': 'available',
+                'replication_driver_data': new_drv_data
+            }
             volumes_update.append(v_update)
 
         return volumes_update
@@ -974,10 +994,12 @@ class ReplicaPairManager(object):
         running_status_set = (
             constants.REPLICA_RUNNING_STATUS_NORMAL,
             constants.REPLICA_RUNNING_STATUS_SPLIT,
-            constants.REPLICA_RUNNING_STATUS_ERRUPTED)
+            constants.REPLICA_RUNNING_STATUS_ERRUPTED
+        )
         data_status_set = (
             constants.REPLICA_DATA_STATUS_SYNCED,
-            constants.REPLICA_DATA_STATUS_COMPLETE)
+            constants.REPLICA_DATA_STATUS_COMPLETE
+        )
 
         volumes_update = []
         cgid_list = set()
@@ -1025,9 +1047,11 @@ class ReplicaPairManager(object):
                 huawei_lun_id=rmt_lun_id, huawei_sn=drv_data.get('huawei_sn'),
                 huawei_lun_wwn=drv_data.get('rmt_lun_wwn'))
 
-            v_update['updates'] = {'provider_location': location,
-                                   'replication_status': 'failed-over',
-                                   'replication_driver_data': new_drv_data}
+            v_update['updates'] = {
+                'provider_location': location,
+                'replication_status': 'failed-over',
+                'replication_driver_data': new_drv_data
+            }
             volumes_update.append(v_update)
 
         return volumes_update
@@ -1037,9 +1061,9 @@ class ReplicaPairManager(object):
 
 
 def get_replication_opts(opts):
-    if opts.get('replication_type') == 'sync':
-        opts['replication_type'] = constants.REPLICA_SYNC_MODEL
+    if opts.get(constants.REPLICATION_TYPE) == 'sync':
+        opts[constants.REPLICATION_TYPE] = constants.REPLICA_SYNC_MODEL
     else:
-        opts['replication_type'] = constants.REPLICA_ASYNC_MODEL
+        opts[constants.REPLICATION_TYPE] = constants.REPLICA_ASYNC_MODEL
 
     return opts
