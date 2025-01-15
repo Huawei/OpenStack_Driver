@@ -77,9 +77,7 @@ class HuaweiBaseDriver(object):
     @staticmethod
     def _get_disk_type_by_storage_pool(pool_info):
         """
-        The method for storage pool to obtain the disk type is as follows:
-        If disk type information exists in 'TIER0CAPACITY','TIER1CAPACITY', 'TIER2CAPACITY',
-        separate them with commas ',' and return them.
+        Get disk type of the pool.
         """
         pool_disks = []
         for i, x in enumerate(constants.TIER_DISK_TYPES):
@@ -87,7 +85,10 @@ class HuaweiBaseDriver(object):
                     pool_info.get('TIER%dCAPACITY' % i) != '0'):
                 pool_disks.append(x)
 
-        return ','.join(pool_disks) if pool_disks else None
+        if len(pool_disks) > 1:
+            pool_disks = ['mix']
+
+        return pool_disks[0] if pool_disks else None
 
     def do_setup(self, context):
         self.conf.update_config_value()
@@ -190,12 +191,7 @@ class HuaweiBaseDriver(object):
 
     def _get_disk_type(self, pool_info):
         """Get disk type of the pool."""
-
-        if not self.configuration.is_dorado_v6:
-            disk_type = self._get_disk_type_by_storage_pool(pool_info)
-        else:
-            disk_type = self._get_disk_type_by_disk_pool(pool_info)
-        LOG.info("The disk type is %s", disk_type)
+        disk_type = self._get_disk_type_by_storage_pool(pool_info)
         return disk_type
 
     def _get_smarttier(self, disk_type):
@@ -866,24 +862,3 @@ class HuaweiBaseDriver(object):
         local_mapping['portals'].extend(remote_mapping['portals'])
         local_mapping['target_luns'].extend(remote_mapping['target_luns'])
         return local_mapping
-
-    def _get_disk_type_by_disk_pool(self, pool_info):
-        """
-        The method for disk pool to obtain the disk type is as follows:
-        Check whether diskTypeList contains disk type information.
-        If diskTypeList contains disk type information, separate disk types with commas ','.
-        If diskTypeList does not contain disk type information,
-        use the disk type returned by TIER0DISKTYPE.
-        """
-        pool_disks = []
-        disk_pool_info = self.local_cli.get_disk_pool_by_id(pool_info.get('PARENTID'))
-        if disk_pool_info.get('diskTypeList'):
-            for disk_type in json.loads(disk_pool_info.get('diskTypeList')):
-                if constants.HUAWEI_DISK_DICT.get(disk_type):
-                    pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_type))
-
-        if not pool_disks:
-            pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_pool_info.get('TIER0DISKTYPE')))
-            return pool_disks[0]
-
-        return ','.join(pool_disks) if pool_disks else None

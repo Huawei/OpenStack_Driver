@@ -52,7 +52,6 @@ class HuaweiConf(object):
         if self.last_modify_time == file_time:
             return
 
-        self.last_modify_time = file_time
         tree, xml_root = self.get_xml_info()
         self._encode_authentication(tree, xml_root)
 
@@ -92,6 +91,8 @@ class HuaweiConf(object):
 
         for f in attr_funcs:
             f(xml_root)
+
+        self.last_modify_time = file_time
 
     def _encode_authentication(self, tree, xml_root):
         node_start_text = '!$$$'
