@@ -276,16 +276,6 @@ class StoragePool(CommonObject):
         return None
 
 
-class DiskPool(CommonObject):
-    _obj_url = '/diskpool'
-
-    def get_disk_pool_by_id(self, disk_domain_id):
-        url = "/%s" % disk_domain_id
-        result = self.get(url)
-        _assert_result(result, 'Get disk pool by id error')
-        return result['data']
-
-
 class Snapshot(CommonObject):
     _obj_url = '/snapshot'
 
