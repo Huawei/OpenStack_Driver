@@ -335,6 +335,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def delete_volume(self, volume):
@@ -398,6 +399,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def create_cloned_volume(self, volume, src_vref):
@@ -412,6 +414,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def extend_volume(self, volume, new_size):
@@ -503,6 +506,7 @@ class HuaweiBaseDriver(object):
             hypermetro_id=hypermetro_id, replication_id=replication_id,
             huawei_sn=self.local_cli.device_id
         )
+        huawei_utils.set_volume_lun_wwn(model_update, lun_wwn, volume)
         return model_update
 
     def manage_existing_snapshot_get_size(self, snapshot, existing_ref):

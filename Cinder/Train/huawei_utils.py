@@ -376,6 +376,12 @@ def get_volume_metadata(volume):
     return {}
 
 
+def set_volume_lun_wwn(model_update, lun_wwn, volume):
+    metadata = get_volume_metadata(volume)
+    metadata['lun_wwn'] = lun_wwn
+    model_update.update({"metadata": metadata})
+
+
 def get_replication_data(volume):
     if not volume.replication_driver_data:
         return {}
