@@ -745,7 +745,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             huawei_lun_wwn=lun_info.get('WWN'), hypermetro=hypermetro)
         model_update = {'provider_location': provider_location}
         model_update.update(replica_info)
-
+        huawei_utils.set_volume_lun_wwn(model_update, lun_info, volume)
         return model_update
 
     def create_volume(self, volume):
@@ -1995,6 +1995,7 @@ class HuaweiBaseDriver(driver.VolumeDriver):
 
         model_update['provider_location'] = huawei_utils.to_string(
             **provider_location)
+        huawei_utils.set_volume_lun_wwn(model_update, lun_info, volume)
         return model_update
 
     def _get_lun_info_by_ref(self, external_ref):
