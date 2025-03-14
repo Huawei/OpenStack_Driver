@@ -107,6 +107,12 @@ def get_volume_metadata(volume):
     return {}
 
 
+def set_volume_lun_wwn(model_update, lun_info, volume):
+    metadata = get_volume_metadata(volume)
+    metadata['lun_wwn'] = lun_info.get('WWN')
+    model_update.update({"metadata": metadata})
+
+
 def get_admin_metadata(volume):
     admin_metadata = {}
     if 'admin_metadata' in volume:
