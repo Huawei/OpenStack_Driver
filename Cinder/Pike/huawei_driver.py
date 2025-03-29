@@ -163,7 +163,6 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         self.sn = self.client.login()
         self.client.check_storage_pools()
         self.is_dorado_v6 = huawei_utils.is_support_clone_pair(self.client)
-        self.client.is_dorado_v6 = self.is_dorado_v6
 
         # init hypermetro remote client
         hypermetro_devs = self.huawei_conf.get_hypermetro_devices()
