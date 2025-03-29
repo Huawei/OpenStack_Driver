@@ -62,7 +62,7 @@ def get_share_privilege(type_id):
         key = spec_key.lower()
         if share_privilege.get(key):
             opt_key = _get_opt_key(key)
-            opts[opt_key.upper()] = share_privilege[key](key, specs[spec_key])
+            opts[opt_key.upper()] = share_privilege.get(key)(key, specs.get(spec_key))
 
     return opts
 
@@ -195,7 +195,7 @@ def _get_qos_opts(opts):
         else:
             qos[key.upper()] = opts.pop(key)
 
-    if not opts['iotype'] or opts['iotype'] not in constants.QOS_IO_TYPES:
+    if not opts[constants.QOS_IOTYPE_KEY] or opts[constants.QOS_IOTYPE_KEY] not in constants.QOS_IO_TYPES:
         msg = _('iotype must be set to one of %s.') % constants.QOS_IO_TYPES
         LOG.error(msg)
         raise exception.InvalidInput(reason=msg)
@@ -307,6 +307,7 @@ def get_replica_pair_id(helper, fs_name):
         replication_ids = json.loads(fs_info['REMOTEREPLICATIONIDS'])
         if replication_ids:
             return replication_ids[0]
+    return None
 
 
 def get_hypermetro_vstore_id(helper, domain_name, local_vstore, remote_vstore):
@@ -331,6 +332,7 @@ def is_dorado_v6(client):
     version_info = array_info['PRODUCTVERSION']
     if version_info >= constants.SUPPORT_CLONE_PAIR_VERSION:
         return True
+    return False
 
 
 def standard_ipaddr(access):

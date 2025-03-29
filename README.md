@@ -1,4 +1,4 @@
-# Huawei OpenStack Cinder Driver and Manila Driver
+# OpenStack Cinder Driver and Manila Driver For Huawei Storage
 ## Overview
 Huawei Cinder driver is used to adapt OpenStack and SAN storage which in order to 
 provide LUNs to VMs. In addition, cinder driver also provides a series of LUN-related services, 

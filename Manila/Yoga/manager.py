@@ -31,6 +31,7 @@ class HuaweiManager(object):
         self.driver = driver
         self.replica_mgr = replica_mgr
         self.metro_mgr = metro_mgr
+        self._target = None
 
     def create_replica_pair(
             self, ctx, local_share_info, remote_device_wwn, remote_fs_id,

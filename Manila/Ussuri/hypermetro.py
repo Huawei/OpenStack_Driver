@@ -47,16 +47,16 @@ class HyperPairManager(object):
             if thin_support:
                 _free = (max_over_subscription_ratio * _total - _provisioned)
 
-            if (_free >= float(params["CAPACITY"]) and
-                    _free > selected_pool.get("CAPACITY", 0)):
+            if (_free >= float(params[constants.FILESYSTEM_CAPACITY]) and
+                    _free > selected_pool.get(constants.FILESYSTEM_CAPACITY, 0)):
                 selected_pool.update({"pool_id": pool_info["ID"],
-                                      "CAPACITY": _free})
+                                      constants.FILESYSTEM_CAPACITY: _free})
 
         if not selected_pool:
             msg = _("There is no valid pool to create FS %s" % params)
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
-        return selected_pool["pool_id"]
+        return selected_pool.get("pool_id")
 
     def create_remote_filesystem(self, params):
         pool_id = self._get_storage_pool(params)

@@ -74,14 +74,15 @@ class SmartCache(object):
 class SmartQos(object):
     def __init__(self, helper):
         self.helper = helper
+        self.qos_id = None
 
     @staticmethod
     def _check_qos_consistency(policy, qos):
         check_keys = set(constants.QOS_KEYS) & set(qos.keys())
         policy_keys = set(constants.QOS_KEYS) & set(policy.keys())
 
-        if 'LATENCY' in policy_keys and policy['LATENCY'] == '0':
-            policy_keys.remove('LATENCY')
+        if constants.QOS_LATENCY in policy_keys and policy[constants.QOS_LATENCY] == '0':
+            policy_keys.remove(constants.QOS_LATENCY)
 
         if check_keys != policy_keys:
             return False
@@ -131,4 +132,4 @@ class SmartQos(object):
             return
 
         self.remove(fs_id, qos_id, qos_info)
-        self.add(new_qos, fs_id)
+        self.qos_id = self.add(new_qos, fs_id)

@@ -75,8 +75,8 @@ class HuaweiAPI(object):
     def create_remote_filesystem(self, context, host, params):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
 
         try:
             return call_context.call(context, 'create_remote_filesystem',
@@ -85,14 +85,14 @@ class HuaweiAPI(object):
             try:
                 return call_context.call(context, 'create_remote_filesystem',
                                          params=params)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def delete_remote_filesystem(self, context, host, params):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
         try:
             call_context.call(context, 'delete_remote_filesystem',
                               params=params)
@@ -100,14 +100,14 @@ class HuaweiAPI(object):
             try:
                 call_context.call(context, 'delete_remote_filesystem',
                                   params=params)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def delete_share(self, context, share_name, share_proto, host):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
         try:
             call_context.call(context,
                               'delete_share',
@@ -119,14 +119,14 @@ class HuaweiAPI(object):
                                   'delete_share',
                                   share_name=share_name,
                                   share_proto=share_proto)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def deny_access(self, context, params, host):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
         try:
             call_context.call(context,
                               'deny_access',
@@ -136,14 +136,14 @@ class HuaweiAPI(object):
                 call_context.call(context,
                                   'deny_access',
                                   params=params)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def allow_access(self, context, params, host):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
         try:
             call_context.call(context,
                               'allow_access',
@@ -153,14 +153,14 @@ class HuaweiAPI(object):
                 call_context.call(context,
                                   'allow_access',
                                   params=params)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def update_filesystem(self, context, host, fs_id, params):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
         try:
             call_context.call(context, 'update_filesystem', fs_id=fs_id,
                               params=params)
@@ -168,15 +168,15 @@ class HuaweiAPI(object):
             try:
                 call_context.call(context, 'update_filesystem', fs_id=fs_id,
                                   params=params)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def check_remote_metro_info(self, context, host, domain_name,
                                 local_vstore, remote_vstore, vstore_pair_id):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
         try:
             call_context.call(
                 context, 'check_remote_metro_info', domain_name=domain_name,
@@ -190,14 +190,14 @@ class HuaweiAPI(object):
                     local_vstore=local_vstore,
                     remote_vstore=remote_vstore,
                     vstore_pair_id=vstore_pair_id)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def get_remote_fs_info(self, context, share_name, host):
         try:
             call_context = self.client.prepare(server=host, version='1.0')
-        except Exception:
-            raise
+        except Exception as err:
+            raise err
         try:
             call_context.call(
                 context, 'get_remote_fs_info',
@@ -208,8 +208,8 @@ class HuaweiAPI(object):
                 call_context.call(
                     context, 'get_remote_fs_info',
                     share_name=share_name)
-            except Exception:
-                raise
+            except Exception as err:
+                raise err
 
     def create_replica_snapshot(
             self, context, host, replica_share_name,
