@@ -39,8 +39,6 @@ class HuaweiConfig(object):
         if self.last_modify_time == file_time:
             return
 
-        self.last_modify_time = file_time
-
         tree = ET.parse(self.config.manila_huawei_conf_file,
                         ET.XMLParser(resolve_entities=False))
         xml_root = tree.getroot()
@@ -72,18 +70,20 @@ class HuaweiConfig(object):
         for f in attr_funcs:
             f(xml_root)
 
+        self.last_modify_time = file_time
+
     def _encode_authentication(self, tree, xml_root):
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
-
+        node_start_text = '!$$$'
         need_encode = False
-        if name_node is not None and not name_node.text.startswith('!$$$'):
-            name_node.text = '!$$$' + base64.b64encode(
+        if name_node is not None and not name_node.text.startswith(node_start_text):
+            name_node.text = node_start_text + base64.b64encode(
                 name_node.text.encode()).decode()
             need_encode = True
 
-        if pwd_node is not None and not pwd_node.text.startswith('!$$$'):
-            pwd_node.text = '!$$$' + base64.b64encode(
+        if pwd_node is not None and not pwd_node.text.startswith(node_start_text):
+            pwd_node.text = node_start_text + base64.b64encode(
                 pwd_node.text.encode()).decode()
             need_encode = True
 
@@ -308,7 +308,9 @@ class HuaweiConfig(object):
                 'remote_backend': metro_info['remote_backend'],
                 'metro_logic_ip': [
                     i.strip() for i in metro_info['metro_logic_ip'].split(";")
-                    if i.strip()]}
+                    if i.strip()
+                ]
+            }
             metro_configs.append(metro_config)
 
         return metro_configs

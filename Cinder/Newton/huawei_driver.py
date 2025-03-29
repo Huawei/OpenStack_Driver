@@ -83,7 +83,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "2.7.RC3"
+    VERSION = "2.7.4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -163,7 +163,6 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         self.sn = self.client.login()
         self.client.check_storage_pools()
         self.is_dorado_v6 = huawei_utils.is_support_clone_pair(self.client)
-        self.client.is_dorado_v6 = self.is_dorado_v6
 
         # init hypermetro remote client
         hypermetro_devs = self.huawei_conf.get_hypermetro_devices()

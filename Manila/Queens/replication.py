@@ -41,7 +41,7 @@ class ReplicaPairManager(object):
                         local_share_name)
                 LOG.error(msg)
                 raise exception.ReplicationException(reason=msg)
-            local_fs_id = local_fs_info['ID']
+            local_fs_id = local_fs_info[constants.ID]
             pair_params = {
                 "LOCALRESID": local_fs_id,
                 "LOCALRESTYPE": constants.FILE_SYSTEM_TYPE,
@@ -57,14 +57,14 @@ class ReplicaPairManager(object):
             else:
                 remote_device = self.helper.get_remote_device_by_wwn(
                     remote_device_wwn)
-                pair_params["REMOTEDEVICEID"] = remote_device.get('ID')
+                pair_params["REMOTEDEVICEID"] = remote_device.get(constants.ID)
 
             support_sync_snapshot = huawei_utils.is_dorado_v6(self.helper)
             if support_sync_snapshot:
                 pair_params["syncSnapPolicy"] = "1"
 
             pair_info = self.helper.create_replication_pair(pair_params)
-            local_pair_id = pair_info['ID']
+            local_pair_id = pair_info[constants.ID]
 
             if local_replication:
                 remote_fs = self.helper.get_fs_info_by_id(remote_fs_id)
@@ -104,6 +104,7 @@ class ReplicaPairManager(object):
         if (pair_info['HEALTHSTATUS'] !=
                 constants.REPLICA_HEALTH_STATUS_NORMAL):
             return common_constants.STATUS_ERROR
+        return None
 
     @staticmethod
     def _check_replication_running_status(pair_info):
@@ -116,6 +117,7 @@ class ReplicaPairManager(object):
                 constants.REPLICA_RUNNING_STATUS_INTERRUPTED,
                 constants.REPLICA_RUNNING_STATUS_INVALID)):
             return common_constants.STATUS_ERROR
+        return None
 
     @staticmethod
     def _check_replication_secondary_data_status(pair_info):

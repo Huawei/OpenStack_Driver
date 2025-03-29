@@ -95,18 +95,17 @@ class RestClient(object):
 
     @staticmethod
     def _get_disk_type_by_storage_pool(pool_info):
-        """
-        The method for the storage pool to obtain the disk type is as follows:
-        If disk type information exists in 'TIER0CAPACITY','TIER1CAPACITY', 'TIER2CAPACITY',
-        separate them with commas ',' and return them.
-        """
+        """Get disk type of the pool."""
         pool_disk = []
         for i, x in enumerate(['ssd', 'sas', 'nl_sas']):
             if (pool_info.get('TIER%dCAPACITY' % i) and
                     pool_info.get('TIER%dCAPACITY' % i) != '0'):
                 pool_disk.append(x)
 
-        return ','.join(pool_disk) if pool_disk else None
+        if len(pool_disk) > 1:
+            pool_disk = ['mix']
+
+        return pool_disk[0] if pool_disk else None
 
     def init_http_head(self):
         self.url = None
@@ -1438,10 +1437,7 @@ class RestClient(object):
         if not pool_info:
             return None
 
-        if not self.is_dorado_v6:
-            disk_type = self._get_disk_type_by_storage_pool(pool_info)
-        else:
-            disk_type = self._get_disk_type_by_disk_pool(pool_info)
+        disk_type = self._get_disk_type_by_storage_pool(pool_info)
         LOG.info("The disk type is %s", disk_type)
         return disk_type
 
@@ -3257,33 +3253,6 @@ class RestClient(object):
         for target_ip in roce_info.get('TargetIP').split():
             if target_ip.strip():
                 target_ips.append(target_ip)
-
-    def get_disk_pool_by_id(self, disk_domain_id):
-        url = "/diskpool/%s" % disk_domain_id
-        result = self.call(url, None, "GET")
-        self._assert_rest_result(result, 'Get disk pool by id error')
-        return result.get('data')
-
-    def _get_disk_type_by_disk_pool(self, pool_info):
-        """
-        The method for disk pool to obtain the disk type is as follows:
-        Check whether diskTypeList contains disk type information.
-        If diskTypeList contains disk type information, separate disk types with commas ','.
-        If diskTypeList does not contain disk type information,
-        use the disk type returned by TIER0DISKTYPE.
-        """
-        pool_disks = []
-        disk_pool_info = self.get_disk_pool_by_id(pool_info.get('PARENTID'))
-        if disk_pool_info.get('diskTypeList'):
-            for disk_type in json.loads(disk_pool_info.get('diskTypeList')):
-                if constants.HUAWEI_DISK_DICT.get(disk_type):
-                    pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_type))
-
-        if not pool_disks:
-            pool_disks.append(constants.HUAWEI_DISK_DICT.get(disk_pool_info.get('TIER0DISKTYPE')))
-            return pool_disks[0]
-
-        return ','.join(pool_disks) if pool_disks else None
 
     def _get_target_ips_by_initiator_name(self, initiator):
         target_ips = []

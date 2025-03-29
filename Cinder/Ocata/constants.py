@@ -289,30 +289,3 @@ METRO_SYNC_COMPLETED = 'metro_sync_completed'
 THIN = 'Thin'
 INITIATOR_TARGET_MAP = 'initiator_target_map'
 URL = 'url'
-
-HUAWEI_DISK_DICT = {
-    "-1": "",
-    "0": "fc",
-    "1": "sas",
-    "2": "sata",
-    "3": "ssd",
-    "4": "nl_sas",
-    "5": "slc_ssd",
-    "6": "mlc_ssd",
-    "7": "fc_sed",
-    "8": "sas_sed",
-    "9": "sata_sed",
-    "10": "ssd_sed",
-    "11": "nl-sas_sed",
-    "12": "slc_ssd_sed",
-    "13": "mlc_ssd_sed",
-    "14": "nvme_ssd",
-    "16": "nvme_ssd_sed",
-    "17": "scm",
-    "18": "scm_sed",
-    "19": "capacity-optimized ssd",
-    "20": "capacity-optimized ssd sed",
-    "21": "capacity-optimized ssd",
-    "22": "capacity-optimized ssd sed"
-}
-

@@ -16,12 +16,12 @@
 import base64
 import json
 import re
+import threading
+import time
 
 import netaddr
 import requests
 import six
-import threading
-import time
 
 from oslo_concurrency import lockutils
 from oslo_log import log
@@ -134,9 +134,11 @@ class RestHelper(object):
     def login(self):
         username, password = self._get_user_info()
         for item_url in self.nas_address:
-            data = {"username": username,
-                    "password": password,
-                    "scope": "0"}
+            data = {
+                "username": username,
+                "password": password,
+                "scope": "0"
+            }
             self.init_http_head()
             self.url = item_url
 
@@ -150,9 +152,9 @@ class RestHelper(object):
                 continue
 
             LOG.info('Login %s success.', item_url)
-            self.url = item_url + result['data']['deviceid']
-            self.session.headers['iBaseToken'] = result['data']['iBaseToken']
-            if (result['data']['accountstate']
+            self.url = item_url + result.get(constants.DATA_KEY, {}).get('deviceid')
+            self.session.headers['iBaseToken'] = result.get(constants.DATA_KEY, {}).get('iBaseToken')
+            if (result.get(constants.DATA_KEY, {}).get('accountstate')
                     in constants.PWD_EXPIRED_OR_INITIAL):
                 self.logout()
                 msg = _("Password has expired or initial, "
@@ -218,9 +220,12 @@ class RestHelper(object):
                 result = self.do_call(url, method, data, **kwargs)
             else:
                 old_token = None
-                result = {"error": {
-                    "code": constants.ERROR_UNAUTHORIZED_TO_SERVER,
-                    "description": "unauthorized."}}
+                result = {
+                    "error": {
+                        "code": constants.ERROR_UNAUTHORIZED_TO_SERVER,
+                        "description": "unauthorized."
+                    }
+                }
 
         if _error_code(result) in constants.RELOGIN_ERROR_CODE:
             LOG.error(("Can't open the recent url, relogin. "
@@ -259,7 +264,7 @@ class RestHelper(object):
         url = "/filesystem"
         result = self.call(url, 'POST', fs_param)
         _assert_result(result, 'Create filesystem %s error.', fs_param)
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     @staticmethod
     def _invalid_nas_protocol(share_proto):
@@ -287,7 +292,7 @@ class RestHelper(object):
 
         result = self.call(url, "POST", data)
         _assert_result(result, 'Create share for %s error.', share_name)
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def update_share(self, share_id, share_proto, params, vstore_id=None):
         if share_proto == 'NFS':
@@ -332,7 +337,7 @@ class RestHelper(object):
         url = "/storagepool"
         result = self.call(url, "GET")
         _assert_result(result, "Query resource pool error.")
-        return result['data']
+        return result.get('data')
 
     def get_pool_by_name(self, name, log_filter=False):
         url = "/storagepool?filter=NAME::%s" % name
@@ -374,6 +379,7 @@ class RestHelper(object):
             except Exception:
                 LOG.info("Not IP, Don't need to standardized")
                 continue
+        return None
 
     def get_share_access_by_id(self, share_id, share_proto, vstore_id):
         accesses = self.get_all_share_access(share_id, share_proto, vstore_id)
@@ -416,7 +422,7 @@ class RestHelper(object):
         result = self.call(url, "GET", data)
 
         _assert_result(result, 'Get access count of share %s error.', share_id)
-        return int(result['data']['COUNT'])
+        return int(result.get('data', {}).get('COUNT'))
 
     def _get_share_access_by_range(self, share_id, share_proto,
                                    query_range, vstore_id=None):
@@ -455,7 +461,7 @@ class RestHelper(object):
             url = "/NFS_SHARE_AUTH_CLIENT/%s" % access_id
             access = {"ACCESSVAL": access_level}
         elif share_proto == 'CIFS':
-            url = "/CIFS_SHARE_AUTH_CLIENT/" + access_id
+            url = "/CIFS_SHARE_AUTH_CLIENT/%s" % access_id
             access = {"PERMISSION": access_level}
         else:
             msg = self._invalid_nas_protocol(share_proto)
@@ -555,10 +561,10 @@ class RestHelper(object):
         return False
 
     def get_snapshot_by_id(self, snap_id):
-        url = "/FSSNAPSHOT/" + snap_id
+        url = "/FSSNAPSHOT/%s" % snap_id
         result = self.call(url, "GET")
         _assert_result(result, 'Get snapshot by id %s error.', snap_id)
-        return result['data']
+        return result.get('data')
 
     def delete_snapshot(self, snap_id):
         url = "/FSSNAPSHOT/%s" % snap_id
@@ -576,14 +582,14 @@ class RestHelper(object):
         }
         result = self.call("/FSSNAPSHOT", "POST", data)
         _assert_result(result, 'Create snapshot %s error.', data)
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def get_share_by_name(self, share_name, share_proto,
                           vstore_id=None, need_replace=True):
-        if share_proto == 'NFS':
+        if share_proto == constants.NFS_SHARE_PROTO:
             share_path = huawei_utils.share_path(share_name, need_replace)
             url = "/NFSHARE?filter=SHAREPATH::%s&range=[0-100]" % share_path
-        elif share_proto == 'CIFS':
+        elif share_proto == constants.CIFS_SHARE_PROTO:
             cifs_share = huawei_utils.share_name(share_name)\
                 if need_replace else share_name
             url = "/CIFSHARE?filter=NAME:%s&range=[0-100]" % cifs_share
@@ -595,21 +601,21 @@ class RestHelper(object):
         result = self.call(url, "GET", data)
         if _error_code(result) == constants.SHARE_PATH_INVALID:
             LOG.warning('Share %s not exist.', share_name)
-            return
+            return None
 
         _assert_result(result, 'Get share by name %s error.', share_name)
 
         # for CIFS, if didn't get share by NAME, try DESCRIPTION
-        if share_proto == 'CIFS' and not result.get('data'):
+        if share_proto == constants.CIFS_SHARE_PROTO and not result.get(constants.DATA_KEY):
             url = "/CIFSHARE?filter=DESCRIPTION:%s&range=[0-100]" % share_name
             result = self.call(url, "GET", data)
 
-        if share_proto == 'CIFS' and result.get('data'):
-            for data in result.get('data'):
+        if share_proto == constants.CIFS_SHARE_PROTO and result.get(constants.DATA_KEY):
+            for data in result.get(constants.DATA_KEY):
                 if data.get('NAME') == cifs_share:
                     return data
 
-        for data in result.get('data', []):
+        for data in result.get(constants.DATA_KEY, []):
             return data
 
     def get_fs_info_by_name(self, name):
@@ -625,9 +631,9 @@ class RestHelper(object):
         result = self.call(url, "GET")
         if _error_code(result) == constants.FILESYSTEM_NOT_EXIST:
             LOG.warning("Filesystem %s does not exist.", fs_id)
-            return
+            return None
         _assert_result(result, "Get filesystem by id %s error.", fs_id)
-        return result['data']
+        return result.get('data')
 
     def update_filesystem(self, fs_id, params):
         url = "/filesystem/%s" % fs_id
@@ -643,27 +649,29 @@ class RestHelper(object):
             return data.get('ID')
 
     def get_partition_info_by_id(self, partitionid):
-        url = '/cachepartition/' + partitionid
+        url = '/cachepartition/%s' % partitionid
         result = self.call(url, "GET")
         _assert_result(result, 'Get partition by id %s error.', partitionid)
-        return result['data']
+        return result.get('data')
 
     def add_fs_to_partition(self, fs_id, partition_id):
         url = "/smartPartition/addFs"
-        data = {"ID": partition_id,
-                "ASSOCIATEOBJTYPE": 40,
-                "ASSOCIATEOBJID": fs_id,
-                }
+        data = {
+            "ID": partition_id,
+            "ASSOCIATEOBJTYPE": 40,
+            "ASSOCIATEOBJID": fs_id,
+        }
         result = self.call(url, "PUT", data)
         _assert_result(result, 'Add FS %s to partition %s error.',
                        fs_id, partition_id)
 
     def remove_fs_from_partition(self, fs_id, partition_id):
         url = "/smartPartition/removeFs"
-        data = {"ID": partition_id,
-                "ASSOCIATEOBJTYPE": 40,
-                "ASSOCIATEOBJID": fs_id,
-                }
+        data = {
+            "ID": partition_id,
+            "ASSOCIATEOBJTYPE": 40,
+            "ASSOCIATEOBJID": fs_id,
+        }
         result = self.call(url, "PUT", data)
         _assert_result(result, 'Remove FS %s from partition %s error.',
                        fs_id, partition_id)
@@ -682,27 +690,29 @@ class RestHelper(object):
             return data.get("ID")
 
     def get_cache_info_by_id(self, cacheid):
-        url = "/SMARTCACHEPARTITION/" + cacheid
+        url = "/SMARTCACHEPARTITION/%s" % cacheid
         result = self.call(url, "GET")
         _assert_result(result, 'Get smartcache by id %s error.', cacheid)
-        return result['data']
+        return result.get('data')
 
     def add_fs_to_cache(self, fs_id, cache_id):
         url = "/SMARTCACHEPARTITION/CREATE_ASSOCIATE"
-        data = {"ID": cache_id,
-                "ASSOCIATEOBJTYPE": 40,
-                "ASSOCIATEOBJID": fs_id,
-                }
+        data = {
+            "ID": cache_id,
+            "ASSOCIATEOBJTYPE": 40,
+            "ASSOCIATEOBJID": fs_id,
+        }
         result = self.call(url, "PUT", data)
         _assert_result(result, 'Add FS %s to cache %s error.',
                        fs_id, cache_id)
 
     def remove_fs_from_cache(self, fs_id, cache_id):
         url = "/SMARTCACHEPARTITION/REMOVE_ASSOCIATE"
-        data = {"ID": cache_id,
-                "ASSOCIATEOBJTYPE": 40,
-                "ASSOCIATEOBJID": fs_id,
-                }
+        data = {
+            "ID": cache_id,
+            "ASSOCIATEOBJTYPE": 40,
+            "ASSOCIATEOBJID": fs_id,
+        }
         result = self.call(url, "PUT", data)
         _assert_result(result, 'Remove FS %s from cache %s error.',
                        fs_id, cache_id)
@@ -723,24 +733,27 @@ class RestHelper(object):
     def create_qos(self, qos, fs_id, vstore_id):
         localtime = time.strftime('%Y%m%d%H%M%S', time.localtime())
         qos_name = constants.QOS_NAME_PREFIX + fs_id + '_' + localtime
-        data = {"NAME": qos_name,
-                "FSLIST": [fs_id],
-                "CLASSTYPE": "1",
-                "SCHEDULEPOLICY": "1",
-                "SCHEDULESTARTTIME": "1410969600",
-                "STARTTIME": "00:00",
-                "DURATION": "86400",
-                "vstoreId": vstore_id,
-                }
+        data = {
+            "NAME": qos_name,
+            "FSLIST": [fs_id],
+            "CLASSTYPE": "1",
+            "SCHEDULEPOLICY": "1",
+            "SCHEDULESTARTTIME": "1410969600",
+            "STARTTIME": "00:00",
+            "DURATION": "86400",
+            "vstoreId": vstore_id,
+        }
         data.update(qos)
         result = self.call("/ioclass", 'POST', data)
         _assert_result(result, 'Create QoS %s error.', data)
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def activate_deactivate_qos(self, qos_id, enable_status):
         url = "/ioclass/active"
-        data = {"ID": qos_id,
-                "ENABLESTATUS": enable_status}
+        data = {
+            "ID": qos_id,
+            "ENABLESTATUS": enable_status
+        }
         result = self.call(url, "PUT", data)
         _assert_result(result, 'Activate or deactivate QoS %s error.', qos_id)
 
@@ -753,7 +766,7 @@ class RestHelper(object):
         url = "/ioclass/%s" % qos_id
         result = self.call(url, "GET")
         _assert_result(result, 'Get QoS info by id %s error.', qos_id)
-        return result['data']
+        return result.get('data')
 
     def get_all_eth_port(self):
         result = self.call("/eth_port", 'GET')
@@ -789,13 +802,14 @@ class RestHelper(object):
         return False, None
 
     def create_vlan(self, port_id, port_type, vlan_tag):
-        data = {"PORTID": port_id,
-                "PORTTYPE": port_type,
-                "TAG": vlan_tag,
-                }
+        data = {
+            "PORTID": port_id,
+            "PORTTYPE": port_type,
+            "TAG": vlan_tag,
+        }
         result = self.call("/vlan", "POST", data)
         _assert_result(result, 'Create vlan %s error.', data)
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def delete_vlan(self, vlan_id):
         url = "/vlan/%s" % vlan_id
@@ -816,7 +830,7 @@ class RestHelper(object):
             return data.get('ID')
 
     def _activate_logical_port(self, logical_port_id):
-        url = "/LIF/" + logical_port_id
+        url = "/LIF/%s" % logical_port_id
         data = jsonutils.dumps({"OPERATIONALSTATUS": "true"})
         result = self.call(url, 'PUT', data)
         _assert_result(result, _('Activate logical port error.'))
@@ -852,7 +866,7 @@ class RestHelper(object):
     def create_logical_port(self, params):
         result = self.call("/LIF", 'POST', params)
         _assert_result(result, 'Create logical port %s error.', params)
-        return result['data']['ID']
+        return result.get('data', {}).get('ID')
 
     def get_all_logical_port(self):
         result = self.call("/LIF", 'GET')
@@ -867,10 +881,12 @@ class RestHelper(object):
 
     def modify_logical_port(self, logical_port_id, vstore_id):
         logical_port_info = self.get_logical_port_by_id(logical_port_id)
-        data = {'vstoreId': vstore_id,
-                'dnsZoneName': "",
-                'NAME': logical_port_info.get('NAME'),
-                'ID': logical_port_info.get('ID')}
+        data = {
+            'vstoreId': vstore_id,
+            'dnsZoneName': "",
+            'NAME': logical_port_info.get('NAME'),
+            'ID': logical_port_info.get('ID')
+        }
         url = "/LIF/%s" % logical_port_id
         result = self.call(url, 'PUT', data)
         if result['error']['code'] == constants.LIF_ALREADY_EXISTS:
@@ -902,21 +918,24 @@ class RestHelper(object):
         _assert_result(result, 'Get DNS ip address error.')
         if 'data' in result:
             return json.loads(result['data']['ADDRESS'])
+        return None
 
     def add_ad_config(self, user, password, domain):
-        info = {"DOMAINSTATUS": 1,
-                "ADMINNAME": user,
-                "ADMINPWD": password,
-                "FULLDOMAINNAME": domain,
-                }
+        info = {
+            "DOMAINSTATUS": 1,
+            "ADMINNAME": user,
+            "ADMINPWD": password,
+            "FULLDOMAINNAME": domain,
+        }
         result = self.call("/AD_CONFIG", 'PUT', info)
         _assert_result(result, 'Add AD config %s error.', info)
 
     def delete_ad_config(self, user, password):
-        info = {"DOMAINSTATUS": 0,
-                "ADMINNAME": user,
-                "ADMINPWD": password,
-                }
+        info = {
+            "DOMAINSTATUS": 0,
+            "ADMINNAME": user,
+            "ADMINPWD": password,
+        }
         result = self.call("/AD_CONFIG", 'PUT', info)
         _assert_result(result, 'Delete AD config %s error.', info)
 
@@ -926,11 +945,12 @@ class RestHelper(object):
         return result.get('data')
 
     def add_ldap_config(self, server, domain):
-        info = {"BASEDN": domain,
-                "LDAPSERVER": server,
-                "PORTNUM": 389,
-                "TRANSFERTYPE": "1",
-                }
+        info = {
+            "BASEDN": domain,
+            "LDAPSERVER": server,
+            "PORTNUM": 389,
+            "TRANSFERTYPE": "1",
+        }
         result = self.call("/LDAP_CONFIG", 'PUT', info)
         _assert_result(result, 'Add LDAP config %s error.', info)
 
@@ -949,7 +969,7 @@ class RestHelper(object):
     def get_array_wwn(self):
         result = self.call("/system/", "GET")
         _assert_result(result, 'Get array info error.')
-        return result['data']['wwn']
+        return result.get('data', {}).get('wwn')
 
     def get_remote_device_by_wwn(self, wwn):
         result = self.call("/remote_device", "GET")
@@ -957,11 +977,12 @@ class RestHelper(object):
         for device in result.get('data', []):
             if device.get('WWN') == wwn:
                 return device
+        return None
 
     def create_replication_pair(self, params):
         result = self.call("/REPLICATIONPAIR", "POST", params)
         _assert_result(result, 'Create replication pair %s error.', params)
-        return result['data']
+        return result.get('data')
 
     def split_replication_pair(self, pair_id):
         data = {"ID": pair_id}
@@ -1012,7 +1033,7 @@ class RestHelper(object):
         return result.get('data', {})
 
     def get_replication_pair_by_localres_name(self, local_res):
-        url = "/REPLICATIONPAIR?filter=LOCALRESNAME::" + local_res
+        url = "/REPLICATIONPAIR?filter=LOCALRESNAME::%s" % local_res
         result = self.call(url, "GET")
         _assert_result(result, 'Get replication pair by local resource '
                                'name %s error.', local_res)
@@ -1034,7 +1055,7 @@ class RestHelper(object):
         url = '/vstore_pair/%s' % pair_id
         result = self.call(url, 'GET')
         _assert_result(result, 'Get vstore pair info %s error.', pair_id)
-        return result['data']
+        return result.get('data')
 
     def rollback_snapshot(self, snap_id):
         data = {"ID": snap_id}
@@ -1048,6 +1069,7 @@ class RestHelper(object):
         for con in result.get('data', []):
             if con.get('LOCATION') == controller_name:
                 return con.get("ID")
+        return None
 
     def _get_filesystem_split_url_data(self, fs_id):
         """
@@ -1061,10 +1083,11 @@ class RestHelper(object):
         # Extracts numbers from point_release
         release_version = "".join(re.findall(r"\d+", point_release))
         url = "/filesystem_split_switch"
-        data = {"ID": fs_id,
-                "SPLITENABLE": True,
-                "SPLITSPEED": 4,
-                }
+        data = {
+            "ID": fs_id,
+            "SPLITENABLE": True,
+            "SPLITSPEED": 4,
+        }
         if release_version >= constants.SUPPORT_CLONE_FS_SPLIT_VERSION:
             url = "/clone_fs_split"
             data = {
@@ -1083,7 +1106,7 @@ class RestHelper(object):
     def create_hypermetro_pair(self, params):
         result = self.call("/HyperMetroPair", "POST", params)
         _assert_result(result, 'Create HyperMetro pair %s error.', params)
-        return result['data']
+        return result.get('data')
 
     def get_hypermetro_pair_by_id(self, pair_id):
         url = "/HyperMetroPair?filter=ID::%s" % pair_id
@@ -1093,8 +1116,10 @@ class RestHelper(object):
             return data
 
     def suspend_hypermetro_pair(self, pair_id):
-        params = {"ID": pair_id,
-                  "ISPRIMARY": False}
+        params = {
+            "ID": pair_id,
+            "ISPRIMARY": False
+        }
         url = "/HyperMetroPair/disable_hcpair"
         result = self.call(url, "PUT", params)
         _assert_result(result, 'Suspend HyperMetro pair %s error.', pair_id)
@@ -1117,6 +1142,7 @@ class RestHelper(object):
         for item in domain_list:
             if item.get("NAME") == domain_name:
                 return item.get("ID")
+        return None
 
     def _get_hypermetro_domain(self, start, end, params):
         url = ("/HyperMetroDomain?range=[%(start)s-%(end)s]"
@@ -1132,6 +1158,7 @@ class RestHelper(object):
         for item in result.get("data", []):
             if item.get("NAME") == domain_name:
                 return item
+        return None
 
     def get_hypermetro_vstore_id(self, domain_name, local_vstore_name,
                                  remote_vstore_name):
@@ -1154,7 +1181,7 @@ class RestHelper(object):
         url = "/vstore_pair/%s" % vstore_pair_id
         result = self.call(url, 'GET', data=None, log_filter=True)
         _assert_result(result, "Get vstore_pair info by id error.")
-        return result["data"]
+        return result.get("data")
 
     def get_array_info(self):
         url = "/system/"

@@ -75,7 +75,7 @@ LOG = log.getLogger(__name__)
 
 
 class HuaweiNasDriver(driver.ShareDriver):
-    VERSION = "2.6.3"
+    VERSION = "2.7.4"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiNasDriver, self).__init__((True, False), *args, **kwargs)
@@ -91,6 +91,8 @@ class HuaweiNasDriver(driver.ShareDriver):
         self.vstore_pair_id = None
         self.ipv6_implemented = False
         self.is_dorado_v6 = None
+        self.metro_logic_ip = None
+        self.rpc_server = None
 
         self.replica_mgr = replication.ReplicaPairManager(self.helper)
         self.metro_mgr = hypermetro.HyperPairManager(self.helper,
@@ -366,6 +368,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                 raise exception.ShareResourceNotFound(reason=msg)
             metro_id = metro_id[0]
             return metro_id
+        return None
 
     @staticmethod
     def _get_replica_id_from_fs_info(fs_info):
@@ -378,6 +381,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                 raise exception.ShareResourceNotFound(reason=msg)
             replica_id = replica_ids[0]
             return replica_id
+        return None
 
     def _delete_metro_filesystem(self, context, fs_id, fs_info):
         metro_id = self._get_metro_id_from_fs_info(fs_info)
@@ -392,9 +396,8 @@ class HuaweiNasDriver(driver.ShareDriver):
         try:
             self.metro_mgr.delete_metro_pair(metro_id=metro_id)
         except Exception as err:
-            msg = (_("Failed to delete HyperMetro filesystem pair "
-                     "%(metro_id)s. Reason: %(err)s")
-                   % {"metro_id": metro_id, "err": err})
+            msg = (_("Failed to delete HyperMetro filesystem pair %(metro_id)s. Reason: %(err)s") %
+                   {"metro_id": metro_id, "err": err})
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
@@ -403,27 +406,27 @@ class HuaweiNasDriver(driver.ShareDriver):
         try:
             remote_vstore_id = vstore_info.get('REMOTEVSTOREID')
             if remote_vstore_id:
-                params = {"ID": remote_fs_id, 'vstoreId': remote_vstore_id}
+                params = {constants.ID: remote_fs_id, 'vstoreId': remote_vstore_id}
             else:
-                params = {"ID": remote_fs_id}
+                params = {constants.ID: remote_fs_id}
             self.rpc_client.delete_remote_filesystem(
                 context, self.remote_backend, params)
         except Exception as err:
-            msg = (_("Failed to delete remote filesystem %(fs_id)s. "
-                     "Reason: %(err)s") % {"fs_id": remote_fs_id, "err": err})
+            msg = (_("Failed to delete remote filesystem %(fs_id)s. Reason: %(err)s") %
+                   {"fs_id": fs_id, "err": err})
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
         try:
             local_vstore_id = vstore_info.get('LOCALVSTOREID')
             if local_vstore_id:
-                params = {"ID": fs_id, 'vstoreId': local_vstore_id}
+                params = {constants.ID: fs_id, 'vstoreId': local_vstore_id}
             else:
-                params = {"ID": fs_id}
+                params = {constants.ID: fs_id}
             self.helper.delete_filesystem(params)
         except Exception as err:
-            msg = (_("Failed to delete local filesystem %(fs_id)s. "
-                     "Reason: %(err)s") % {"fs_id": fs_id, "err": err})
+            msg = (_("Failed to delete local filesystem %(fs_id)s. Reason: %(err)s") %
+                   {"fs_id": fs_id, "err": err})
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
@@ -436,7 +439,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                 raise exception.StorageResourceNotFound(name=fs_id)
             else:
                 LOG.warning(msg)
-                return
+                return None
         return fs_info
 
     def _delete_filesystem(self, fs_id, context=None, metro=True):
@@ -641,7 +644,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                 raise exception.StorageResourceNotFound(name=share_name)
             else:
                 LOG.warning(msg)
-                return
+                return None
         return fs_info
 
     def _get_share_info(self, share_name, share_proto,
@@ -663,7 +666,8 @@ class HuaweiNasDriver(driver.ShareDriver):
     def extend_share(self, share, new_size, share_server=None):
         share_name = share['name']
         share_proto = share['share_proto']
-        fs_info, __ = self._get_fs_info_with_check(share_name, share_proto)
+        fs_info, share_info = self._get_fs_info_with_check(share_name, share_proto)
+        LOG.debug("Extend share,the fs info:%s, share info: %s", fs_info, share_info)
         size = new_size * constants.CAPACITY_UNIT
         params = {"CAPACITY": size}
         self._update_filesystem(fs_info, params)
@@ -671,7 +675,8 @@ class HuaweiNasDriver(driver.ShareDriver):
     def shrink_share(self, share, new_size, share_server=None):
         share_name = share['name']
         share_proto = share['share_proto']
-        fs_info, __ = self._get_fs_info_with_check(share_name, share_proto)
+        fs_info, share_info = self._get_fs_info_with_check(share_name, share_proto)
+        LOG.debug("Shrink share,the fs info:%s, share info: %s", fs_info, share_info)
         fs_id = fs_info['ID']
         size = new_size * constants.CAPACITY_UNIT
         used_size = int(fs_info['MINSIZEFSCAPACITY'])
@@ -691,17 +696,17 @@ class HuaweiNasDriver(driver.ShareDriver):
         return self.helper.create_snapshot(fs_info['ID'], snapshot_name)
 
     def create_snapshot(self, context, snapshot, share_server=None):
-        fs_info = self._get_fs_info_by_name(snapshot['share_name'])
+        fs_info = self._get_fs_info_by_name(snapshot[constants.SHARE_NAME])
         if self._is_dorado_v6_hypermetro_filesystem_not_active(fs_info):
             snapshot_id = self.rpc_client.create_hypermetro_snapshot(
-                context, snapshot['share_name'], snapshot['name'],
+                context, snapshot[constants.SHARE_NAME], snapshot['name'],
                 self.remote_backend)
         else:
             snapshot_id = self.helper.create_snapshot(fs_info['ID'],
                                                       snapshot['name'])
         LOG.info("Create snapshot %(snapshot)s from share %(share)s "
                  "successfully.", {"snapshot": snapshot["id"],
-                                   "share": snapshot['share_name']})
+                                   "share": snapshot[constants.SHARE_NAME]})
         return {'provider_location': snapshot_id}
 
     def rpc_delete_hypermetro_snapshot(self, context, share_name,
@@ -712,16 +717,16 @@ class HuaweiNasDriver(driver.ShareDriver):
         self.helper.delete_snapshot(snapshot_id)
 
     def delete_snapshot(self, context, snapshot, share_server=None):
-        fs_info = self._get_fs_info_by_name(snapshot['share_name'],
+        fs_info = self._get_fs_info_by_name(snapshot[constants.SHARE_NAME],
                                             raise_exception=False)
         if not fs_info:
             LOG.error("The filestsyetm %s is not exist, return success.",
-                      snapshot['share_name'])
+                      snapshot[constants.SHARE_NAME])
             return
 
         if self._is_dorado_v6_hypermetro_filesystem_not_active(fs_info):
             self.rpc_client.delete_hypermetro_snapshot(context,
-                                                       snapshot['share_name'],
+                                                       snapshot[constants.SHARE_NAME],
                                                        snapshot['name'],
                                                        self.remote_backend)
             LOG.info("Delete snapshot %(snapshot)s successfully.",
@@ -732,11 +737,11 @@ class HuaweiNasDriver(driver.ShareDriver):
         if provider_location and '@' in provider_location:
             snapshot_id = provider_location
         else:
-            fs_info = self._get_fs_info_by_name(snapshot['share_name'],
+            fs_info = self._get_fs_info_by_name(snapshot[constants.SHARE_NAME],
                                                 raise_exception=False)
             if not fs_info:
                 LOG.error("The filestsyetm %s is not exist, return success.",
-                          snapshot['share_name'])
+                          snapshot[constants.SHARE_NAME])
                 return
 
             snapshot_id = huawei_utils.snapshot_id(fs_info['ID'],
@@ -754,21 +759,21 @@ class HuaweiNasDriver(driver.ShareDriver):
                                         constants.AVAILABLE_FEATURE_STATUS)
 
         if self.is_dorado_v6:
-            self.feature_supports['SmartDedup'] = True
-            self.feature_supports['SmartCompression'] = True
+            self.feature_supports[constants.SMART_DEDUP] = True
+            self.feature_supports[constants.SMART_COMPRESSION] = True
             self.feature_supports['FilesystemMode'] = True
         else:
-            self.feature_supports['SmartDedup'] = False
-            self.feature_supports['SmartCompression'] = False
+            self.feature_supports[constants.SMART_DEDUP] = False
+            self.feature_supports[constants.SMART_COMPRESSION] = False
             self.feature_supports['FilesystemMode'] = False
 
         for f in feature_status:
             if re.match('SmartDedup[\s\S]*FS', f):
-                self.feature_supports['SmartDedup'] = (
+                self.feature_supports[constants.SMART_DEDUP] = (
                         feature_status[
                             f] in constants.AVAILABLE_FEATURE_STATUS)
             if re.match('SmartCompression[\s\S]*FS', f):
-                self.feature_supports['SmartCompression'] = (
+                self.feature_supports[constants.SMART_COMPRESSION] = (
                         feature_status[
                             f] in constants.AVAILABLE_FEATURE_STATUS)
 
@@ -824,26 +829,27 @@ class HuaweiNasDriver(driver.ShareDriver):
                 'reserved_percentage': 0,
                 'reserved_snapshot_percentage': 0,
                 'reserved_share_extend_percentage': 0,
-                'qos': [self.feature_supports['SmartQoS'], False],
+                'qos': [self.feature_supports.get('SmartQoS'), False],
                 'huawei_smartcache':
-                    [self.feature_supports['SmartCache'], False],
+                    [self.feature_supports.get('SmartCache'), False],
                 'huawei_smartpartition':
-                    [self.feature_supports['SmartPartition'], False],
-                'dedupe': [self.feature_supports['SmartDedup'], False],
+                    [self.feature_supports.get('SmartPartition'), False],
+                'dedupe': [self.feature_supports.get('SmartDedup'), False],
                 'compression':
-                    [self.feature_supports['SmartCompression'], False],
+                    [self.feature_supports.get('SmartCompression'), False],
                 'huawei_disk_type': disk_type,
                 'filesystem_mode': self.feature_supports['FilesystemMode']
             }
 
             if self.configuration.nas_product != "Dorado":
                 pool['thin_provisioning'] = [
-                    self.feature_supports['SmartThin'], False]
+                    self.feature_supports.get('SmartThin'), False
+                ]
             else:
                 pool['thin_provisioning'] = True
 
             if self.metro_domain and self._check_is_active_client():
-                pool['hypermetro'] = self.feature_supports['HyperMetro']
+                pool['hypermetro'] = self.feature_supports.get('HyperMetro')
             else:
                 pool['hypermetro'] = False
 
@@ -860,21 +866,21 @@ class HuaweiNasDriver(driver.ShareDriver):
             'vendor_name': 'Huawei',
             'driver_version': self.VERSION,
             'storage_protocol': 'NFS_CIFS',
-            'snapshot_support': (self.feature_supports['HyperSnap']
+            constants.SNAPSHOT_SUPPORT: (self.feature_supports.get('HyperSnap')
                                  and self.configuration.snapshot_support),
             'ipv6_support': self.ipv6_implemented,
         }
 
-        data['revert_to_snapshot_support'] = data['snapshot_support']
+        data['revert_to_snapshot_support'] = data[constants.SNAPSHOT_SUPPORT]
 
         # Except Dorado V6 NAS, Huawei storage doesn't support snapshot
         # replication, so driver can't create replicated snapshot, this's
         # not fit the requirement of Manila replication feature.
         # To avoid this problem, we specify Huawei driver can't support
         # snapshot and replication both, as a workaround.
-        if (self.feature_supports['HyperReplication'] and
+        if (self.feature_supports.get('HyperReplication') and
                 self.configuration.replication_support):
-            if self.is_dorado_v6 or not data['snapshot_support']:
+            if self.is_dorado_v6 or not data[constants.SNAPSHOT_SUPPORT]:
                 data['replication_type'] = 'dr'
 
         data['pools'] = self._update_pool_info()
@@ -1051,8 +1057,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                                       share_server=None):
         src_share_proto = self._get_share_proto(snapshot)
         src_share_name = snapshot['share_name']
-        src_share = {'name': src_share_name,
-                     'share_proto': src_share_proto}
+        src_share = {constants.NAME_KEY: src_share_name, constants.SHARE_PROTO: src_share_proto}
         src_export_paths = self._get_export_location(
             src_share_name, src_share_proto, share_server)
         src_access = self._get_access_for_share_copy(src_share)
@@ -1073,21 +1078,21 @@ class HuaweiNasDriver(driver.ShareDriver):
             self.allow_access(context, dst_share, dst_access)
         except Exception:
             LOG.exception('Failed to add access to dst share %s for copy.',
-                          dst_share['name'])
+                          dst_share[constants.NAME_KEY])
             self.deny_access(context, src_share, src_access)
             raise
 
         src_mount_dir = tempfile.mkdtemp(prefix=constants.TMP_PATH_SRC_PREFIX)
         dst_mount_dir = tempfile.mkdtemp(prefix=constants.TMP_PATH_DST_PREFIX)
         src_share_info = {
-            "share_proto": src_share_proto,
+            constants.SHARE_PROTO: src_share_proto,
             "access": src_access,
             "export_location": src_export_paths,
             "mount_dir": src_mount_dir,
         }
 
         dst_share_info = {
-            "share_proto": dst_share['share_proto'],
+            constants.SHARE_PROTO: dst_share[constants.SHARE_PROTO],
             "access": dst_access,
             "export_location": dst_export_paths,
             "mount_dir": dst_mount_dir,
@@ -1095,7 +1100,7 @@ class HuaweiNasDriver(driver.ShareDriver):
 
         try:
             self._copy_share_data(src_share_info, dst_share_info,
-                                  snapshot['name'])
+                                  snapshot[constants.NAME_KEY])
         except Exception:
             LOG.exception('Copy share data from %(src)s to %(dst)s error.',
                           {'src': src_export_paths, 'dst': dst_export_paths})
@@ -1175,8 +1180,7 @@ class HuaweiNasDriver(driver.ShareDriver):
             else:
                 user = 'username=%s,password=%s' % (
                     access['access_to'], access['access_password'])
-                exe_args = ('mount', '-t', 'cifs', path, mount_dir,
-                            '-o', user)
+                exe_args = ('mount', '-t', 'cifs', path, mount_dir, '-o', user)
 
             try:
                 utils.execute(*exe_args, run_as_root=True)
@@ -1186,8 +1190,10 @@ class HuaweiNasDriver(driver.ShareDriver):
             else:
                 return
 
-        msg = ("Cannot mount share %(share)s to dir %(dir)s.",
-               {'share': export_paths, 'dir': mount_dir})
+        msg = (
+            "Cannot mount share %(share)s to dir %(dir)s.",
+            {'share': export_paths, 'dir': mount_dir}
+        )
         LOG.error(msg)
         raise exception.ShareMountException(reason=msg)
 
@@ -1197,8 +1203,9 @@ class HuaweiNasDriver(driver.ShareDriver):
         access_to = params['access_to']
         access_level = params['access_level']
         access_type = params['access_type']
-        if (share_proto == 'NFS' and access_type not in ('ip', 'user')
-                or share_proto == 'CIFS' and access_type != 'user'):
+        is_nfs_access = (share_proto == 'NFS' and access_type not in ('ip', 'user'))
+        is_cifs_access = (share_proto == 'CIFS' and access_type != 'user')
+        if is_nfs_access or is_cifs_access:
             LOG.warning('Access type invalid for %s share.', share_proto)
             return
         if share_proto == 'NFS':
@@ -1226,18 +1233,20 @@ class HuaweiNasDriver(driver.ShareDriver):
         self.helper.remove_access(access['ID'], share_proto, vstore_id)
 
     def deny_access(self, context, share, access, share_server=None):
-        share_name = share['name']
+        share_name = share[constants.NAME_KEY]
         share_proto = share['share_proto']
         access_to, access_type, access_level = huawei_utils.get_access_info(
             access)
-        params = {"name": share_name,
-                  "share_proto": share_proto,
-                  "access_to": access_to,
-                  "access_level": access_level,
-                  "access_type": access_type}
+        params = {
+            constants.NAME_KEY: share_name,
+            "share_proto": share_proto,
+            "access_to": access_to,
+            "access_level": access_level,
+            "access_type": access_type
+        }
         fs_info = self.helper.get_fs_info_by_name(share_name)
         if not fs_info:
-            LOG.warning("FS %s is not exist.", share['name'])
+            LOG.warning("FS %s is not exist.", share[constants.NAME_KEY])
             return
         if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
             self.rpc_client.get_remote_fs_info(
@@ -1304,12 +1313,14 @@ class HuaweiNasDriver(driver.ShareDriver):
         share_proto = share['share_proto']
         access_to, access_type, access_level = huawei_utils.get_access_info(
             access)
-        params = {"name": share_name,
-                  "share_proto": share_proto,
-                  "access_to": access_to,
-                  "access_type": access_type,
-                  "access_level": access_level,
-                  "share_type_id": share.get("share_type_id")}
+        params = {
+            "name": share_name,
+            "share_proto": share_proto,
+            "access_to": access_to,
+            "access_type": access_type,
+            "access_level": access_level,
+            "share_type_id": share.get("share_type_id")
+        }
         fs_info = self._get_fs_info_by_name(share_name)
         if json.loads(fs_info.get('HYPERMETROPAIRIDS')):
             self.rpc_client.get_remote_fs_info(
@@ -1388,6 +1399,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         fs_info = self.helper.get_fs_info_by_name(share['name'])
         if fs_info:
             return fs_info['PARENTNAME']
+        return None
 
     def manage_existing(self, share, driver_options):
         share_proto = share['share_proto']
@@ -1425,15 +1437,15 @@ class HuaweiNasDriver(driver.ShareDriver):
         pool_name = share_utils.extract_host(share['host'], level='pool')
         if pool_name and pool_name != fs_info['PARENTNAME']:
             msg = _("FS %(name)s pool is inconsistent with %(pool)s."
-                    ) % {'name': old_share_name, 'pool': pool_name}
+                    ) % {constants.NAME_KEY: old_share_name, 'pool': pool_name}
             LOG.error(msg)
             raise exception.InvalidShare(reason=msg)
 
         opts = huawei_utils.get_share_extra_specs_params(
             share['share_type_id'], self.is_dorado_v6)
-        if 'LUNType' in opts and fs_info['ALLOCTYPE'] != opts['LUNType']:
+        if constants.LUN_TYPE in opts and fs_info['ALLOCTYPE'] != opts[constants.LUN_TYPE]:
             msg = _("FS %(name)s type is inconsistent with %(type)s."
-                    ) % {'name': old_share_name, 'type': opts['LUNType']}
+                    ) % {constants.NAME_KEY: old_share_name, 'type': opts[constants.LUN_TYPE]}
             LOG.error(msg)
             raise exception.InvalidShare(reason=msg)
 
@@ -1443,64 +1455,66 @@ class HuaweiNasDriver(driver.ShareDriver):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        share_params = {'DESCRIPTION': share['name']}
+        share_params = {'DESCRIPTION': share[constants.NAME_KEY]}
         self.helper.update_share(share_info['ID'], share_proto, share_params)
-        share_size = self._retype_filesystem(opts, fs_info, share['name'])
+        share_size = self._retype_filesystem(opts, fs_info, share[constants.NAME_KEY])
 
-        locations = self._get_export_location(share['name'], share_proto, None)
+        locations = self._get_export_location(share[constants.NAME_KEY], share_proto, None)
         return {'size': share_size, 'export_locations': locations}
 
     def _change_smart_partition(self, fs_info, fs_id, new_opts):
         if new_opts['huawei_smartpartition']:
-            if fs_info['CACHEPARTITIONID']:
+            if fs_info[constants.CACHE_PARTITION_ID]:
                 self.smart_partition.update(fs_id, new_opts['partitionname'],
-                                            fs_info['CACHEPARTITIONID'])
+                                            fs_info[constants.CACHE_PARTITION_ID])
             else:
                 self.smart_partition.add(new_opts['partitionname'], fs_id)
-        elif fs_info['CACHEPARTITIONID']:
-            self.smart_partition.remove(fs_id, fs_info['CACHEPARTITIONID'])
+        elif fs_info[constants.CACHE_PARTITION_ID]:
+            self.smart_partition.remove(fs_id, fs_info[constants.CACHE_PARTITION_ID])
 
     def _change_smart_cache(self, fs_info, fs_id, new_opts):
         if new_opts['huawei_smartcache']:
-            if fs_info['SMARTCACHEPARTITIONID']:
+            if fs_info[constants.SMARTCACHE_PARTITION_ID]:
                 self.smart_cache.update(fs_id, new_opts['cachename'],
-                                        fs_info['SMARTCACHEPARTITIONID'])
+                                        fs_info[constants.SMARTCACHE_PARTITION_ID])
             else:
                 self.smart_cache.add(new_opts['cachename'], fs_id)
-        elif fs_info['SMARTCACHEPARTITIONID']:
-            self.smart_cache.remove(fs_id, fs_info['SMARTCACHEPARTITIONID'])
+        elif fs_info[constants.SMARTCACHE_PARTITION_ID]:
+            self.smart_cache.remove(fs_id, fs_info[constants.SMARTCACHE_PARTITION_ID])
 
     def _change_smart_qos(self, fs_info, fs_id, new_opts):
-        if new_opts['qos']:
-            if fs_info['IOCLASSID']:
-                self.smart_qos.update(fs_id, new_opts['qos'],
-                                      fs_info['IOCLASSID'])
+        qos_key = 'qos'
+        if new_opts[qos_key]:
+            if fs_info[constants.QOS_IOCLASSID_KEY]:
+                self.smart_qos.update(fs_id, new_opts[qos_key],
+                                      fs_info[constants.QOS_IOCLASSID_KEY])
             else:
-                self.smart_qos.add(new_opts['qos'], fs_id)
-        elif fs_info['IOCLASSID']:
-            self.smart_qos.remove(fs_id, fs_info['IOCLASSID'])
+                self.smart_qos.add(new_opts[qos_key], fs_id)
+        elif fs_info[constants.QOS_IOCLASSID_KEY]:
+            self.smart_qos.remove(fs_id, fs_info[constants.QOS_IOCLASSID_KEY])
 
     def _change_filesystem(self, fs_info, fs_id, new_opts, new_share_name):
-        fs_param = {"NAME": huawei_utils.share_name(new_share_name),
-                    "DESCRIPTION": new_share_name,
-                    }
-        compression = strutils.bool_from_string(fs_info['ENABLECOMPRESSION'])
+        fs_param = {
+            "NAME": huawei_utils.share_name(new_share_name),
+            "DESCRIPTION": new_share_name,
+        }
+        compression = strutils.bool_from_string(fs_info[constants.FILESYSTEM_ENABLECOMPRESSION])
         if new_opts['compression'] and not compression:
-            fs_param["ENABLECOMPRESSION"] = True
+            fs_param[constants.FILESYSTEM_ENABLECOMPRESSION] = True
         elif not new_opts['compression'] and compression:
-            fs_param["ENABLECOMPRESSION"] = False
+            fs_param[constants.FILESYSTEM_ENABLECOMPRESSION] = False
 
-        dedupe = strutils.bool_from_string(fs_info['ENABLEDEDUP'])
+        dedupe = strutils.bool_from_string(fs_info[constants.FILESYSTEM_ENABLEDEDUP])
         if new_opts['dedupe'] and not dedupe:
-            fs_param["ENABLEDEDUP"] = True
+            fs_param[constants.FILESYSTEM_ENABLEDEDUP] = True
         elif not new_opts['dedupe'] and dedupe:
-            fs_param["ENABLEDEDUP"] = False
+            fs_param[constants.FILESYSTEM_ENABLEDEDUP] = False
 
-        cur_size = int(fs_info['CAPACITY']) / constants.CAPACITY_UNIT
-        new_size = math.ceil(float(fs_info['CAPACITY']) /
+        cur_size = int(fs_info[constants.FILESYSTEM_CAPACITY]) / constants.CAPACITY_UNIT
+        new_size = math.ceil(float(fs_info[constants.FILESYSTEM_CAPACITY]) /
                              constants.CAPACITY_UNIT)
         if cur_size != new_size:
-            fs_param["CAPACITY"] = new_size * constants.CAPACITY_UNIT
+            fs_param[constants.FILESYSTEM_CAPACITY] = new_size * constants.CAPACITY_UNIT
 
         if new_opts['sectorsize']:
             sectorsize = int(new_opts['sectorsize']) * units.Ki
@@ -1616,7 +1630,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         user = active_directory['user']
         password = active_directory['password']
         domain = active_directory['domain']
-        if not dns_ip or not user or not password or not domain:
+        if not all([dns_ip, user, password, domain]):
             msg = (_("(%(dns_ip)s, %(user)s, %(password)s, %(domain)s) of "
                      "active_directory invalid.")
                    % {"dns_ip": dns_ip, "user": user,
@@ -1657,9 +1671,9 @@ class HuaweiNasDriver(driver.ShareDriver):
             huawei_utils.wait_for_condition(
                 _check_ad_status, self.configuration.wait_interval,
                 self.configuration.timeout)
-        except exception.ManilaException:
+        except exception.ManilaException as err:
             self.helper.set_dns_ip_address([])
-            msg = _('Failed to add AD config.')
+            msg = _('Failed to add AD config, err:%s' % err)
             LOG.error(msg)
             raise exception.ShareBackendException(msg=msg)
 
@@ -1691,14 +1705,14 @@ class HuaweiNasDriver(driver.ShareDriver):
     def _create_logical_port(self, vlan_tag, ip_info, ip_type, subnet):
         port, port_type = self._get_optimal_port()
         LOG.info("get available port: %s" % port)
-        home_port_id = port.get("id")
+        home_port_id = port.get(constants.ID_KEY)
         home_port_type = port_type
         vlan_exists = True
         vlan_id = None
         if vlan_tag:
-            vlan_exists, vlan_id = self.helper.get_vlan(port.get('id'), vlan_tag)
+            vlan_exists, vlan_id = self.helper.get_vlan(port.get(constants.ID_KEY), vlan_tag)
             if not vlan_exists:
-                vlan_id = self.helper.create_vlan(port['id'], port_type, vlan_tag)
+                vlan_id = self.helper.create_vlan(port[constants.ID_KEY], port_type, vlan_tag)
             home_port_id = vlan_id
             home_port_type = constants.PORT_TYPE_VLAN
 
@@ -1709,12 +1723,13 @@ class HuaweiNasDriver(driver.ShareDriver):
 
         port_name = 'manila_' + huawei_utils.generate_random_alphanumeric(24)
         if not logical_port_exists:
-            data = {"HOMEPORTID": home_port_id,
-                    "HOMEPORTTYPE": home_port_type,
-                    "NAME": port_name,
-                    "OPERATIONALSTATUS": True,
-                    "SUPPORTPROTOCOL": 3,
-                    }
+            data = {
+                "HOMEPORTID": home_port_id,
+                "HOMEPORTTYPE": home_port_type,
+                "NAME": port_name,
+                "OPERATIONALSTATUS": True,
+                "SUPPORTPROTOCOL": 3,
+            }
             if ip_type == 4:
                 data.update({"ADDRESSFAMILY": 0,
                              "IPV4ADDR": ip_info,
@@ -1779,10 +1794,8 @@ class HuaweiNasDriver(driver.ShareDriver):
                     return False
             return True
 
-        valid_eth_ports = [{'id': eth['ID'], 'name': eth['LOCATION']}
-                           for eth in eth_ports if _filter_eth_port(eth)]
-        valid_bond_ports = [{'id': bond['ID'], 'name': bond['NAME']}
-                            for bond in bond_ports if _filter_bond_port(bond)]
+        valid_eth_ports = [{'id': eth['ID'], 'name': eth['LOCATION']} for eth in eth_ports if _filter_eth_port(eth)]
+        valid_bond_ports = [{'id': bond['ID'], 'name': bond['NAME']} for bond in bond_ports if _filter_bond_port(bond)]
         return valid_eth_ports, valid_bond_ports
 
     @staticmethod
@@ -1790,11 +1803,11 @@ class HuaweiNasDriver(driver.ShareDriver):
         def _get_port_weight(_port):
             weight = 0
             for logical in logical_ports:
-                if logical['HOMEPORTTYPE'] == constants.PORT_TYPE_VLAN:
-                    pos = logical['HOMEPORTNAME'].rfind('.')
-                    if logical['HOMEPORTNAME'][:pos] == _port['name']:
+                if logical[constants.PORT_HOMEPORTTYPE] == constants.PORT_TYPE_VLAN:
+                    pos = logical[constants.PORT_HOMEPORTTYPE].rfind('.')
+                    if logical[constants.PORT_HOMEPORTTYPE][:pos] == _port['name']:
                         weight += 1
-                elif logical['HOMEPORTNAME'] == _port['name']:
+                elif logical[constants.PORT_HOMEPORTTYPE] == _port['name']:
                     weight += 1
             return weight
 
@@ -1837,7 +1850,7 @@ class HuaweiNasDriver(driver.ShareDriver):
         share_name = share['name']
         fs_info = self._get_fs_info_by_name(share_name, raise_exception=False)
         if not fs_info:
-            return
+            return None
 
         if (fs_info['HEALTHSTATUS'] != constants.STATUS_FS_HEALTH or
                 fs_info['RUNNINGSTATUS'] != constants.STATUS_FS_RUNNING):
@@ -1845,7 +1858,8 @@ class HuaweiNasDriver(driver.ShareDriver):
             LOG.error(msg)
             raise exception.InvalidShare(reason=msg)
 
-        self._get_share_info(share_name, share_proto, fs_info.get('vstoreId'))
+        share_info = self._get_share_info(share_name, share_proto, fs_info.get('vstoreId'))
+        LOG.debug("End ensure share, share info:%s ", share_info)
         return self._get_export_location(share_name, share_proto, share_server)
 
     @staticmethod
@@ -1872,7 +1886,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                 self.allow_access(context, new_replica, access)
         except Exception:
             LOG.exception('Failed to allow access to new replica %s.',
-                          new_replica['name'])
+                          new_replica[constants.NAME_KEY])
             self.delete_share(context, new_replica, share_server)
             raise
 
@@ -1883,13 +1897,13 @@ class HuaweiNasDriver(driver.ShareDriver):
         # start the creating progress.
         try:
             remote_device_wwn = self.helper.get_array_wwn()
-            replica_fs = self._get_fs_info_by_name(new_replica['name'])
+            replica_fs = self._get_fs_info_by_name(new_replica[constants.NAME_KEY])
 
             (local_pair_id, replica_pair_id) = \
                 self.rpc_client.create_replica_pair(
                     context,
                     active_replica['host'],
-                    local_share_info={'name': active_replica['name']},
+                    local_share_info={constants.NAME_KEY: active_replica[constants.NAME_KEY]},
                     remote_device_wwn=remote_device_wwn,
                     remote_fs_id=replica_fs['ID'],
                     local_replication=self.configuration.local_replication
@@ -1955,25 +1969,24 @@ class HuaweiNasDriver(driver.ShareDriver):
                  {"replica": replica["name"]})
         return update_replica_info
 
-    def promote_replica(self, context, replica_list, replica, access_rules,
-                        share_server=None):
+    def promote_replica(self, context, replica_list, replica, access_rules, **kwargs):
         updated_replica_list = []
         try:
             replica_pair_id = self._get_replica_pair_id(
                 replica, raise_exception=False)
         except Exception as err:
             LOG.warning('Failed to get replica pair %(pair_name)s. Reason is '
-                        '%(err)s', {"pair_name": replica['name'], "err": err})
+                        '%(err)s', {"pair_name": replica[constants.NAME_KEY], "err": err})
             updated_replica_list.append({
-                'id': replica['id'],
-                'replica_state': common_constants.STATUS_ERROR,
+                constants.ID_KEY: replica[constants.ID_KEY],
+                constants.REPLICA_STATE: common_constants.STATUS_ERROR,
             })
             return updated_replica_list
 
         if not replica_pair_id:
             updated_replica_list.append({
-                'id': replica['id'],
-                'replica_state': common_constants.REPLICA_STATE_OUT_OF_SYNC,
+                constants.ID_KEY: replica[constants.ID_KEY],
+                constants.REPLICA_STATE: common_constants.REPLICA_STATE_OUT_OF_SYNC,
             })
             return updated_replica_list
 
@@ -1982,30 +1995,30 @@ class HuaweiNasDriver(driver.ShareDriver):
             self.replica_mgr.switch_over(replica_pair_id)
         except Exception as err:
             LOG.warning('Failed to promote replica %(pair_name)s. Reason is '
-                        '%(err)s', {"pair_name": replica['name'], "err": err})
+                        '%(err)s', {"pair_name": replica[constants.NAME_KEY], "err": err})
             old_active_update = {
-                'id': old_active_replica['id'],
-                'replica_state': common_constants.STATUS_ERROR,
+                constants.ID_KEY: old_active_replica[constants.ID_KEY],
+                constants.REPLICA_STATE: common_constants.STATUS_ERROR,
             }
             updated_replica_list.append(old_active_update)
         else:
             # get replica state for new secondary after switch over
             replica_state = self.replica_mgr.get_replica_state(replica_pair_id)
             old_active_update = {
-                'id': old_active_replica['id'],
-                'replica_state': replica_state,
+                constants.ID_KEY: old_active_replica[constants.ID_KEY],
+                constants.REPLICA_STATE: replica_state,
             }
             updated_replica_list.append(old_active_update)
 
         new_active_update = {
-            'id': replica['id'],
-            'replica_state': common_constants.REPLICA_STATE_ACTIVE,
+            constants.ID_KEY: replica[constants.ID_KEY],
+            constants.REPLICA_STATE: common_constants.REPLICA_STATE_ACTIVE,
         }
         updated_replica_list.append(new_active_update)
 
         LOG.info("Promote replica %(replica)s successfully, old active state"
                  " %(old)s, new active state %(new)s",
-                 {"replica": replica['name'],
+                 {"replica": replica[constants.NAME_KEY],
                   "old": old_active_update,
                   "new": new_active_update})
         return updated_replica_list
@@ -2054,13 +2067,13 @@ class HuaweiNasDriver(driver.ShareDriver):
 
     def revert_to_snapshot(self, context, snapshot, share_access_rules,
                            snapshot_access_rules, share_server=None):
-        fs_info = self._get_fs_info_by_name(snapshot['share_name'])
+        fs_info = self._get_fs_info_by_name(snapshot[constants.SHARE_NAME])
         if self._is_dorado_v6_hypermetro_filesystem_not_active(fs_info):
             self.rpc_client.revert_to_hypermetro_snapshot(
-                context, snapshot['share_name'], snapshot['name'],
+                context, snapshot[constants.SHARE_NAME], snapshot[constants.NAME_KEY],
                 self.remote_backend)
         else:
-            self._revert_to_snapshot(snapshot['share_name'], snapshot['name'])
+            self._revert_to_snapshot(snapshot[constants.SHARE_NAME], snapshot[constants.NAME_KEY])
 
     def rpc_update_snapshot(self, replica_share_name,
                             active_snapshot_name, replica_snapshot_name):
@@ -2097,9 +2110,9 @@ class HuaweiNasDriver(driver.ShareDriver):
         active_snapshot = None
         replica_snapshot = None
         for _snapshot in replica_snapshots:
-            if _snapshot["share_id"] == active_share["id"]:
+            if _snapshot["share_id"] == active_share[constants.ID_KEY]:
                 active_snapshot = _snapshot
-            elif _snapshot["share_id"] == replica_share["id"]:
+            elif _snapshot["share_id"] == replica_share[constants.ID_KEY]:
                 replica_snapshot = _snapshot
 
         if not active_snapshot or not replica_snapshot:
@@ -2111,9 +2124,9 @@ class HuaweiNasDriver(driver.ShareDriver):
         loc_location = self.create_snapshot(
             context, active_snapshot, share_server)
         replica_snapshots_info.append(
-            {"id": active_snapshot["id"],
-             "provider_location": loc_location["provider_location"],
-             "status": common_constants.STATUS_AVAILABLE})
+            {constants.ID_KEY: active_snapshot[constants.ID_KEY],
+             constants.SNAPSHOT_PROVIDER_LOCATION: loc_location.get(constants.SNAPSHOT_PROVIDER_LOCATION),
+             constants.STATUS_KEY: common_constants.STATUS_AVAILABLE})
 
         # step 3, sync the snapshot to the replica site
         self.replica_mgr.sync_replication_pair(replica_pair_id)
@@ -2122,8 +2135,8 @@ class HuaweiNasDriver(driver.ShareDriver):
         try:
             rmt_location = self.rpc_client.create_replica_snapshot(
                 context, replica_share["host"],
-                replica_share['name'], active_snapshot['name'],
-                replica_snapshot['name'])
+                replica_share[constants.NAME_KEY], active_snapshot[constants.NAME_KEY],
+                replica_snapshot[constants.NAME_KEY])
         except Exception:
             LOG.exception('Failed to create a replication snapshot '
                           'with host %s.', replica_share['host'])
@@ -2132,52 +2145,53 @@ class HuaweiNasDriver(driver.ShareDriver):
             raise
 
         replica_snapshots_info.append(
-            {"id": replica_snapshot["id"],
-             "provider_location": rmt_location["provider_location"],
-             "status": common_constants.STATUS_AVAILABLE})
+            {constants.ID_KEY: replica_snapshot[constants.ID_KEY],
+             constants.SNAPSHOT_PROVIDER_LOCATION: rmt_location[constants.SNAPSHOT_PROVIDER_LOCATION],
+             constants.STATUS_KEY: common_constants.STATUS_AVAILABLE})
 
         LOG.info("Create replica snapshot %(share)s successfully. "
                  "Return replica info: %(return)s",
-                 {"share": active_share["id"],
+                 {"share": active_share[constants.ID_KEY],
                   "return": replica_snapshots_info})
         return replica_snapshots_info
 
     def update_replicated_snapshot(self, context, replica_list,
                                    share_replica, replica_snapshots,
                                    replica_snapshot, share_server=None):
-        self._get_replica_pair_id(share_replica)
+        replica_pair_id = self._get_replica_pair_id(share_replica)
+        LOG.debug("Update replicate snapshot, replication pair id:%s", replica_pair_id)
 
         active_snapshot = None
         for snapshot in replica_snapshots:
-            if snapshot["name"] != replica_snapshot["name"]:
+            if snapshot[constants.NAME_KEY] != replica_snapshot[constants.NAME_KEY]:
                 active_snapshot = snapshot
                 break
 
-        if active_snapshot.get("status") != common_constants.STATUS_AVAILABLE:
+        if active_snapshot.get(constants.STATUS_KEY) != common_constants.STATUS_AVAILABLE:
             LOG.warning('The active snapshot %(active_snap)s status is not '
                         'available, set replica snapshot %(replica_snap)s '
                         'status as active snapshot.',
                         {"active_snap": active_snapshot,
                          "replica_snap": replica_snapshot})
-            return {"id": replica_snapshot["id"],
-                    "status": active_snapshot["status"]}
+            return {constants.ID_KEY: replica_snapshot[constants.ID_KEY],
+                    constants.STATUS_KEY: active_snapshot[constants.STATUS_KEY]}
 
         try:
             fs_info = self._get_fs_info_by_name(replica_snapshot['share_name'])
             snapshot_id = huawei_utils.snapshot_id(
-                fs_info['ID'], active_snapshot['name'])
+                fs_info[constants.ID], active_snapshot[constants.NAME_KEY])
             self.helper.rename_snapshot(
-                snapshot_id, replica_snapshot["name"])
+                snapshot_id, replica_snapshot[constants.NAME_KEY])
         except Exception as err:
             LOG.exception('Failed to update replication snapshot %(snapshot)s,'
                           ' reason is %(err)s.',
                           {"snapshot": replica_snapshot, "err": err})
-            return {"id": replica_snapshot["id"],
-                    "status": common_constants.STATUS_CREATING}
+            return {constants.ID_KEY: replica_snapshot[constants.ID_KEY],
+                    constants.STATUS_KEY: common_constants.STATUS_CREATING}
 
         return {
-            "id": replica_snapshot["id"],
-            "status": common_constants.STATUS_AVAILABLE}
+            constants.ID_KEY: replica_snapshot[constants.ID_KEY],
+            constants.STATUS_KEY: common_constants.STATUS_AVAILABLE}
 
     @staticmethod
     def _set_snapshot_status(snapshot, status, replica_snapshots_info):
@@ -2187,11 +2201,10 @@ class HuaweiNasDriver(driver.ShareDriver):
                                    replica_snapshots, share_server=None):
         """Delete a snapshot by deleting its instances across the replicas."""
         replica_snapshots_info = []
-
         active_share = self._get_active_replica(replica_list)
         replica_share = self._get_dr_replica(replica_list)
         for _snapshot in replica_snapshots:
-            if _snapshot["share_id"] == active_share["id"]:
+            if _snapshot["share_id"] == active_share[constants.ID_KEY]:
                 try:
                     self.delete_snapshot(context, _snapshot, share_server)
                     self._set_snapshot_status(
@@ -2200,11 +2213,11 @@ class HuaweiNasDriver(driver.ShareDriver):
                 except Exception as err:
                     LOG.error("Delete active snapshot %(snap_id)s error. "
                               "Reason is %(err)s",
-                              {"snap_id": _snapshot["id"], "err": err})
+                              {"snap_id": _snapshot[constants.ID_KEY], "err": err})
                     self._set_snapshot_status(
                         _snapshot, common_constants.STATUS_ERROR_DELETING,
                         replica_snapshots_info)
-            elif _snapshot["share_id"] == replica_share["id"]:
+            elif _snapshot["share_id"] == replica_share[constants.ID_KEY]:
                 try:
                     self.rpc_client.delete_replica_snapshot(
                         context, replica_share["host"],
@@ -2215,7 +2228,7 @@ class HuaweiNasDriver(driver.ShareDriver):
                 except Exception as err:
                     LOG.error("Delete replica snapshot %(snap_id)s error. "
                               "Reason is %(err)s",
-                              {"snap_id": _snapshot["id"], "err": err})
+                              {"snap_id": _snapshot[constants.ID_KEY], "err": err})
                     self._set_snapshot_status(
                         _snapshot, common_constants.STATUS_ERROR_DELETING,
                         replica_snapshots_info)
@@ -2234,19 +2247,19 @@ class HuaweiNasDriver(driver.ShareDriver):
         try:
             self.replica_mgr.split_replication_pair(replica_pair_id)
         except Exception as err:
-            LOG.warning('Failed to split replica %(pair_id)s. Reason is '
-                        '%(err)s', {"pair_id": replica_pair_id, "err": err})
+            LOG.warning('Failed to split replica %(pair_id)s. Reason is %(err)s',
+                        {"pair_id": replica_pair_id, "err": err})
 
         try:
             self._revert_to_snapshot(active_replica["name"],
                                      active_replica_snapshot["name"])
         except Exception as err:
-            LOG.warning('Failed to revert snapshot %(snap_name)s. Reason is '
-                        '%(err)s', {"snap_name": replica_pair_id, "err": err})
+            LOG.warning('Failed to revert snapshot %(snap_name)s. Reason is %(err)s',
+                        {"snap_name": replica_pair_id, "err": err})
             raise
 
         try:
             self.replica_mgr.sync_replication_pair(replica_pair_id)
         except Exception as err:
-            LOG.warning('Failed to sync replica %(pair_id)s. Reason is '
-                        '%(err)s', {"pair_id": replica_pair_id, "err": err})
+            LOG.warning('Failed to sync replica %(pair_id)s. Reason is %(err)s',
+                        {"pair_id": replica_pair_id, "err": err})

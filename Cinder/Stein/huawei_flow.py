@@ -36,7 +36,7 @@ from cinder.volume.drivers.huawei import huawei_utils
 from cinder.volume.drivers.huawei import hypermetro
 from cinder.volume.drivers.huawei import replication
 from cinder.volume.drivers.huawei import smartx
-from cinder.volume import volume_utils
+from cinder.volume import utils as volume_utils
 
 LOG = logging.getLogger(__name__)
 
