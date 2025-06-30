@@ -31,6 +31,7 @@ from manila import exception
 from manila.i18n import _
 from manila.share.drivers.huawei import constants
 from manila.share.drivers.huawei import huawei_utils
+from manila.share.drivers.huawei import cipher
 
 LOG = log.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class RestHelper(object):
         for item_url in self.nas_address:
             data = {
                 "username": username,
-                "password": password,
+                "password": cipher.decrypt_cipher(password),
                 "scope": "0"
             }
             self.init_http_head()

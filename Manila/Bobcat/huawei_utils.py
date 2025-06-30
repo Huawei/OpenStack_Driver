@@ -36,6 +36,7 @@ def get_share_extra_specs_params(type_id, is_dorado=False):
         specs = share_types.get_share_type_extra_specs(type_id)
 
     opts = _get_opts_from_specs(specs, is_dorado)
+    _get_advanced_opts(opts, specs)
     _get_smartprovisioning_opts(opts)
     _check_smartcache_opts(opts)
     _check_smartpartition_opts(opts)
@@ -377,3 +378,30 @@ def mask_dict_sensitive_info(data, secret="***"):
         out[key] = value
 
     return strutils.mask_dict_password(out)
+
+
+def _get_advanced_opts(opts, specs):
+    advanced_param = {}
+    for spec_key in specs:
+        _set_advanced_param(spec_key, advanced_param, specs)
+    opts['advanced'] = advanced_param
+
+
+def _set_advanced_param(spec_key, advanced_param, specs):
+    """
+    1. Process the items whose prefix is "filesystem_advanced" in the spec.
+    2. The format of the item prefixed with filesystem_advanced is as follows:
+       "filesystem_advanced:advanced_key=advanced_value"
+    """
+    spec_key_list = spec_key.split(':')
+    if len(spec_key_list) <= 1:
+        return
+    if spec_key_list[0] != 'filesystem_advanced':
+        return
+    if len(spec_key_list) == 2 and spec_key_list[1].strip() == '':
+        LOG.error('Invalid filesystem advanced: %s, advanced_key can not be empty', spec_key)
+        raise exception.BadConfigurationException(reason='Invalid filesystem advanced.')
+    if len(spec_key_list) > 2:
+        LOG.error('Invalid filesystem advanced: %s', spec_key)
+        raise exception.BadConfigurationException(reason='Invalid filesystem advanced.')
+    advanced_param[spec_key_list[1]] = specs.get(spec_key)

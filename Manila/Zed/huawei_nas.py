@@ -75,7 +75,7 @@ LOG = log.getLogger(__name__)
 
 
 class HuaweiNasDriver(driver.ShareDriver):
-    VERSION = "2.7.4"
+    VERSION = "25.1.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiNasDriver, self).__init__((True, False), *args, **kwargs)
@@ -286,6 +286,9 @@ class HuaweiNasDriver(driver.ShareDriver):
             remote_vstore_id = vstore_info.get('REMOTEVSTOREID')
             if local_vstore_id and remote_vstore_id:
                 params['vstoreId'] = local_vstore_id
+
+        params.update(self.configuration.advanced)
+        params.update(opts.get('advanced', {}))
 
         return params, remote_vstore_id
 
