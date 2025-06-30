@@ -65,6 +65,7 @@ class HuaweiConfig(object):
             self._show_snapshot_dir,
             self._ssl_cert_path,
             self._ssl_cert_verify,
+            self._advanced_param
         )
 
         for f in attr_funcs:
@@ -350,3 +351,14 @@ class HuaweiConfig(object):
                 raise exception.InvalidInput(reason=err_msg)
         else:
             setattr(self.config, 'show_snapshot_dir', None)
+
+    def _advanced_param(self, xml_root):
+        advanced = xml_root.find('Filesystem/Advanced')
+        if not advanced:
+            setattr(self.config, 'advanced', {})
+        else:
+            advanced_param = {}
+            for advanced_option in advanced:
+                advanced_param[advanced_option.tag] = advanced_option.text
+            LOG.info("Get advanced parameters: %s", advanced_param)
+            setattr(self.config, 'advanced', advanced_param)

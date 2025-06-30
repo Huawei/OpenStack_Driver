@@ -1,4 +1,4 @@
-# Copyright (c) 2014 Huawei Technologies Co., Ltd.
+# Copyright (c) 2025 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -12,13 +12,19 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-STATUS_FS_HEALTH = "1"
-STATUS_FS_RUNNING = "27"
-STATUS_SERVICE_RUNNING = "2"
-DEFAULT_WAIT_INTERVAL = 3
-DEFAULT_TIMEOUT = 60
 
-MSG_SNAPSHOT_NOT_FOUND = 1073754118
-IP_ALLOCATIONS = 0
-SOCKET_TIMEOUT = 720
-VALID_PRODUCTS = ('V3', 'V5')
+
+def decrypt_cipher(text_info, is_need_decrypt=False):
+    """
+    This interface is used to decrypt sensitive information.
+    When text_info is a plaintext password, no decryption is required by default.
+
+    When cipher_text is set to text_info,  please set is_need_decrypt to True
+    and use your own decryption component to decrypt the ciphertext
+    """
+    if is_need_decrypt:
+        # Please modify this interface and use your own decryption
+        # component to decrypt the ciphertext.
+        pass
+
+    return text_info
