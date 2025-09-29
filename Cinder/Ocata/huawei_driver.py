@@ -3193,12 +3193,6 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
 
     def _terminate_connection_locked(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
-        attachments = volume.volume_attachment
-        if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector) > 1:
-            LOG.info("Volume is multi-attach and attached to the same host"
-                     " multiple times")
-            return
 
         metadata = huawei_utils.get_lun_metadata(volume)
         LOG.info("terminate_connection, metadata is: %s.", metadata)
@@ -3514,12 +3508,6 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
 
     def _terminate_connection_locked(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
-        attachments = volume.volume_attachment
-        if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector) > 1:
-            LOG.info("Volume is multi-attach and attached to the same host"
-                     " multiple times")
-            return {}
 
         lun_id, lun_type = self.get_lun_id_and_type(
             volume, constants.VOLUME_NOT_EXISTS_WARN)
