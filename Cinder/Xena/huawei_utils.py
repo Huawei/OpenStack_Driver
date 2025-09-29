@@ -134,8 +134,11 @@ def mask_initiator_array_sensitive_info(data, sensitive_keys):
 def mask_initiator_string_sensitive_info(data):
     """Mask iscsi/fc/nvme ini sensitive info with a string type data"""
     secret_str = "******"
-    if len(data) <= 6:
-        return secret_str
+    try:
+        if not data or len(str(data)) <= 6:
+            return secret_str
+    except Exception as err:
+        LOG.warning("Mask string sensitive info failed, reason is %s", err)
 
     out_str = data[0:3] + secret_str + data[-3::]
     return out_str

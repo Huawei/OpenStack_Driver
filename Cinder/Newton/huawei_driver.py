@@ -83,7 +83,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "2.7.4"
+    VERSION = "25.2.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -3232,11 +3232,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
 
     def _terminate_connection_locked(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
-        attachments = volume.volume_attachment
-        if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector) > 1:
-            LOG.info("Volume is multi-attach and attached to the same host"
-                     " multiple times")
+        if huawei_utils.is_volume_multi_attach_to_same_host(volume, connector):
             return
 
         metadata = huawei_utils.get_lun_metadata(volume)
@@ -3569,11 +3565,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
 
     def _terminate_connection_locked(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
-        attachments = volume.volume_attachment
-        if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector) > 1:
-            LOG.info("Volume is multi-attach and attached to the same host"
-                     " multiple times")
+        if huawei_utils.is_volume_multi_attach_to_same_host(volume, connector):
             return {}
 
         lun_id, lun_type = self.get_lun_id_and_type(

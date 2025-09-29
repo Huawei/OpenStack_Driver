@@ -75,7 +75,7 @@ LOG = log.getLogger(__name__)
 
 
 class HuaweiNasDriver(driver.ShareDriver):
-    VERSION = "25.1.0"
+    VERSION = "25.2.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiNasDriver, self).__init__((True, False), *args, **kwargs)
