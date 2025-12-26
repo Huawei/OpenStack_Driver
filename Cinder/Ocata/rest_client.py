@@ -131,7 +131,7 @@ class RestClient(object):
 
         sensitive_info = {} if kwargs.get('sensitive_info') is None else kwargs.get('sensitive_info')
         sensitive_keys = sensitive_info.get('sensitive_keys')
-        request_kwargs = {'timeout': kwargs.get('calltimeout')}
+        request_kwargs = {'timeout': kwargs.get('calltimeout', constants.SOCKET_TIMEOUT)}
         if data:
             request_kwargs[constants.DATA] = json.dumps(data)
 
@@ -3175,7 +3175,7 @@ class RestClient(object):
 
     def get_roce_params(self, connector):
         """Get target ROCE params, including IP."""
-        host_nqn = connector.get('host_nqn')
+        host_nqn = connector.get('host_nqn') or connector.get('nqn')
         host_name = connector.get('host')
         target_ips = self._get_roce_target_ips(host_nqn, host_name)
 

@@ -54,7 +54,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "2.7.4"
+    VERSION = "25.3.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)

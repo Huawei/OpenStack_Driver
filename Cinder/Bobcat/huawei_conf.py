@@ -66,6 +66,7 @@ class HuaweiConf(object):
             self._iscsi_info,
             self._fc_info,
             self._roce_info,
+            self._tcp_info,
             self._hyper_pair_sync_speed,
             self._replication_pair_sync_speed,
             self._hypermetro_devices,
@@ -665,6 +666,14 @@ class HuaweiConf(object):
         roce_info['initiators'] = initiators
         self._check_hostname_regex_config(roce_info)
         setattr(self.conf, 'roce_info', roce_info)
+
+    def _tcp_info(self, xml_root):
+        tcp_info = {}
+        nodes = xml_root.findall('TCP/Initiator')
+        initiators = self._initiator_info(nodes)
+        tcp_info['initiators'] = initiators
+        self._check_hostname_regex_config(tcp_info)
+        setattr(self.conf, 'tcp_info', tcp_info)
 
     def _san_protocol(self, xml_root):
         text = xml_root.findtext('Storage/Protocol')

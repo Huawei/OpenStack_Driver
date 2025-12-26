@@ -17,6 +17,7 @@ import hashlib
 import json
 import re
 
+import netaddr
 from oslo_log import log as logging
 from oslo_utils import strutils
 import tenacity as retry_module
@@ -134,8 +135,11 @@ def mask_initiator_array_sensitive_info(data, sensitive_keys):
 def mask_initiator_string_sensitive_info(data):
     """Mask iscsi/fc/nvme ini sensitive info with a string type data"""
     secret_str = "******"
-    if len(data) <= 6:
-        return secret_str
+    try:
+        if not data or len(str(data)) <= 6:
+            return secret_str
+    except Exception as err:
+        LOG.warning("Mask string sensitive info failed, reason is %s", err)
 
     out_str = data[0:3] + secret_str + data[-3::]
     return out_str
@@ -780,3 +784,13 @@ def mask_dict_sensitive_info(data, secret="***"):
 
 def convert_connector_wwns(wwns):
     return [x.lower() for x in wwns]
+
+
+def is_same_ipv6(left_ip, right_ip):
+    format_left_ip = str(
+        netaddr.IPAddress(left_ip).format(dialect=netaddr.ipv6_compact))
+    format_right_ip = str(
+        netaddr.IPAddress(right_ip).format(dialect=netaddr.ipv6_compact))
+    if format_left_ip == format_right_ip:
+        return True
+    return False

@@ -40,7 +40,7 @@ from cinder.volume.drivers.huawei import huawei_conf
 from cinder.volume.drivers.huawei import huawei_utils
 from cinder.volume.drivers.huawei import hypermetro
 from cinder.volume.drivers.huawei import replication
-from cinder.volume.drivers.huawei import rest_client
+from cinder.volume.drivers.huawei import rest_client_extend as rest_client
 from cinder.volume.drivers.huawei import smartx
 from cinder.volume import utils as volume_utils
 from cinder.volume import volume_types
@@ -83,7 +83,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "2.7.4"
+    VERSION = "25.3.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -158,8 +158,8 @@ class HuaweiBaseDriver(driver.VolumeDriver):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
-        self.client = rest_client.RestClient(self.configuration,
-                                             **client_conf)
+        self.client = rest_client.RestClientExtend(
+            self.configuration, **client_conf)
         self.sn = self.client.login()
         self.client.check_storage_pools()
         self.is_dorado_v6 = huawei_utils.is_support_clone_pair(self.client)
@@ -168,15 +168,15 @@ class HuaweiBaseDriver(driver.VolumeDriver):
         hypermetro_devs = self.huawei_conf.get_hypermetro_devices()
         hypermetro_client_conf = hypermetro_devs[0] if hypermetro_devs else {}
         if hypermetro_client_conf:
-            self.rmt_client = rest_client.RestClient(self.configuration,
-                                                     **hypermetro_client_conf)
+            self.rmt_client = rest_client.RestClientExtend(
+                self.configuration, **hypermetro_client_conf)
             self.rmt_client.login()
             self.metro_flag = True
 
         # init replication manager
         if replica_client_conf:
-            self.replica_client = rest_client.RestClient(self.configuration,
-                                                         **replica_client_conf)
+            self.replica_client = rest_client.RestClientExtend(
+                self.configuration, **replica_client_conf)
             self.replica_client.try_login()
             self.replica = replication.ReplicaPairManager(self.client,
                                                           self.replica_client,
@@ -3232,11 +3232,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
 
     def _terminate_connection_locked(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
-        attachments = volume.volume_attachment
-        if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector) > 1:
-            LOG.info("Volume is multi-attach and attached to the same host"
-                     " multiple times")
+        if huawei_utils.is_volume_multi_attach_to_same_host(volume, connector):
             return
 
         metadata = huawei_utils.get_lun_metadata(volume)
@@ -3569,11 +3565,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
 
     def _terminate_connection_locked(self, volume, connector, **kwargs):
         """Delete map between a volume and a host."""
-        attachments = volume.volume_attachment
-        if volume.multiattach and len(attachments) > 1 and sum(
-                1 for a in attachments if a.connector == connector) > 1:
-            LOG.info("Volume is multi-attach and attached to the same host"
-                     " multiple times")
+        if huawei_utils.is_volume_multi_attach_to_same_host(volume, connector):
             return {}
 
         lun_id, lun_type = self.get_lun_id_and_type(

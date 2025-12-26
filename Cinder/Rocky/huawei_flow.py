@@ -1787,30 +1787,27 @@ class ClearLunMappingTask(task.Task):
         return ini_tgt_map
 
 
-class GetRoCEConnectionTask(task.Task):
+class GetNvMEConnectionTask(task.Task):
     default_provides = 'target_ips'
 
-    def __init__(self, client, configuration, *args, **kwargs):
-        super(GetRoCEConnectionTask, self).__init__(*args, **kwargs)
+    def __init__(self, client, configuration, nvme_type, *args, **kwargs):
+        super(GetNvMEConnectionTask, self).__init__(*args, **kwargs)
         self.client = client
         self.configuration = configuration
-        self.roce_info = kwargs.get('roce_info', self.configuration.roce_info)
-
-    @staticmethod
-    def _is_same_ipv6(left_ip, right_ip):
-        format_left_ip = str(
-            netaddr.IPAddress(left_ip).format(dialect=netaddr.ipv6_compact))
-        format_right_ip = str(
-            netaddr.IPAddress(right_ip).format(dialect=netaddr.ipv6_compact))
-        if format_left_ip == format_right_ip:
-            return True
-        return False
+        self.nvme_info = self._get_nvme_info(nvme_type, kwargs)
 
     def execute(self, initiator, host_name):
-        target_ips = self._get_roce_target_ips(initiator, host_name)
+        target_ips = self._get_target_ips(initiator, host_name)
         return target_ips
 
-    def _get_roce_target_ips(self, initiator, host_name):
+    def _get_nvme_info(self, nvme_type, kwargs):
+        if nvme_type == "roce":
+            return kwargs.get('roce_info', self.configuration.roce_info)
+        elif nvme_type == "tcp":
+            return kwargs.get('tcp_info', self.configuration.tcp_info)
+        return {}
+    
+    def _get_target_ips(self, initiator, host_name):
         target_ips = self._get_target_ips_by_initiator_name(initiator)
 
         if not target_ips:
@@ -1827,10 +1824,10 @@ class GetRoCEConnectionTask(task.Task):
         return result
 
     def _target_ip_check(self, target_ips):
-        logic_ports = self._get_roce_logical_ports()
+        logic_ports = self._get_all_logic_ports()
         result = []
         for ip in target_ips:
-            if not self._is_roce_target_ip_in_array(ip, logic_ports):
+            if not self._is_target_ip_in_array(ip, logic_ports):
                 continue
             format_ip = netaddr.IPAddress(ip)
             if format_ip.version == 6:
@@ -1846,17 +1843,17 @@ class GetRoCEConnectionTask(task.Task):
 
         return result
 
-    def _get_roce_logical_ports(self):
-        all_logic_ports = self._get_info_by_range(self.client.get_roce_logic_ports)
+    def _get_all_logic_ports(self):
+        all_logic_ports = self._get_info_by_range(self.client.get_logic_ports)
         return all_logic_ports
 
-    def _is_roce_target_ip_in_array(self, ip, logic_ports):
+    def _is_target_ip_in_array(self, ip, logic_ports):
         for logic_port in logic_ports:
             if logic_port.get('ADDRESSFAMILY') == constants.ADDRESS_FAMILY_IPV4:
                 if ip == logic_port.get('IPV4ADDR'):
                     return True
             else:
-                if self._is_same_ipv6(ip, logic_port.get('IPV6ADDR')):
+                if huawei_utils.is_same_ipv6(ip, logic_port.get('IPV6ADDR')):
                     return True
         return False
 
@@ -1875,7 +1872,7 @@ class GetRoCEConnectionTask(task.Task):
     def _get_target_ips_by_host_name(self, host_name):
         target_ips = []
         temp_target_ips = []
-        initiator_dict = self.roce_info.get('initiators', {})
+        initiator_dict = self.nvme_info.get('initiators', {})
         for config_initiator in initiator_dict.keys():
             info = initiator_dict[config_initiator]
             config_host_name = info.get('HostName')
@@ -1892,15 +1889,15 @@ class GetRoCEConnectionTask(task.Task):
         return target_ips
 
     def _get_target_ips_by_initiator_name(self, initiator):
-        initiator_dict = self.roce_info.get('initiators', {})
+        initiator_dict = self.nvme_info.get('initiators', {})
         target_ips = []
         for config_initiator in initiator_dict.keys():
             if config_initiator == initiator:
                 target_ips = self._get_target_ip_list(initiator_dict[config_initiator], target_ips)
         return target_ips
 
-    def _get_target_ip_list(self, roce_info, target_ips):
-        for target_ip in roce_info.get('TargetIP').split():
+    def _get_target_ip_list(self, ini_info, target_ips):
+        for target_ip in ini_info.get('TargetIP').split():
             if target_ip.strip():
                 target_ips.append(target_ip)
         return target_ips
@@ -1918,6 +1915,24 @@ class AddRoCEInitiatorTask(task.Task):
             self.client.associate_roce_initiator_to_host(initiator, host_id)
         elif ini_info['ISFREE'] == 'true':
             self.client.associate_roce_initiator_to_host(initiator, host_id)
+        elif ini_info['PARENTID'] != host_id:
+            msg = _("Initiator already connected to host %s." % ini_info['PARENTID'])
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+
+class AddTCPInitiatorTask(task.Task):
+    def __init__(self, client, *args, **kwargs):
+        super(AddTCPInitiatorTask, self).__init__(*args, **kwargs)
+        self.client = client
+
+    def execute(self, initiator, host_id):
+        ini_info = self.client.get_tcp_initiator(initiator)
+        if not ini_info:
+            self.client.add_tcp_initiator(initiator)
+            self.client.associate_tcp_initiator_to_host(initiator, host_id)
+        elif ini_info['ISFREE'] == 'true':
+            self.client.associate_tcp_initiator_to_host(initiator, host_id)
         elif ini_info['PARENTID'] != host_id:
             msg = _("Initiator already connected to host %s." % ini_info['PARENTID'])
             LOG.error(msg)
@@ -1963,9 +1978,10 @@ class GetLunMappingHostTask(task.Task):
 
 
 class ClearLunMappingHostTask(task.Task):
-    def __init__(self, client, *args, **kwargs):
+    def __init__(self, client, nvme_type, *args, **kwargs):
         super(ClearLunMappingHostTask, self).__init__(*args, **kwargs)
         self.client = client
+        self.nvme_type = nvme_type
 
     def execute(self, host_id, lun_id):
         if not host_id:
@@ -1978,33 +1994,30 @@ class ClearLunMappingHostTask(task.Task):
         self._delete_host(host_id)
 
     def _delete_host(self, host_id):
-        ini_info = self.client.get_associated_roce_initiator(host_id)
-        for initiator in ini_info:
-            self.client.remove_roce_initiator_from_host(initiator['ID'], host_id)
+        if self.nvme_type == 'roce':
+            ini_info = self.client.get_associated_roce_initiator(host_id)
+            for initiator in ini_info:
+                self.client.remove_roce_initiator_from_host(initiator['ID'], host_id)
+        elif self.nvme_type == 'tcp':
+            ini_info = self.client.get_associated_tcp_initiator(host_id)
+            for initiator in ini_info:
+                self.client.disassociate_tcp_initiator_from_host(initiator['ID'], host_id)
         self.client.delete_host(host_id)
 
 
-class GetRoCEPropertiesTask(task.Task):
+class GetNvMEPropertiesTask(task.Task):
     default_provides = 'mapping_info'
 
-    def __init__(self, client, *args, **kwargs):
-        super(GetRoCEPropertiesTask, self).__init__(*args, **kwargs)
+    def __init__(self, client, transport_type, *args, **kwargs):
+        super(GetNvMEPropertiesTask, self).__init__(*args, **kwargs)
         self.client = client
+        self.transport_type = transport_type
 
     def execute(self, target_ips, host_id, lun_id, lun_info):
-        host_lun_info = self.client.get_hostlun_info(host_id, lun_id)
-        if not host_lun_info:
-            msg = _("No hostlun information between host %(host_id)s and lun %(lun_id)s." % {
-                'host_id': host_id,
-                'lun_id': lun_id
-            })
-            LOG.error(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
-        host_lun_id = host_lun_info[0]['hostLunId']
         mapping_info = {
-            'portals': [(ip, constants.ROCE_TARGET_PORT, 'rdma') for ip in target_ips],
-            'target_luns': [host_lun_id] * len(target_ips),
-            'target_nqn': constants.ROCE_TARGET_NQN_PREFIX + self.client._login_device_id,
+            'vol_uuid': lun_info.get('NGUID'),
+            'portals': [(ip, constants.ROCE_TARGET_PORT, self.transport_type) for ip in target_ips],
+            'target_nqn': constants.NVME_TARGET_NQN_PREFIX + self.client._login_device_id,
             'discard': True,
             'volume_nguid': lun_info.get('NGUID')
         }
@@ -3017,11 +3030,11 @@ def initialize_roce_connection(lun, lun_type, connector, client,
                 rebind={'snapshot': lun_key}))
 
     work_flow.add(
-        GetRoCEConnectionTask(client, configuration),
+        GetNvMEConnectionTask(client, configuration, 'roce'),
         CreateHostTask(client, configuration.roce_info, configuration),
         AddRoCEInitiatorTask(client),
         CreateLunMappingHostTask(client, configuration),
-        GetRoCEPropertiesTask(client),
+        GetNvMEPropertiesTask(client, 'rdma'),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -3041,11 +3054,11 @@ def initialize_remote_roce_connection(hypermetro_id, connector,
 
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
-        GetRoCEConnectionTask(client, configuration),
+        GetNvMEConnectionTask(client, configuration, 'roce'),
         CreateHostTask(client, configuration.hypermetro['roce_info'], configuration),
         AddRoCEInitiatorTask(client),
         CreateLunMappingHostTask(client, configuration),
-        GetRoCEPropertiesTask(client),
+        GetNvMEPropertiesTask(client, 'rdma'),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -3074,7 +3087,7 @@ def terminate_roce_connection(lun, lun_type, connector, client):
 
     work_flow.add(
         GetLunMappingHostTask(client),
-        ClearLunMappingHostTask(client),
+        ClearLunMappingHostTask(client, 'roce'),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
@@ -3088,7 +3101,66 @@ def terminate_remote_roce_connection(hypermetro_id, connector, client):
     work_flow.add(
         GetHyperMetroRemoteLunTask(client, hypermetro_id),
         GetLunMappingHostTask(client),
-        ClearLunMappingHostTask(client),
+        ClearLunMappingHostTask(client, 'roce'),
+    )
+
+    engine = taskflow.engines.load(work_flow, store=store_spec)
+    engine.run()
+
+
+def initialize_tcp_connection(lun, lun_type, connector, client,
+                                configuration):
+    lun_key = 'lun'
+    store_spec = {
+        'connector': connector,
+        lun_key: lun,
+        'lun_type': lun_type,
+        'initiator': connector.get('nqn', ''),
+        'host_name': connector.get('host', '')
+    }
+    work_flow = linear_flow.Flow('initialize_tcp_connection')
+    if lun_type == constants.LUN_TYPE:
+        work_flow.add(CheckLunExistTask(client, rebind={'volume': lun_key}))
+    else:
+        work_flow.add(CheckSnapshotExistTask(
+                client, provides=('lun_info', 'lun_id'),
+                rebind={'snapshot': lun_key}))
+
+    work_flow.add(
+        GetNvMEConnectionTask(client, configuration, 'tcp'),
+        CreateHostTask(client, configuration.tcp_info, configuration),
+        AddTCPInitiatorTask(client),
+        CreateLunMappingHostTask(client, configuration),
+        GetNvMEPropertiesTask(client, 'tcp'),
+    )
+
+    engine = taskflow.engines.load(work_flow, store=store_spec)
+    engine.run()
+    return engine.storage.fetch('mapping_info')
+
+
+def terminate_tcp_connection(lun, lun_type, connector, client):
+    lun_key = 'lun'
+    store_spec = {
+        'connector': connector,
+        lun_key: lun,
+        'lun_type': lun_type
+    }
+    work_flow = linear_flow.Flow('terminate_tcp_connection')
+
+    if lun_type == constants.LUN_TYPE:
+        work_flow.add(
+            GetLunIDTask(client, rebind={'volume': lun_key}),
+        )
+    else:
+        work_flow.add(
+            GetSnapshotIDTask(
+                client, provides='lun_id', rebind={'snapshot': 'lun'}),
+        )
+
+    work_flow.add(
+        GetLunMappingHostTask(client),
+        ClearLunMappingHostTask(client, 'tcp'),
     )
 
     engine = taskflow.engines.load(work_flow, store=store_spec)
