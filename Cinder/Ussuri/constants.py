@@ -31,7 +31,7 @@ SENSITIVE_INI_KEYS = ['initiator', 'wwpns', 'host_nqn', 'wwnns', 'nqn']
 VALID_PROTOCOL = ['nvmeof', 'iSCSI', 'FC']
 
 ROCE_INITIATOR = '57870'
-ROCE_TARGET_NQN_PREFIX = 'nqn.2020-02.huawei.nvme:nvm-subsystem-sn-'
+NVME_TARGET_NQN_PREFIX = 'nqn.2020-02.huawei.nvme:nvm-subsystem-sn-'
 ROCE_TARGET_PORT = 4420
 MAX_QUERY_COUNT = 100
 ADDRESS_FAMILY_IPV4 = '0'

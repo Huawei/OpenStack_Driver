@@ -783,10 +783,10 @@ class IscsiInitiator(CommonObject):
 class LogicalPort(CommonObject):
     _obj_url = '/lif'
 
-    def get_roce_logic_ports(self, start, end):
+    def get_logic_ports(self, start, end):
         result = self.get("?range=[%(start)s-%(end)s]",
                           start=six.text_type(start), end=six.text_type(end))
-        _assert_result(result, 'Get RoCE Logic Ports error.')
+        _assert_result(result, 'Get Logic Ports error.')
         return result.get('data', [])
 
 
@@ -830,6 +830,87 @@ class RoCEInitiator(CommonObject):
             return []
         _assert_result(result, 'Get associated roce initiator of host:%s error.', obj_id)
         return result['data']
+
+
+class TCPInitiator(CommonObject):
+    _obj_url = '/nvme_over_tcp_initiator'
+
+    def add_tcp_initiator(self, host_nqn):
+        data = {constants.ID_UPPER: host_nqn}
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=[constants.ID_UPPER]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.post(data=data, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.OBJECT_ID_NOT_UNIQUE:
+            LOG.info('TCP initiator %s already exists.',
+                     huawei_utils.mask_initiator_sensitive_info(host_nqn))
+            return
+        _assert_result(result, 'Add TCP initiator %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn))
+
+    def get_tcp_initiator(self, host_nqn):
+        sensitive_info = {
+            'url': '/'.join(
+                [self._obj_url,
+                 huawei_utils.mask_initiator_sensitive_info(host_nqn)]),
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.get('/%(obj_id)s', obj_id=host_nqn, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.OBJECT_NOT_EXIST:
+            LOG.info('TCP initiator %s does not exist.', huawei_utils.mask_initiator_sensitive_info(host_nqn))
+            return {}
+        _assert_result(result, 'Get TCP initiator %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn))
+        return result['data']
+
+    def get_associated_tcp_initiator(self, obj_id):
+        sensitive_info = {
+            'sensitive_keys': [constants.ID_UPPER]
+        }
+        result = self.get('/associate?ASSOCIATEOBJTYPE=21&ASSOCIATEOBJID=%(obj_id)s',
+                          obj_id=obj_id, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.OBJECT_NOT_EXIST:
+            LOG.warning("Host %s does not exist.", obj_id)
+            return []
+        _assert_result(result, 'Get associated tcp initiator of host:%s error.', obj_id)
+        return result['data']
+
+    def associate_tcp_initiator_to_host(self, host_nqn, host_id):
+        data = {
+            "PARENTTYPE": constants.PARENT_TYPE_HOST,
+            "ID": host_nqn,
+            "PARENTID": host_id
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID'])
+        }
+        result = self.put('/create_associate', data=data, sensitive_info=sensitive_info)
+        _assert_result(result, 'Add initiator %s to host %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn), host_id)
+
+    def disassociate_tcp_initiator_from_host(self, host_nqn, host_id):
+        data = {
+            "PARENTTYPE": constants.PARENT_TYPE_HOST,
+            "ID": host_nqn,
+            "PARENTID": host_id
+        }
+        sensitive_info = {
+            'data': huawei_utils.mask_initiator_sensitive_info(data, sensitive_keys=['ID'])
+        }
+        result = self.put('/remove_associate', data=data, sensitive_info=sensitive_info)
+        if _error_code(result) == constants.INITIATOR_NOT_IN_HOST:
+            LOG.warning('Initiator %s not in host %s.',
+                        huawei_utils.mask_initiator_sensitive_info(host_nqn), host_id)
+            return
+        if _error_code(result) == constants.OBJECT_NOT_EXIST:
+            LOG.warning('TCP Initiator %s not exist.', huawei_utils.mask_initiator_sensitive_info(host_nqn))
+            return
+        if _error_code(result) == constants.HOST_NOT_EXIST:
+            LOG.warning('Host %s not exist.', host_id)
+            return
+        _assert_result(result, 'Remove initiator %s from host %s error.',
+                       huawei_utils.mask_initiator_sensitive_info(host_nqn), host_id)
 
 
 class HostLunInfo(CommonObject):

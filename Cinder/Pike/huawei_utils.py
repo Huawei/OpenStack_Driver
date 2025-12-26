@@ -424,8 +424,11 @@ def mask_initiator_array_sensitive_info(data, sensitive_keys):
 def mask_initiator_string_sensitive_info(data):
     """Mask iscsi/fc/nvme ini sensitive info with a string type data"""
     secret_str = "******"
-    if len(data) <= 6:
-        return secret_str
+    try:
+        if not data or len(str(data)) <= 6:
+            return secret_str
+    except Exception as err:
+        LOG.warning("Mask string sensitive info failed, reason is %s", err)
 
     out_str = data[0:3] + secret_str + data[-3::]
     return out_str
@@ -494,3 +497,26 @@ def get_qos_by_volume_type(volume_type):
                 raise exception.InvalidInput(reason=msg)
 
     return qos
+
+
+def is_volume_multi_attach_to_same_host(volume, connector):
+    if not volume.multiattach:
+        return False
+
+    current_host = connector.get('host', '')
+    sum_same_host_num = 0
+    attachments = volume.volume_attachment
+
+    for attachment in attachments:
+        attach_host = attachment.get('connector', {}).get('host')
+        if attach_host is None:
+            LOG.info("Current volume attachment connector attr doesn't exist")
+            continue
+        if attach_host == current_host:
+            sum_same_host_num += 1
+
+    if sum_same_host_num > 1:
+        LOG.info("Volume is multi-attach and attached to the same host"
+                 " multiple times")
+        return True
+    return False
