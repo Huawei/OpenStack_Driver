@@ -83,7 +83,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "25.3.0"
+    VERSION = "26.1.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -3153,7 +3153,7 @@ class HuaweiISCSIDriver(HuaweiBaseDriver, driver.ISCSIDriver):
         port_string = '%s:3260'
 
         if lun_type == constants.LUN_TYPE and \
-                int(lun_info.get('ALLOCTYPE')) == constants.THIN_LUNTYPE:
+                int(lun_info.get('ALLOCTYPE', 1)) == constants.THIN_LUNTYPE:
             properties['discard'] = True
 
         multipath = connector.get('multipath', False)
@@ -3498,7 +3498,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
             'data': {
                 'target_lun': int(host_lun_id),
                 'target_discovered': True,
-                'target_wwn': huawei_utils.mask_initiator_sensitive_info(tgt_port_wwns),
+                'target_wwn': tgt_port_wwns,
                 'volume_id': volume.id,
                 'initiator_target_map': init_targ_map,
                 'map_info': map_info,
@@ -3507,7 +3507,7 @@ class HuaweiFCDriver(HuaweiBaseDriver, driver.FibreChannelDriver):
             },
         }
         if lun_type == constants.LUN_TYPE and \
-                int(lun_info.get('ALLOCTYPE')) == constants.THIN_LUNTYPE:
+                int(lun_info.get('ALLOCTYPE', 1)) == constants.THIN_LUNTYPE:
             fc_info['data']['discard'] = True
         return fc_info
 
