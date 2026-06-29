@@ -134,7 +134,7 @@ class HuaweiConf(object):
             raise exception.InvalidInput(reason=msg)
 
         addrs = text.split(';')
-        addrs = list(set([x.strip() for x in addrs if x.strip()]))
+        addrs = list({x.strip() for x in addrs if x.strip()})
         setattr(self.conf, 'san_address', addrs)
 
     def _san_user(self, xml_root):
