@@ -2321,17 +2321,16 @@ class RestClient(object):
                 return hypermetro_info
 
         if result.get('error', {}).get('code') == constants.CREATE_HYPERMETRO_TIMEOUT:
-            try_times = 2
+            try_times = constants.TIMEOUT_TRY_TIMES
             while try_times:
+                try_times -= 1
                 time.sleep(constants.GET_VOLUME_WAIT_INTERVAL)
                 LOG.info(_("Create SNAPSHOT TimeOut, try get snapshot "
-                           "info in %s time"), 2 - try_times)
+                           "info in %s time"), constants.TIMEOUT_TRY_TIMES - try_times)
                 hypermetro_info = self.get_hypermetro_by_lun_id(
                     hcp_param["LOCALOBJID"])
                 if hypermetro_info:
                     return hypermetro_info
-                else:
-                    try_times -= 1
 
         msg = _('create_hypermetro_pair error.')
         self._assert_rest_result(result, msg)

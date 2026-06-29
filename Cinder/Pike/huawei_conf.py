@@ -197,8 +197,8 @@ class HuaweiConf(object):
                 'maxBandWidth', 'latency', 'IOType'
             )
             extra_constants['QOS_IOTYPES'] = ('0', '1', '2')
-            extra_constants['SUPPORT_LUN_TYPES'] = ('Thick', constants.THIN)
-            extra_constants['DEFAULT_LUN_TYPE'] = 'Thick'
+            extra_constants['SUPPORT_LUN_TYPES'] = (constants.THICK, constants.THIN)
+            extra_constants['DEFAULT_LUN_TYPE'] = constants.THICK
             extra_constants['SUPPORT_CLONE_MODE'] = ('luncopy',)
 
         for k in extra_constants:

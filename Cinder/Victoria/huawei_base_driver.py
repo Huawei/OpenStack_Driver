@@ -1,4 +1,4 @@
-# Copyright (c) 2024 Huawei Technologies Co., Ltd.
+# Copyright (c) 2024-2026 Huawei Technologies Co., Ltd.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -54,7 +54,8 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "25.3.0"
+    VERSION = "26.1.0"
+    SUPPORTS_ACTIVE_ACTIVE = True
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)
@@ -758,6 +759,18 @@ class HuaweiBaseDriver(object):
         return snapshots_model_update
 
     def failover_host(self, context, volumes, secondary_id=None, groups=None):
+        """
+        Failover a backend to a secondary replication target.
+        This function combines failover() and failover_completed()
+        to perform failover when Active/Active is not enabled.
+        """
+        active_backend_name, volume_updates, group_updates = self.failover(
+            context, volumes, secondary_id, groups)
+        self.failover_completed(context, active_backend_name)
+        return active_backend_name, volume_updates, group_updates
+
+    def failover(self, context, volumes, secondary_id=None, groups=None):
+        """Failover to replication target."""
         if secondary_id == 'default':
             if not self.active_backend_id:
                 return None, [], []
@@ -780,11 +793,13 @@ class HuaweiBaseDriver(object):
         else:
             msg = "Invalid secondary id %s." % secondary_id
             raise exception.InvalidReplicationTarget(reason=msg)
+        return secondary_id, volumes_update, []
 
+    def failover_completed(self, context, secondary_id=None):
+        """Update volume node when `failover` is completed."""
+        LOG.info("Begin to switch replication after failover.")
         self.active_backend_id = secondary_id
         self._switch_replication_clients()
-
-        return secondary_id, volumes_update, []
 
     def _switch_replication_clients(self):
         self.local_cli, self.replication_rmt_cli = (
