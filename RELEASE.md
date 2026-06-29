@@ -1,3 +1,26 @@
+# 26.1.0
+## Mappings between Driver and OpenStack versions
+
+| OpenStack |Mitaka|Newton|Ocata|Pike|Queens|Rocky|Stein|Train|Ussuri|Victoria|Wallaby|Xena|Yoga|Zed|Antelope|Bobcat|Caracal|Dalmatian|Epoxy|Flamingo
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Cinder Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|
+|Manila Driver|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|√|x|x|
+
+## Version mappings among Cinder Driver, Huawei storage, and OpenStack
+| OpenStack |Huawei Storage|
+|---|---|
+|Cinder Driver|OceanStor V5 V500R007C61/V500R007C70/V500R007C71|
+| |OceanStor 6.1.3/6.1.5/6.1.6/6.1.7/6.1.8/V700R001C00/V700R001C10/V700R001C20
+| |OceanStor Dorado 6.1.0/6.1.2/6.1.3/6.1.5/6.1.6/6.1.7/6.1.8/V700R001C00/V700R001C10/V700R001C20
+| |OceanDisk V700R001
+
+## Version mappings among Manila Driver, Huawei storage, and OpenStack
+| OpenStack |Huawei Storage|
+|---|---|
+|Manila Driver|OceanStor V5 V500R007C61/V500R007C70|
+| |OceanStor V6 6.1.3/6.1.5/6.1.6/6.1.7/6.1.8/V700R001C00/V700R001C10/V700R001C20
+| |OceanStor Dorado V6 6.1.0/6.1.2/6.1.3/6.1.5/6.1.6/6.1.7/6.1.8/V700R001C00/V700R001C10/V700R001C20
+
 # 25.5.0
 ## Mappings between Driver and OpenStack versions
 
