@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import base64
 import json
 import re
 import threading
@@ -119,25 +118,11 @@ class RestHelper(object):
             LOG.info('Response Data: %s', res_json)
         return res_json
 
-    def _get_user_info(self):
-        if self.nas_username.startswith('!$$$'):
-            username = base64.b64decode(self.nas_username[4:]).decode()
-        else:
-            username = self.nas_username
-
-        if self.nas_password.startswith('!$$$'):
-            password = base64.b64decode(self.nas_password[4:]).decode()
-        else:
-            password = self.nas_password
-
-        return username, password
-
     def login(self):
-        username, password = self._get_user_info()
         for item_url in self.nas_address:
             data = {
-                "username": username,
-                "password": cipher.decrypt_cipher(password),
+                "username": self.nas_username,
+                "password": cipher.decrypt_cipher(self.nas_password),
                 "scope": "0"
             }
             self.init_http_head()

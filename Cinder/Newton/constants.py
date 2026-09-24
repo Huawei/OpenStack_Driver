@@ -34,6 +34,7 @@ LUNGROUP_PREFIX = 'OpenStack_LunGroup_'
 MAPPING_VIEW_PREFIX = 'OpenStack_Mapping_View_'
 PORTGROUP_PREFIX = 'OpenStack_PortGroup_'
 QOS_NAME_PREFIX = 'OpenStack_'
+CONF_FILE_WRITABLE = "config_file_writable"
 SENSITIVE_KEYS = ['auth_password']
 SENSITIVE_INI_KEYS = ['initiator', 'wwpns', 'host_nqn', 'wwnns', 'nqn']
 

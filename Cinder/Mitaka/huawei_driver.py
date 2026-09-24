@@ -68,6 +68,11 @@ huawei_opts = [
                 default=False,
                 help='Whether to retain the storage mapping when the last '
                      'volume on the host is unmapped'),
+    cfg.BoolOpt('config_file_writable',
+                default=True,
+                help='Whether to allow the driver to modify the config file. '
+                     'Set to False to prevent the driver from modifying the '
+                     'config file.'),
 ]
 
 CONF = cfg.CONF
@@ -83,7 +88,7 @@ Volume = collections.namedtuple('Volume', vol_attrs)
 
 
 class HuaweiBaseDriver(driver.VolumeDriver):
-    VERSION = "26.1.0"
+    VERSION = "26.2.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiBaseDriver, self).__init__(*args, **kwargs)

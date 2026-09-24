@@ -34,6 +34,12 @@ class HuaweiConfig(object):
         self.last_modify_time = None
         self.update_configs()
 
+    @staticmethod
+    def _get_decode_text(text):
+        if not text.startswith('!$$$'):
+            return text
+        return base64.b64decode(text[4:]).decode()
+
     def update_configs(self):
         file_time = os.stat(self.config.manila_huawei_conf_file).st_mtime
         if self.last_modify_time == file_time:
@@ -74,6 +80,9 @@ class HuaweiConfig(object):
         self.last_modify_time = file_time
 
     def _encode_authentication(self, tree, xml_root):
+        if not self.config.safe_get(constants.CONF_FILE_WRITABLE):
+            return
+
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
         node_start_text = '!$$$'
@@ -108,7 +117,7 @@ class HuaweiConfig(object):
             LOG.error(msg)
             raise exception.BadConfigurationException(reason=msg)
 
-        setattr(self.config, 'nas_user', text.strip())
+        setattr(self.config, 'nas_user', self._get_decode_text(text))
 
     def _nas_password(self, xml_root):
         text = xml_root.findtext('Storage/UserPassword')
@@ -117,7 +126,7 @@ class HuaweiConfig(object):
             LOG.error(msg)
             raise exception.BadConfigurationException(reason=msg)
 
-        setattr(self.config, 'nas_password', text.strip())
+        setattr(self.config, 'nas_password', self._get_decode_text(text))
 
     def _nas_product(self, xml_root):
         text = xml_root.findtext('Storage/Product')
