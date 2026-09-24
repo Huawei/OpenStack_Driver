@@ -67,6 +67,11 @@ huawei_opts = [
                default='',
                help='The replica backend of Manila Huawei driver when '
                     'configuring remote replication.'),
+    cfg.BoolOpt('config_file_writable',
+                default=True,
+                help='Whether to allow the driver to modify the config file. '
+                     'Set to False to prevent the driver from modifying the '
+                     'config file.'),
 ]
 
 CONF = cfg.CONF
@@ -75,7 +80,7 @@ LOG = log.getLogger(__name__)
 
 
 class HuaweiNasDriver(driver.ShareDriver):
-    VERSION = "25.1.0"
+    VERSION = "26.2.0"
 
     def __init__(self, *args, **kwargs):
         super(HuaweiNasDriver, self).__init__((True, False), *args, **kwargs)
@@ -1372,11 +1377,11 @@ class HuaweiNasDriver(driver.ShareDriver):
         return access_in_db, access_in_array
 
     def update_access(self, context, share, access_rules, add_rules,
-                      delete_rules, share_server=None):
+                      delete_rules, **kwargs):
         def _access_handler(rules, handler):
             for access in rules:
                 try:
-                    handler(context, share, access, share_server)
+                    handler(context, share, access, kwargs.get('share_server'))
                 except Exception:
                     LOG.exception(
                         'Failed to %(handler)s access %(access)s for share '

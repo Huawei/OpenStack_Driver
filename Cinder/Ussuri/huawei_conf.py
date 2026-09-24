@@ -41,6 +41,12 @@ class HuaweiConf(object):
         self.conf = conf
         self.last_modify_time = None
 
+    @staticmethod
+    def _get_decode_text(text):
+        if not text.startswith('!$$$'):
+            return text
+        return base64.b64decode(six.b(text[4:])).decode()
+
     def get_xml_info(self):
         tree = ET.parse(self.conf.cinder_huawei_conf_file,
                         ET.XMLParser(resolve_entities=False))
@@ -96,6 +102,9 @@ class HuaweiConf(object):
         self.last_modify_time = file_time
 
     def _encode_authentication(self, tree, xml_root):
+        if not self.conf.safe_get(constants.CONF_FILE_WRITABLE):
+            return
+
         node_start_text = '!$$$'
         name_node = xml_root.find('Storage/UserName')
         pwd_node = xml_root.find('Storage/UserPassword')
@@ -137,7 +146,7 @@ class HuaweiConf(object):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        user = base64.b64decode(six.b(text[4:])).decode()
+        user = self._get_decode_text(text)
         setattr(self.conf, 'san_user', user)
 
     def _san_password(self, xml_root):
@@ -147,14 +156,14 @@ class HuaweiConf(object):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        pwd = base64.b64decode(six.b(text[4:])).decode()
+        pwd = self._get_decode_text(text)
         setattr(self.conf, 'san_password', cipher.decrypt_cipher(pwd))
 
     def _san_vstore(self, xml_root):
         vstore = None
         text = xml_root.findtext('Storage/vStoreName')
         if text:
-            vstore = base64.b64decode(six.b(text[4:])).decode()
+            vstore = self._get_decode_text(text)
         setattr(self.conf, 'vstore_name', vstore)
 
     @staticmethod

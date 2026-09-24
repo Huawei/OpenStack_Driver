@@ -47,6 +47,11 @@ huawei_opts = [
                 default=False,
                 help='Whether to retain the storage mapping when the last '
                      'volume on the host is unmapped'),
+    cfg.BoolOpt('config_file_writable',
+                default=True,
+                help='Whether to allow the driver to modify the config file. '
+                     'Set to False to prevent the driver from modifying the '
+                     'config file.'),
 ]
 
 CONF = cfg.CONF
@@ -54,7 +59,7 @@ CONF.register_opts(huawei_opts)
 
 
 class HuaweiBaseDriver(object):
-    VERSION = "26.1.0"
+    VERSION = "26.2.0"
     SUPPORTS_ACTIVE_ACTIVE = True
 
     def __init__(self, *args, **kwargs):
@@ -368,8 +373,11 @@ class HuaweiBaseDriver(object):
 
     def _change_lun_name(self, lun_id, rmt_lun_id, new_name, description=None):
         if rmt_lun_id:
+            LOG.info('Rename remote lun %s to origin name for retype:%s.', lun_id, new_name)
             self.hypermetro_rmt_cli.rename_lun(rmt_lun_id, new_name, description)
-        self.local_cli.rename_lun(lun_id, new_name, description)
+        if lun_id:
+            LOG.info('Rename lun %s to origin name for retype:%s.', lun_id, new_name)
+            self.local_cli.rename_lun(lun_id, new_name, description)
 
     def _get_lun_id(self, volume, metadata, new_metadata):
         """
@@ -379,10 +387,10 @@ class HuaweiBaseDriver(object):
         rmt_lun_id = None
         if metadata.get('hypermetro') and new_metadata.get('hypermetro'):
             rmt_lun_info = huawei_utils.get_lun_info(
-                self.hypermetro_rmt_cli, volume)
+                self.hypermetro_rmt_cli, volume) or {}
             rmt_lun_id = rmt_lun_info.get('ID')
         lun_info = huawei_utils.get_lun_info(
-            self.local_cli, volume)
+            self.local_cli, volume) or {}
         return lun_info.get('ID'), rmt_lun_id
 
     def update_migrated_volume(self, ctxt, volume, new_volume,

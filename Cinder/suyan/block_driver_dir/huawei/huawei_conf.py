@@ -40,6 +40,12 @@ class HuaweiConf(object):
     def __init__(self, conf):
         self.conf = conf
 
+    @staticmethod
+    def _get_decode_text(text):
+        if not text.startswith('!$$$'):
+            return text
+        return base64.b64decode(text[4:]).decode()
+
     def get_xml_info(self):
         tree = ET.parse(self.conf.cinder_huawei_conf_file,
                         ET.XMLParser(resolve_entities=False))
@@ -47,6 +53,9 @@ class HuaweiConf(object):
         return tree, xml_root
 
     def _encode_authentication(self, tree, xml_root):
+        if not self.conf.safe_get(constants.CONF_FILE_WRITABLE):
+            return
+
         node_start_text = '!$$$'
         need_encode = False
         name_node = xml_root.find('Storage/UserName')
@@ -160,8 +169,7 @@ class HuaweiConf(object):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        user = base64.b64decode(text[4:]).decode()
-        setattr(self.conf, 'san_user', user)
+        setattr(self.conf, 'san_user', self._get_decode_text(text))
 
     def _san_password(self, xml_root):
         text = xml_root.findtext('Storage/UserPassword')
@@ -170,14 +178,13 @@ class HuaweiConf(object):
             LOG.error(msg)
             raise exception.InvalidInput(reason=msg)
 
-        pwd = base64.b64decode(text[4:]).decode()
-        setattr(self.conf, 'san_password', cipher.decrypt_cipher(pwd))
+        setattr(self.conf, 'san_password', cipher.decrypt_cipher(
+            self._get_decode_text(text)))
 
     def _vstore_name(self, xml_root):
         text = xml_root.findtext('Storage/vStoreName')
         if text:
-            vstore_name = base64.b64decode(text[4:]).decode()
-            setattr(self.conf, 'vstore_name', vstore_name)
+            setattr(self.conf, 'vstore_name', self._get_decode_text(text))
         else:
             setattr(self.conf, 'vstore_name', None)
 
@@ -197,8 +204,8 @@ class HuaweiConf(object):
                 'maxBandWidth', 'latency', 'IOType'
             )
             extra_constants['QOS_IOTYPES'] = ('0', '1', '2')
-            extra_constants['SUPPORT_LUN_TYPES'] = ('Thick', constants.THIN)
-            extra_constants['DEFAULT_LUN_TYPE'] = 'Thick'
+            extra_constants['SUPPORT_LUN_TYPES'] = (constants.THICK, constants.THIN)
+            extra_constants['DEFAULT_LUN_TYPE'] = constants.THICK
             extra_constants['SUPPORT_CLONE_MODE'] = ('luncopy',)
 
         for k in extra_constants:
