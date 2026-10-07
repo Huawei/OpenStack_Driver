@@ -98,6 +98,14 @@ def mask_initiator_sensitive_info(data, sensitive_keys=None, need_mask_keys=None
     elif isinstance(data, (list, tuple, set)):
         return mask_initiator_array_sensitive_info(data, sensitive_keys)
     else:
+        # Convert map objects and other iterables to list for array processing
+        # This handles Python 3 map() objects that are lazy iterables
+        if hasattr(data, '__iter__') and not isinstance(data, (str, bytes)):
+            try:
+                data = list(data)
+                return mask_initiator_array_sensitive_info(data, sensitive_keys)
+            except (TypeError, ValueError):
+                pass
         return mask_initiator_string_sensitive_info(data)
 
 
@@ -135,13 +143,17 @@ def mask_initiator_array_sensitive_info(data, sensitive_keys):
 def mask_initiator_string_sensitive_info(data):
     """Mask iscsi/fc/nvme ini sensitive info with a string type data"""
     secret_str = "******"
+    
+    # Convert data to string to handle any data type
     try:
-        if not data or len(str(data)) <= 6:
+        data_str = str(data) if not isinstance(data, str) else data
+        if not data_str or len(data_str) <= 6:
             return secret_str
     except Exception as err:
         LOG.warning("Mask string sensitive info failed, reason is %s", err)
-
-    out_str = data[0:3] + secret_str + data[-3::]
+        return secret_str
+    
+    out_str = data_str[0:3] + secret_str + data_str[-3::]
     return out_str
 
 
